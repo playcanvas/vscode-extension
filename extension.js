@@ -21,8 +21,7 @@ async function activate(context) {
 		const fileProvider = new CloudStorageProvider();
 		context.subscriptions.push(vscode.workspace.registerFileSystemProvider('cloudstorage', fileProvider, { isCaseSensitive: true }));
 
-		const files = await fileProvider.fetchFiles();
-		const treeDataProvider = new TreeDataProvider(files);
+		const treeDataProvider = new TreeDataProvider(fileProvider);
 		const treeView = vscode.window.createTreeView('PlayCanvasExplorer', { treeDataProvider: treeDataProvider });
 
 		treeView.onDidChangeSelection(async e => {

@@ -1,31 +1,44 @@
 const vscode = require('vscode');
 const axios = require('axios');
 
+const tempToken = 'cFT9ubWG5YHvGToNQoQi37KOLTY3yyRL';
+
 class CloudStorageProvider {
     constructor() {
         this.files = [];
+        this.projects = [];
         this.content = new Map();
+    }
+
+    onDidChangeFile() {
+        console.log('onDidChangeFile');
     }
 
     async readFile(uri) {
         const file = uri.path.substr(1);
-        const content = await this.fetchFileContent(file);
-        if (content.length > 0) {
-            this.content.set(uri.fsPath, content);
-            return content;
+        const fileData = this.files.find(f => f.name === file); 
+        if (!fileData.content) {
+            fileData.content = await this.fetchFileContent(file);
         }
-        
-        throw vscode.FileSystemError.FileNotFound();
+
+        if (!fileData.content) {       
+            throw vscode.FileSystemError.FileNotFound();
+        }
+        return new TextEncoder().encode(fileData.content);
     }    
 
     watch(uri, options) {
         console.log('watch', uri, options);
     }
     
-    stat(uri) {
-        const data = this.content.get(uri.fsPath);
-        if (data) {
-            return { type: vscode.FileType.File, size: data.length, ctime: 0, mtime: 0 };
+    async stat(uri) {
+        const file = uri.path.substr(1);
+        const fileData = this.files.find(f => f.name === file);
+        if (!fileData.content) {
+            fileData.content = await this.fetchFileContent(file);
+        }
+        if (fileData.content) {
+            return { type: vscode.FileType.File, size: fileData.content.length, ctime: 0, mtime: 0 };
         }
         throw vscode.FileSystemError.FileNotFound();
     }
@@ -56,20 +69,43 @@ class CloudStorageProvider {
         console.log('createDirectory', uri);
     }
 
-    async fetchFiles() {
+    async fetchProjects() {
         let token = vscode.workspace.getConfiguration('playcanvas').get('bearerToken');
         if (!token || token === '') {
-            token = 'GJyg1hwBGE3wDABG72bA8GfeugUPisBU';
+            token = tempToken;
         }
 
         try {
-            const response = await axios.get('https://local-playcanvas.com/api/projects/45/assets?limit=100', {
+            const response = await axios.get('https://local-playcanvas.com/api/users/23/projects', {
+                headers: {
+                    'Content-Type': "application/json",
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            this.projects = response.data.result;
+
+        } catch(error) {
+            console.error('Failed to fetch projects:', error);
+        };
+
+        return this.projects;
+    }    
+
+    async fetchFiles(projectId) {
+        let token = vscode.workspace.getConfiguration('playcanvas').get('bearerToken');
+        if (!token || token === '') {
+            token = tempToken;
+        }
+
+        try {
+            const response = await axios.get(`https://local-playcanvas.com/api/projects/${projectId}/assets?view=extension&limit=10000`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
             });
 
-            this.files = response.data.result;
+            this.files = this.files.concat(response.data.result);
 
         } catch(error) {
             console.error('Failed to fetch files:', error);
@@ -86,7 +122,7 @@ class CloudStorageProvider {
         const config = vscode.workspace.getConfiguration('playcanvas');
         let token = config.get('bearerToken');
         if (!token || token === '') {
-            token = 'GJyg1hwBGE3wDABG72bA8GfeugUPisBU';
+            token = tempToken;
         }
         try {
             const response = await axios.get(`https://local-playcanvas.com/api/assets/${fileData.id}/file/${fileData.name}`, {
