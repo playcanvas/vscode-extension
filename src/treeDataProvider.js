@@ -29,6 +29,8 @@ class TreeDataProvider {
     }
 
     async getChildren(element) {
+        
+        // projects
         if (!element) {
             this.projects = await this.fileProvider.fetchProjects();
             return this.projects.map(project => ({
@@ -36,43 +38,47 @@ class TreeDataProvider {
                 project: true,
                 iconPath: new vscode.ThemeIcon('project'),
                 projectId: project.id,
+                projectName: project.name,
                 collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
             }));
-        } else {
-            const children = [];
-            if (element.project) {
-                // files inside a project folder
-                if (!element.files) {
-                    element.files = await this.fileProvider.fetchFiles(element.projectId);
-                }
-            } 
-            for (const file of element.files) {
-                if (element.project && file.parent) {
+        } 
+
+        // project folders and files
+        const children = [];
+        if (element.project) {
+            // files inside a project folder
+            if (!element.files) {
+                element.files = await this.fileProvider.fetchFiles(element.projectId, element.projectName);
+            }
+        } 
+        for (const file of element.files) {
+            if (element.project && file.parent) {
+                continue;
+            }
+            let state = vscode.TreeItemCollapsibleState.None;
+            let files = [];
+            let icon = 'file-code';
+            if (file.type === 'folder') {
+                state = vscode.TreeItemCollapsibleState.Collapsed;
+                files = element.files.filter(f => f.parent === file.id);
+                if (files.length === 0) {
+                    // folder with no scripts and no subfolders
                     continue;
                 }
-                let state = vscode.TreeItemCollapsibleState.None;
-                let files = [];
-                let icon = 'file-code';
-                if (file.type === 'folder') {
-                    state = vscode.TreeItemCollapsibleState.Collapsed;
-                    files = element.files.filter(f => f.parent === file.id);
-                    if (files.length === 0) {
-                        // folder with no scripts and no subfolders
-                        continue;
-                    }
-                    icon = 'file-directory';
-                }
-                children.push({
-                    label: file.name,
-                    project: false,
-                    files: files,
-                    assetId: file.id,
-                    iconPath: new vscode.ThemeIcon(icon),
-                    collapsibleState: state,
-                });
+                icon = 'file-directory';
             }
-            return children;
+            children.push({
+                label: file.name,
+                project: false,
+                files: files,
+                assetId: file.id,
+                iconPath: new vscode.ThemeIcon(icon),
+                collapsibleState: state,
+                path: file.path,
+                contextValue: file.type == 'folder' ? 'folder' : 'file',
+            });
         }
+        return children;
     }
 }
 

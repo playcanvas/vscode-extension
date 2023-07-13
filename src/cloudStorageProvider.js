@@ -6,7 +6,7 @@ const defaultUser = 'yakov-snap';
 
 class CloudStorageProvider {
     constructor() {
-        this.files = [];
+        this.files = new Map();
         this.projects = [];
         this.userId = null;
         this.content = new Map();
@@ -29,13 +29,12 @@ class CloudStorageProvider {
     }
 
     async readFile(uri) {
-        const file = uri.path.substr(1);
-        const fileData = this.files.find(f => f.name === file); 
-        if (fileData.type === 'folder') {
+        const fileData = this.getFileData(uri.path);
+        if (!fileData || fileData.type === 'folder') {
             return new Uint8Array();
         }
         if (!fileData.content) {
-            fileData.content = await this.api.fetchFileContent(file);
+            fileData.content = await this.fetchFileContent(fileData);
         }
 
         if (!fileData.content) {       
@@ -44,27 +43,28 @@ class CloudStorageProvider {
         return new TextEncoder().encode(fileData.content);
     }    
 
+    writeFile(uri, content) {
+        const fileData = this.getFileData(uri.path);
+        this.api.uploadFile(fileData.id, fileData.name, content);
+        fileData.content = new TextDecoder().decode(content);
+    }
+
     watch(uri, options) {
         console.log('watch', uri, options);
     }
     
     async stat(uri) {
-        const file = uri.path.substr(1);
-        const fileData = this.files.find(f => f.name === file);
-        if (fileData.type === 'folder') {
+        const fileData = this.getFileData(uri.path);
+        if (!fileData || fileData.type === 'folder') {
             return { type: vscode.FileType.Directory, size: 0, ctime: 0, mtime: 0 };
         }
         if (!fileData.content) {
-            fileData.content = await this.api.fetchFileContent(file);
+            fileData.content = await this.fetchFileContent(fileData);
         }
         if (fileData.content) {
             return { type: vscode.FileType.File, size: fileData.content.length, ctime: 0, mtime: 0 };
         }
         throw vscode.FileSystemError.FileNotFound();
-    }
-
-    writeFile(uri, content) {
-        this.content.set(uri.fsPath, content);
     }
 
     rename(oldUri, newUri) {
@@ -87,6 +87,59 @@ class CloudStorageProvider {
 
     createDirectory(uri) {
         console.log('createDirectory', uri);
+    }
+
+    async fetchProjects() {
+        if (!this.userId) {
+            this.userId = await this.api.fetchUserId();
+        }        
+        this.projects = await this.api.fetchProjects(this.userId);
+        return this.projects;
+    }
+
+    getPath(projectName, file, fileMap) {
+        if (file.path) {
+            return file.path;
+        }
+
+        if (file.parent) {
+            const parent = fileMap.get(file.parent);
+            if (parent) {
+                file.path = this.getPath(projectName, parent, fileMap) + '/' + file.name;
+            }
+        } else {
+            file.path = projectName + '/' + file.name;
+        }        
+    }
+
+    buildPaths(projectName, files) {
+        const fileMap = new Map();
+        for (const file of files) {
+            fileMap.set(file.id, file);
+        }
+
+        for (const file of files) {
+            this.getPath(projectName, file, fileMap);
+        }
+    }
+
+    async fetchFiles(projectId, projectName) {
+        const files = await this.api.fetchFiles(projectId);
+        
+        this.buildPaths(projectName, files);
+        
+        for (const file of files) {
+            this.files.set('/' + file.path, file);
+        }
+        return files;
+    } 
+
+    async fetchFileContent(fileData) {
+        return this.api.fetchFileContent(fileData.id, fileData.name);              
+    }
+
+    getFileData(filename) {
+        return this.files.get(filename);
     }
 }
 

@@ -30,9 +30,11 @@ async function activate(context) {
 					const selectedItem = e.selection[0];
 					// Now you can do something with the selected item.
 					// For example, open it in a new editor tab:
-					const uri = vscode.Uri.parse(`cloudstorage:/${selectedItem.label}`);
-					const doc = await vscode.workspace.openTextDocument(uri);
-					vscode.window.showTextDocument(doc);
+					if (!selectedItem.project && selectedItem.contextValue !== 'folder') {
+						const uri = vscode.Uri.parse(`cloudstorage:/${selectedItem.path}`);
+						const doc = await vscode.workspace.openTextDocument(uri);
+						vscode.window.showTextDocument(doc);
+					}
 				}
 			} catch (error) {
 				console.log(error);
@@ -41,16 +43,20 @@ async function activate(context) {
 
 		context.subscriptions.push(treeView);
 
-		context.subscriptions.push(
-			vscode.commands.registerCommand('playcanvas.openFile', async (file) => {
-				const content = await fileProvider.fetchFileContent(file); // You have to implement this function
-				const document = await vscode.workspace.openTextDocument({ 
-					content: content,
-					language: 'javascript'
-				});
-				vscode.window.showTextDocument(document);
-			})
-		);
+		// context.subscriptions.push(
+		// 	vscode.commands.registerCommand('playcanvas.openFile', async (file) => {
+		// 		const content = await fileProvider.fetchFileContent(file); // You have to implement this function
+		// 		const document = await vscode.workspace.openTextDocument({ 
+		// 			content: content,
+		// 			language: 'javascript'
+		// 		});
+		// 		vscode.window.showTextDocument(document);
+		// 	})
+		// );
+
+		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.rename', (item) => {
+			vscode.window.showInformationMessage(`My command was called on: ${item.label}`);
+		}));		
 		
 	} catch (error) {
 		console.error('Failed to activate extension:', error);
