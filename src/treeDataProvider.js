@@ -10,6 +10,9 @@ class TreeDataProvider {
 
     // When the user selects a file, open it in a new editor tab.
     onDidSelectItem(file) {
+        if (file.project || file.type === 'folder') {
+            return;
+        }
         const uri = vscode.Uri.parse(`cloudstorage:/${file.label}`);
         vscode.workspace.openTextDocument(uri).then(doc => {
             vscode.window.showTextDocument(doc);
