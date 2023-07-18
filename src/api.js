@@ -1,24 +1,38 @@
 const fetch = require('node-fetch');
 const apiHost = 'https://local-playcanvas.com/api';
 const FormData = require('form-data');
+const Script = require('./script');
 class Api {
     constructor(username, token) {
         this.username = username;
         this.token = token;        
     }
 
-    async apiCall(url) {
+    async apiCall(url, method = 'GET', body = null, headers = {}) {
         try {
-            const response = await fetch(url, {
+            const params = {
+                method: method,
                 headers: {
-                    'Content-Type': "application/json",
                     'Authorization': `Bearer ${this.token}`
                 }
-            });
+            };
+            if (body) {
+                params.body = body;
+            } else {
+                params.headers['Content-Type'] = "application/json";
+            }
+            for (const header in headers) {
+                if (headers.hasOwnProperty(header)) { // This checks that the key is not from the object's prototype chain
+                  params.headers[header] = headers[header];
+                }
+              }            
+            
+            const response = await fetch(url, params);
 
             return response;
         } catch(error) {
             console.error('API call failed:', error);
+            throw error;
         }
     }
 
@@ -47,38 +61,108 @@ class Api {
         return res;
     }
 
-    async uploadFile(id, filename, data) {
+    async renameAsset(id, newName) {
         const url = `${apiHost}/assets/${id}`;
-        try {
+        let form = new FormData();
+        form.append('name', newName);
 
-            let form = new FormData();
-            form.append('file', data, {
-                filename: filename,
-                contentType: 'text/plain',
-            });
-
-            const response = await fetch(url, {
-                method: 'PUT',
-                body: form,
-                headers: {
-                    'Authorization': `Bearer ${this.token}`
-                }
-            });
-
-            if (!response.ok) {
-                console.error('file upload failed:', response.statusText);
-                return false;
-            }
-
-            return true;
-        } catch(error) {
-            console.error('API call failed:', error);
+        const response = await this.apiCall(url, 'PUT', form);
+        if (!response.ok) {
+            const res = await response.json();
+            throw new Error(res.error);
         }
 
-        const response = await this.apiCall(`${apiHost}/assets/${id}/file/${fileName}`);
+        const asset = await response.json();
+        return asset;
+    } 
+
+    async copyAsset(sourceProjectId, assetId, targetProjectId, folderId) {
+        const url = `${apiHost}/assets/paste`;
+        const body = {
+            projectId: sourceProjectId,
+            assets: [assetId],
+            targetProjectId: targetProjectId,          
+            targetFolderId: folderId
+        };
+
+        const response = await this.apiCall(url, 'POST', JSON.stringify(body), {
+            'Content-Type': "application/json"
+        });
+        if (!response.ok) {
+            const res = await response.json();
+            throw new Error(res.error);
+        }
+
+        const asset = await response.json();
+        return asset;
+    } 
+
+    async createAsset(projectId, folderId, name, type) {
+        const url = `${apiHost}/assets/`;
+
+        const ext = name.split('.').pop();
+        const asset = (ext === 'js') ? Script.create({filename: name}) : {
+            contentType: 'text/plain',
+            content: '',
+            filename: name,
+            preload: false            
+        };
+
+        const form = new FormData();
+        if (type !== 'folder') {
+            form.append('file', asset.content, {
+                filename: asset.filename,
+                contentType: asset.contentType
+            });
+        }
+
+        form.append('preload', asset.preload ? 'true' : 'false');
+        form.append('projectId', projectId);
+        form.append('name', name);
+
+        if (type) {
+            form.append('type', type);
+        }
+
+        if (folderId) {
+            form.append('parent', folderId);
+        }
+
+        const response = await this.apiCall(url, 'POST', form);
+        if (!response.ok) {
+            const res = await response.json();
+            console.error('file upload failed:', res.error);
+            throw new Error(res.error);
+        }
+
+        return await response.json();
+    } 
+
+    async deleteAsset(id) {
+        const response = await this.apiCall(`${apiHost}/assets/${id}`, 'DELETE');
         const res = await response.text();
         return res;
     }    
+
+    async uploadFile(id, filename, modifiedAt, data) {
+        const url = `${apiHost}/assets/${id}`;
+        const form = new FormData();
+        form.append('file', data, {
+            filename: filename,
+            contentType: 'text/plain'
+        });
+        form.append('baseModificationTime', modifiedAt);
+
+        const response = await this.apiCall(url, 'PUT', form);
+        if (!response.ok) {
+            const res = await response.json();
+            console.error('file upload failed:', res.error);
+            throw new Error(res.error);
+        }
+
+        const asset = await response.json();
+        return asset;
+    }
 }
 
 module.exports = Api;
