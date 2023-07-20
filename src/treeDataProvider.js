@@ -61,31 +61,37 @@ class TreeDataProvider {
             const children = [];
             for (const project of projects) {
                 const state = this.expanded.has(project.name) ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed; 
+                let branch = '';
+                if (project.branchId) {
+                    const branchName = project.branches.find( b => b.id === project.branchId ).name;
+                    if (branchName !== 'main') {
+                        branch = ` (${branchName})`;
+                    }                    
+                }
                 children.push({
-                    label: project.name,
+                    label: project.name + branch,
                     project: true,
                     iconPath: new vscode.ThemeIcon('project'),
                     projectId: project.id,
                     projectName: project.name,
                     path: project.name,
                     collapsibleState: state,
-                    contextValue: 'folder'
+                    contextValue: 'project',
+                    parent: element
                 });
             };
             return children;
         } 
 
-        const project = this.fileProvider.getProjectByName(element.projectName);
+        const project = this.fileProvider.getProjectById(element.projectId);
 
         // project folders and files
         const children = [];
         if (element.project) {
             // files inside a project folder 
             // populated when the project is expanded
-            if (!project.files) {
-                project.files = await this.fileProvider.fetchFiles(element.projectId, element.projectName);
-            }
-            element.files = project.files.filter(f => f.parent === null);
+            const files = await this.fileProvider.fetchFiles(project);
+            element.files = files.filter(f => f.parent === null);
             this.sortFiles(element.files);
         } 
 
@@ -103,12 +109,14 @@ class TreeDataProvider {
                 label: file.file ? file.file.filename : file.name,
                 project: false,
                 projectName: element.projectName,
+                projectId: element.projectId,
                 files: files,
                 assetId: file.id,
                 iconPath: new vscode.ThemeIcon(icon),
                 collapsibleState: state,
                 path: file.path,
                 contextValue: file.type == 'folder' ? 'folder' : 'file',
+                parent: element
             });
         }
         return children;
@@ -120,6 +128,10 @@ class TreeDataProvider {
     
     onElementCollapsed(path) {
         this.expanded.delete(path);
+    }
+
+    getParent(element) {
+        return element.parent;
     }
 
     refresh() {

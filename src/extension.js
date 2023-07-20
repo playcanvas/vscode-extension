@@ -53,17 +53,6 @@ async function activate(context) {
 
 		context.subscriptions.push(treeView);
 
-		// context.subscriptions.push(
-		// 	vscode.commands.registerCommand('playcanvas.openFile', async (file) => {
-		// 		const content = await fileProvider.fetchFileContent(file); // You have to implement this function
-		// 		const document = await vscode.workspace.openTextDocument({ 
-		// 			content: content,
-		// 			language: 'javascript'
-		// 		});
-		// 		vscode.window.showTextDocument(document);
-		// 	})
-		// );
-
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.refresh', (item) => {
 			vscode.commands.executeCommand('workbench.actions.treeView.PlayCanvasExplorer.collapseAll');
 			fileProvider.refresh();
@@ -74,8 +63,39 @@ async function activate(context) {
 			vscode.commands.executeCommand('workbench.actions.treeView.PlayCanvasExplorer.collapseAll');
 		}));
 
-		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', (item) => {
-			// vscode.commands.executeCommand('workbench.actions.treeView.PlayCanvasExplorer.collapseAll');
+		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', async (item) => {
+			const projectUri = vscode.Uri.parse(`playcanvas:/${item.path}`);
+			const project = await fileProvider.getProject(projectUri.path);
+			const branches = await fileProvider.fetchBranches(project);
+
+			const prevBranch = project.branchId ? (branches.find( b => b.id === project.branchId )).name : 'main';
+			const names = branches.map(branch => branch.name );
+
+			// put current branch on the first place in the list
+			const index = names.indexOf(prevBranch);
+			if (index !== -1) {
+				names.splice(index, 1);
+				names.unshift(prevBranch);
+			}
+
+			const branch = await vscode.window.showQuickPick(names, { placeHolder: 'Select a branch to switch to' });
+
+			if (branch) {
+				
+				// switch to the selected branch
+				if (prevBranch !== branch) {
+					await fileProvider.switchBranch(project, branch);
+					vscode.window.showInformationMessage(`Switched to branch ${branch}`);
+					
+					// Refresh the tree view to reflect the file rename.
+					fileProvider.refreshProject(project);
+					treeDataProvider.refresh();
+
+					// refresh all currently opened files
+					vscode.commands.executeCommand('workbench.action.closeAllEditors');					
+					treeView.reveal(item, { select: true, focus: true });
+				}				
+			}
 		}));
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.newFile', async (item) => {
@@ -96,7 +116,7 @@ async function activate(context) {
 				}
 				
 				// Refresh the tree view to reflect the file rename.
-				fileProvider.refresh(false);
+				fileProvider.refreshProject(fileProvider.getProject(folderUri.path));
 				treeDataProvider.refresh();		
 			}
 		}));
@@ -119,7 +139,7 @@ async function activate(context) {
 				}
 				
 				// Refresh the tree view to reflect the file rename.
-				fileProvider.refresh(false);
+				fileProvider.refreshProject(fileProvider.getProject(folderUri.path));
 				treeDataProvider.refresh();		
 			}
 		}));
@@ -155,14 +175,20 @@ async function activate(context) {
 				vscode.window.showInformationMessage('File pasted successfully');
 			} catch (error) {
 				vscode.window.showErrorMessage(`Failed to paste file: ${error.message}`);
+				copiedFile = null;
+				cutFile = null;
 			}
+
+			// Refresh the tree view
+			if (cutFile) {
+				fileProvider.refreshProject(fileProvider.getProject(uri.path));
+			}
+			fileProvider.refreshProject(fileProvider.getProject(targetUri.path));
+			treeDataProvider.refresh();				
 
 			copiedFile = null;
 			cutFile = null;
-			
-			// Refresh the tree view
-			fileProvider.refresh(false);
-			treeDataProvider.refresh();				
+
 		}));
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.rename', async (item) => {
@@ -185,7 +211,7 @@ async function activate(context) {
 				}
 				
 				// Refresh the tree view to reflect the file rename.
-				fileProvider.refresh(false);
+				fileProvider.refreshProject(fileProvider.getProject(uri.path));
 				treeDataProvider.refresh();		
 			}
 		}));
@@ -203,7 +229,7 @@ async function activate(context) {
 					vscode.window.showInformationMessage('File deleted successfully');
 
 					// Refresh the tree view to reflect the file deletion.
-					fileProvider.refresh(false);
+					fileProvider.refreshProject(fileProvider.getProject(uri.path));
 					treeDataProvider.refresh();
 				} catch (error) {
 					vscode.window.showErrorMessage(`Failed to delete file: ${error.message}`);
@@ -213,7 +239,7 @@ async function activate(context) {
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.refreshFile', async (item) => {
 			const uri = vscode.Uri.parse(`playcanvas:/${item.path}`);
-			const fileData = fileProvider.getFileData(uri.path);
+			const fileData = fileProvider.getFileData(uri);
 			const oldContent = new TextEncoder().encode(fileData.content);
 			if (fileData) {
 				delete fileData.content;

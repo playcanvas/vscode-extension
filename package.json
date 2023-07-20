@@ -87,22 +87,22 @@
       "view/item/context": [
         {
           "command": "playcanvas.switchBranch",
-          "when": "view == PlayCanvasExplorer && viewItem.project === true",
+          "when": "view == PlayCanvasExplorer && viewItem == project",
           "group": "1_project"
         },
         {
           "command": "playcanvas.newFile",
-          "when": "view == PlayCanvasExplorer && viewItem == folder",
+          "when": "view == PlayCanvasExplorer && (viewItem == folder || viewItem == project)",
           "group": "2_folder"
         },
         {
           "command": "playcanvas.newFolder",
-          "when": "view == PlayCanvasExplorer && viewItem == folder",
+          "when": "view == PlayCanvasExplorer && (viewItem == folder || viewItem == project)",
           "group": "2_folder"
         },
         {
           "command": "playcanvas.findInFolder",
-          "when": "view == PlayCanvasExplorer && viewItem == folder",
+          "when": "view == PlayCanvasExplorer && (viewItem == folder || viewItem == project)",
           "group": "3_search"
         }, 
         {
@@ -126,7 +126,7 @@
           "group": "5_clipboard"
         }, {
           "command": "playcanvas.paste",
-          "when": "view == PlayCanvasExplorer && viewItem == folder",
+          "when": "view == PlayCanvasExplorer && (viewItem == folder || viewItem == project)",
           "group": "5_clipboard"
         },       
         {
