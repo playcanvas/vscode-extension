@@ -1,5 +1,5 @@
 const fetch = require('node-fetch');
-const apiHost = 'https://local-playcanvas.com/api';
+const apiHost = 'https://playcanvas.com/api';
 const FormData = require('form-data');
 const Script = require('./script');
 class Api {

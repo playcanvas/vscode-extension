@@ -1,35 +1,73 @@
-# playcanvas README
+# Playcanvas VS Code Extension
 
-This is the README for your extension "playcanvas". After writing up a brief description, we recommend including the following sections.
+![Copilot with PlayCanvas extension](/images/extension-ai.gif)
+
+
+Extension that integrates with the PlayCanvas platform and helps to use a rich ecosystem of Visual Studio Code to work with PlayCanvas assets. The extension provides an interface to interact with PlayCanvas scripts and text-based files stored in cloud storage through an Explorer-like TreeView. The extension supports common file operations, version control features, collaboration capabilities, and a "Find In Files" functionality.
+
+## Usage
+
+* Download and install extension in VS Code
+* Generate an access token on [Account page](https://playcanvas.com/account) - check this [document](https://developer.playcanvas.com/en/user-manual/api/#authorization) for details. 
+* Open VS Code, enter the token and PlayCanvas username on extension settings page. Search for 'playcanvas' in VS Code settings.
+* Check for PlayCanvas View in Explorer panel on the left
+* Hit refresh button on PlayCanvas View or restart VS Code
+
+![Extension settings](/images/settings.jpg)
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+#### PlayCanvas Hierarchical Explorer
 
-For example if there is an image subfolder under your extension project workspace:
+The extension adds a TreeView in the Explorer sidebar of VS Code, showing all script and text files in customer’s PlayCanvas projects. This provides a familiar interface for users to browse and manage their PlayCanvas files. All projects could be accessed and edited simultaneously.
 
-\!\[feature X\]\(images/feature-x.png\)
+#### PlayCanvas Cloud Storage Provider
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+The extension acts as a Cloud Storage Provider for VS Code. It connects to PlayCanvas's APIs to read and write files, allowing users to edit PlayCanvas files directly in VS Code.
+
+#### File Operations
+
+The extension supports common file operations:
+
+* Copy-Pasting: Users can copy and paste files and folders, even between projects..
+* Deleting: Users can delete files and folders.
+* Renaming: Users can rename files and folders.
+* New File/Folder: Create new assets and folders directly in the project
+
+These operations are available through context menu commands in the TreeView.
+
+#### Copilot
+
+Copilot, Microsoft’s AI code generator, works fine with the extension and allows customers to generate blocks of code after entering a prompt or just based on the context of code. 
+
+#### Version Control
+
+The extension integrates with PlayCanvas's version control system, allowing users to switch between branches of a PlayCanvas project. Switching branch is an action in a context menu for a project. After switching the branch, all operations happen in the current branch. 
+
+#### Collaboration
+
+The extension supports collaboration features of PlayCanvas. Multiple users can edit a PlayCanvas project simultaneously, with changes being synchronized manually between users. Users are prevented from overwriting files, edited by others by checking modification base time in update requests on backend - if it’s different, it means that file was modified by someone else. After that a customer can pull the latest version of the file by choosing ‘Pull latest’ from the context menu for the file. 
+
+#### Find In Files
+
+The extension includes a "Find In Files" feature. Users can search for a text string across all script and text files in the PlayCanvas project. The search results are presented in a panel in VS Code, and users can navigate to the matching locations in files directly from the search results.
+
+#### Settings
+
+The extension has 2 settings - Access Token and PlayCanvas username. 
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+* existing PlayCanvas account with an access token generated
 
 ## Extension Settings
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+* `playcanvas.accessToken`: Generate an access token on your [account page](https://playcanvas.com/account).
+* `playcanvas.username`: Set to your PlayCanvas username
 
 ## Known Issues
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+Find in Files is not yet implemented for Beta test
 
 ## Release Notes
 
@@ -37,29 +75,13 @@ Users appreciate release notes as you update your extension.
 
 ### 1.0.0
 
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
+Initial release of PlayCanvas Visual Studio Code Extension
 
 ---
 
-## Working with Markdown
-
-You can author your README using Visual Studio Code.  Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux)
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux)
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets
 
 ## For more information
 
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
+* [PlayCanvas Documentation](https://developer.playcanvas.com/)
 
 **Enjoy!**

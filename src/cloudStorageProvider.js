@@ -3,7 +3,10 @@ const Api = require('./api');
 const { get } = require('http');
 const path = require('path');
 
-const defaultToken = 'cFT9ubWG5YHvGToNQoQi37KOLTY3yyRL';
+// local
+// const defaultToken = 'cFT9ubWG5YHvGToNQoQi37KOLTY3yyRL';
+// dev
+const defaultToken = 'ycokBkYiHO5o4nsMTEOYtMD05BAQ7lrW';
 const defaultUser = 'yakov-snap';
 
 class CloudStorageProvider {
@@ -13,17 +16,7 @@ class CloudStorageProvider {
         this.userId = null;
         this.content = new Map();
 
-        let token = vscode.workspace.getConfiguration('playcanvas').get('bearerToken');
-        if (!token || token === '') {
-            token = defaultToken;
-        }
-
-        let username = vscode.workspace.getConfiguration('playcanvas').get('username');
-        if (!username || username === '') {
-            username = defaultUser;
-        }
-        
-        this.api = new Api(username, token);
+        this.refresh();
     }
 
     onDidChangeFile() {
@@ -239,6 +232,13 @@ class CloudStorageProvider {
     }
 
     refresh(clearProjects = true) {
+
+        const config = vscode.workspace.getConfiguration('playcanvas');
+        let token = config.get('accessToken');
+        let username = config.get('username');
+        
+        this.api = new Api(username, token);
+
         this.files = new Map();
         if (clearProjects) {
             this.projects = [];

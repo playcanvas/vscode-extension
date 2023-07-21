@@ -15,6 +15,21 @@
   ],
   "main": "./src/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "PlayCanvas",
+      "properties": {
+        "playcanvas.accessToken": {
+          "type": "string",
+          "default": "",
+          "description": "Access Token for PlayCanvas"
+        },
+        "playcanvas.username": {
+          "type": "string",
+          "default": "",
+          "description": "Username for PlayCanvas"
+        }
+      }
+    },
     "commands": [
       {
         "command": "playcanvas.refresh",
@@ -149,18 +164,6 @@
           "name": "PlayCanvas"
         }
       ]
-    },
-    "properties": {
-      "playcanvas.bearerToken": {
-        "type": "string",
-        "default": "",
-        "description": "The Bearer token to authenticate with the API."
-      },
-      "playcanvas.username": {
-        "type": "string",
-        "default": "",
-        "description": "Username on PlayCanvas platform."
-      }
     }
   },
   "scripts": {
