@@ -6,11 +6,11 @@ Extension that integrates with the PlayCanvas platform and helps to use a rich e
 
 ## Usage
 
-* Download and install the extension in VS Code.
-* Generate an access token on [Account page](https://playcanvas.com/account) - check [this document](https://developer.playcanvas.com/en/user-manual/api/#authorization) for details.
-* Open VS Code, enter the token and PlayCanvas username on the extension settings page. Search for 'playcanvas' in VS Code settings.
+* Download and install extension in VS Code.
+* Generate an access token on your [PlayCanvas account page](https://playcanvas.com/account) - check [this document](https://developer.playcanvas.com/en/user-manual/api/#authorization) for details.
+* Open VS Code, enter the token and PlayCanvas username on extension settings page. Search for 'playcanvas' in VS Code settings.
 * Check for the PlayCanvas View in Explorer panel on the left.
-* Hit refresh button on PlayCanvas View or restart VS Code.
+* Hit the refresh button on the PlayCanvas View or restart VS Code.
 
 ![Extension settings](/images/settings.jpg)
 
@@ -66,7 +66,7 @@ The extension has 2 settings - Access Token and PlayCanvas username.
 
 ## Known Issues
 
-Find in Files is not yet implemented for the Beta test.
+* Find in Files is not yet implemented for the Beta test.
 
 ---
 
