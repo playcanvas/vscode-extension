@@ -6,6 +6,9 @@
   "engines": {
     "vscode": "^1.79.0"
   },
+  "capabilities": {
+    "virtualWorkspaces": false
+  },  
   "categories": [
     "Other"
   ],
@@ -32,137 +35,29 @@
     },
     "commands": [
       {
-        "command": "playcanvas.refresh",
-        "title": "Playcanvas: Refresh",
-        "icon": "$(refresh)"
-      }, 
-      {
-        "command": "playcanvas.collapseAll",
-        "title": "Playcanvas: Collapse All",
-        "icon": "$(collapse-all)"
+        "command": "playcanvas.addProject",
+        "title": "Playcanvas: Add Project",
+        "icon": "$(add)"
       },
       {
         "command": "playcanvas.switchBranch",
-        "title": "Switch branch..."
-      },      
-      {
-        "command": "playcanvas.rename",
-        "title": "Rename..."
+        "title": "Playcanvas: Switch branch..."
       },
-      {
-        "command": "playcanvas.delete",
-        "title": "Delete"
-      },
-      {
-        "command": "playcanvas.newFile",
-        "title": "New File..."
-      },
-      {
-        "command": "playcanvas.newFolder",
-        "title": "New Folder..."
-      },
-      {
-        "command": "playcanvas.findInFolder",
-        "title": "Find In Folder..."
-      }, 
-      {
-        "command": "playcanvas.copy",
-        "title": "Copy"
-      },
-      {
-        "command": "playcanvas.cut",
-        "title": "Cut"
-      },   
-      {
-        "command": "playcanvas.paste",
-        "title": "Paste"
-      },   
       {
         "command": "playcanvas.refreshFile",
         "title": "Pull Latest"
-      },   
-      {
-        "command": "playcanvas.openFile",
-        "title": "View"
       }                  
     ],
     "menus": {
-      "view/title": [
+      "explorer/context": [
         {
-          "command": "playcanvas.refresh",
-          "when": "view == PlayCanvasExplorer",
-          "group": "navigation"
+            "command": "playcanvas.addProject",
+            "when": "resourceScheme == playcanvas"
         },
-        {
-          "command": "playcanvas.collapseAll",
-          "when": "view == PlayCanvasExplorer",
-          "group": "navigation"
-        }
-      ],
-      "view/item/context": [
         {
           "command": "playcanvas.switchBranch",
-          "when": "view == PlayCanvasExplorer && viewItem == project",
-          "group": "1_project"
-        },
-        {
-          "command": "playcanvas.newFile",
-          "when": "view == PlayCanvasExplorer && (viewItem == folder || viewItem == project)",
-          "group": "2_folder"
-        },
-        {
-          "command": "playcanvas.newFolder",
-          "when": "view == PlayCanvasExplorer && (viewItem == folder || viewItem == project)",
-          "group": "2_folder"
-        },
-        {
-          "command": "playcanvas.findInFolder",
-          "when": "view == PlayCanvasExplorer && (viewItem == folder || viewItem == project)",
-          "group": "3_search"
-        }, 
-        {
-          "command": "playcanvas.refreshFile",
-          "when": "view == PlayCanvasExplorer && viewItem == file",
-          "group": "4_misc"
-        },
-        {
-          "command": "playcanvas.openFile",
-          "when": "view == PlayCanvasExplorer && viewItem == file",
-          "group": "4_misc"
-        },        
-        {
-          "command": "playcanvas.copy",
-          "when": "view == PlayCanvasExplorer && (viewItem == file || viewItem == folder)",
-          "group": "5_clipboard"
-        },
-        {
-          "command": "playcanvas.cut",
-          "when": "view == PlayCanvasExplorer && (viewItem == file || viewItem == folder)",
-          "group": "5_clipboard"
-        }, {
-          "command": "playcanvas.paste",
-          "when": "view == PlayCanvasExplorer && (viewItem == folder || viewItem == project)",
-          "group": "5_clipboard"
-        },       
-        {
-            "command": "playcanvas.rename",
-            "when": "view == PlayCanvasExplorer && (viewItem == file || viewItem == folder)",
-            "group": "6_modification"
-        },
-        {
-          "command": "playcanvas.delete",
-          "when": "view == PlayCanvasExplorer && (viewItem == file || viewItem == folder)",
-          "group": "6_modification"
-        }       
-                
-      ]
-    },    
-    "views": {
-      "explorer": [
-        {
-          "id": "PlayCanvasExplorer",
-          "name": "PlayCanvas"
-        }
+          "when": "resourceScheme == playcanvas"
+        }        
       ]
     }
   },
