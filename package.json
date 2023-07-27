@@ -3,8 +3,13 @@
   "displayName": "PlayCanvas",
   "description": "Official PlayCanvas extension from the team",
   "version": "0.0.1",
+  "publisher": "playcanvas",
   "engines": {
-    "vscode": "^1.79.0"
+    "vscode": "^1.80.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/playcanvas/vscode-extension.git"
   },
   "capabilities": {
     "virtualWorkspaces": false
