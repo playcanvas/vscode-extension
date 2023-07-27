@@ -50,7 +50,13 @@ class Api {
         const response = await this.apiCall(`${apiHost}/users/${userId}/projects`);
         const res = await response.json();
         return res.result;
-    }    
+    }  
+    
+    async fetchProject(id) {
+        const response = await this.apiCall(`${apiHost}/projects/${id}`);
+        const res = await response.json();
+        return res;
+    }      
 
     async fetchBranches(projectId) {
         const response = await this.apiCall(`${apiHost}/projects/${projectId}/branches`);

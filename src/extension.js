@@ -54,6 +54,10 @@ async function activate(context) {
 			}
 		}));
 
+		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.pullLatest', async (item) => {
+			await fileProvider.pullLatest(item.path);
+		}));		
+
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', async (item) => {
 			const project = await fileProvider.getProject(item.path);
 			const branches = await fileProvider.fetchBranches(project);

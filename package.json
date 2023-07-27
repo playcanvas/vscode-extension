@@ -44,8 +44,8 @@
         "title": "Playcanvas: Switch branch..."
       },
       {
-        "command": "playcanvas.refreshFile",
-        "title": "Pull Latest"
+        "command": "playcanvas.pullLatest",
+        "title": "Playcanvas: Pull Latest"
       }                  
     ],
     "menus": {
@@ -57,7 +57,11 @@
         {
           "command": "playcanvas.switchBranch",
           "when": "resourceScheme == playcanvas"
-        }        
+        },
+        {
+          "command": "playcanvas.pullLatest",
+          "when": "resourceScheme == playcanvas"
+        }       
       ]
     }
   },

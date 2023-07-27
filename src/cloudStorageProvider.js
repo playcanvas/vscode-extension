@@ -19,92 +19,100 @@ class CloudStorageProvider {
         return this._onDidChangeFile.event;
     }
 
-    async refreshProjectFiles(uri) {
-        console.log(`playcanvas: refreshProjectFiles ${uri.path}`);
-
-        // special case - the list of projects is not loaded yet
-        const projects = await this.fetchProjects();
-        // extract project name from url
-        const projectName = uri.path.split('/')[1];
-        const project = projects.find(p => p.name === projectName);
-        if (project) {
-            // force refresh the file list
-            delete project.files;
-            await this.fetchFiles(project);
-        }
-    }
 
     async stat(uri) {
         console.log(`playcanvas: stat ${uri.path}`);
         
-        await this.fetchProjects();
+        if (uri.path.includes('.vscode') || uri.path.includes('.git') || uri.path.includes('.devcontainer')) {
+            throw vscode.FileSystemError.FileNotFound();
+        } 
+
         const project = this.getProject(uri.path);
         if (!project) {
             throw vscode.FileSystemError.FileNotFound();
         }
 
-        const projectModified = new Date(project.modified).getTime();
-        const projectCreated = new Date(project.created).getTime();
-
         if (uri.path === `/${project.name}`) {
+            // const proj = await this.fetchProject(project.id);
+            // if (proj.modified !== project.modified) {
+            //     // trigger refresh
+            //     this.refreshUri(uri);
+            // }
+            const projectModified = new Date(project.modified).getTime();
+            const projectCreated = new Date(project.created).getTime();
             return { type: vscode.FileType.Directory, permissions: 0, size: 0, ctime: projectCreated, mtime: projectModified };
         }
 
-        if (!this.getFileData(uri)) {
-            await this.refreshProjectFiles(uri);
+        let asset = this.lookup(uri);
+        if (!asset) {
+            // at startup, vs code tries to read the file before 
+            // the list of files for the project is downloaded
+            await this.fetchFiles(project);
+            asset = this.lookup(uri);
         }
 
-        const fileData = this.getFileData(uri);
-        if (!fileData) {
+        if (!asset) {
             throw vscode.FileSystemError.FileNotFound();
         }
 
-        const modified = new Date(fileData.modifiedAt).getTime();
-        const created = new Date(fileData.createdAt).getTime();
+        const modified = new Date(asset.modifiedAt).getTime();
+        const created = new Date(asset.createdAt).getTime();
 
-        if (!fileData) {
+        if (!asset) {
             throw vscode.FileSystemError.FileNotFound();
         } 
         
-        if (fileData.type === 'folder') {
+        if (asset.type === 'folder') {
             return { type: vscode.FileType.Directory, permissions: 0, size: 0, ctime: created, mtime: modified };
         }
 
-        return { type: vscode.FileType.File, permissions: 0, size: fileData.file.size, ctime: created, mtime: modified };
+        return { type: vscode.FileType.File, permissions: 0, size: asset.file.size, ctime: created, mtime: modified };
       }
 
-    async readFile(uri) {
+      async readFile(uri) {
         console.log(`playcanvas: readFile ${uri.path}`);
+
+        if (uri.path.includes('.vscode') || uri.path.includes('.git') || uri.path.includes('.devcontainer')) {
+            throw vscode.FileSystemError.FileNotFound();
+        }        
 
         const project = this.getProject(uri.path);
         if (!project) {
             throw vscode.FileSystemError.FileNotFound();
         }
 
-        if (!this.getFileData(uri)) {
-            await this.refreshProjectFiles(uri);
+        let asset = this.lookup(uri);
+        if (!asset) {
+            // at startup, vs code tries to read the file before 
+            // the list of files for the project is downloaded
+            await this.fetchFiles(project);
+            asset = this.lookup(uri);
         }
 
-        const fileData = this.getFileData(uri);
-        if (!fileData || fileData.type === 'folder') {
-            return new Uint8Array();
-        }
-        // if (!fileData.content) {
-        fileData.content = await this.fetchFileContent(fileData, project.branchId);
-        // }
-
-        if (fileData.content === null) {       
+        if (!asset) {
             throw vscode.FileSystemError.FileNotFound();
         }
-        return new TextEncoder().encode(fileData.content);
-    }    
+
+        if (asset && asset.type === 'folder') {
+            return new Uint8Array();
+        }       
+        
+        if (!asset.content) {
+            asset.content = await this.fetchFileContent(asset, project.branchId);
+        }
+
+        if (asset.content === null) {       
+            throw vscode.FileSystemError.FileNotFound();
+        }
+        return new TextEncoder().encode(asset.content);
+    }   
 
     async writeFile(uri, content, options) {
         console.log(`playcanvas: writeFile ${uri.path}`);
 
         const project = this.getProject(uri.path);
-        const fileData = this.getFileData(uri);
-        if (!fileData) {
+        const asset = this.lookup(uri);
+        if (!asset) {
 
             if (!options.create) {
                 throw vscode.FileSystemError.FileNotFound();
@@ -116,19 +124,18 @@ class CloudStorageProvider {
             // Construct the new Uri using the folder path and new name
             try {
                 const root = folderPath === `/${project.name}`;
-                const folderData = root ? null : this.getFileData(folderUri);
+                const folderData = root ? null : this.lookup(folderUri);
                 const name = uri.path.split('/').pop();
                 await this.api.createAsset(project.id, project.branchId, folderData ? folderData.id : null, name);
             } catch (error) {
                 vscode.window.showErrorMessage(`Failed to create a file: ${error.message}`);
             }
         } else {
-            const asset = await this.api.uploadFile(fileData.id, fileData.file.filename, fileData.modifiedAt, project.branchId, content);
-            fileData.modifiedAt = asset.modifiedAt;
-            fileData.content = new TextDecoder().decode(content);
+            const updatedAsset = await this.api.uploadFile(asset.id, asset.file.filename, asset.modifiedAt, project.branchId, content);
+            asset.modifiedAt = updatedAsset.modifiedAt;
+            asset.content = new TextDecoder().decode(content);
         }
     }
-
 
 	watch(uri) {
 		// ignore, fires for all changes...
@@ -143,72 +150,81 @@ class CloudStorageProvider {
         console.log(`playcanvas: rename ${oldUri.path}`);
 
         const newName = newUri.path.split('/').pop();
-        const fileData = this.getFileData(oldUri);
+        const oldAsset = this.lookup(oldUri);
         const project = this.getProject(oldUri.path);
-        const asset = await this.api.renameAsset(fileData.id, newName, project.branchId);
-        fileData.modifiedAt = asset.modifiedAt;
+        const asset = await this.api.renameAsset(oldAsset.id, newName, project.branchId);
+        this.files.delete(this.getFileDataKey(oldUri));
+        this.files.set(this.getFileDataKey(newUri), asset);
+        asset.modifiedAt = asset.modifiedAt;
+        this.refreshProject(project);
     }
 
     getProject(path) {
         const projectName = path.split('/')[1];
-        return this.projects.find(p => p.name === projectName);
+        return this.getProjectByName(projectName);
     }
 
     getProjectByName(name) {
         return this.projects.find(p => p.name === name);
-    } 
+    }  
     
     getProjectById(id) {
         return this.projects.find(p => p.id === id);
-    } 
+    }  
 
     async copy(sourceUri, targetUri) {
         console.log(`playcanvas: copy ${sourceUri.path}`);
 
-        const fileData = this.getFileData(sourceUri);
+        const asset = this.lookup(sourceUri);
         const folderUri = vscode.Uri.parse(`playcanvas:${path.dirname(targetUri.path)}`);
-        const folderData = this.getFileData(folderUri);
+        const folderData = this.lookup(folderUri);
         const sourceProject = this.getProject(sourceUri.path);
         const targetProject = this.getProject(targetUri.path);
         const folderId = folderData ? folderData.id : null;
-        await this.api.copyAsset(sourceProject.id, sourceProject.branchId, fileData.id, 
-            targetProject.id, targetProject.branchId, folderId);        
+        await this.api.copyAsset(sourceProject.id, sourceProject.branchId, asset.id, 
+            targetProject.id, targetProject.branchId, folderId); 
+        this.refreshProject(targetProject);     
     }
 
     async delete(uri) {
-        const fileData = this.getFileData(uri);
+        const asset = this.lookup(uri);
         const project = this.getProject(uri.path);
-        await this.api.deleteAsset(fileData.id, project.branchId);
+        await this.api.deleteAsset(asset.id, project.branchId);
+        this.files.delete(this.getFileDataKey(uri));
+        this.refreshProject(project);
     }
 
     async readDirectory(uri) {
         console.log(`playcanvas: readDirectory ${uri.path}`);
         const project = this.getProject(uri.path);
         const files = await this.fetchFiles(project);
-        const file = this.getFileData(uri);
+        const file = this.lookup(uri);
         const parentId = file ? file.id : null;
         const folderFiles = files.filter(f => f.parent === parentId);
-        return folderFiles.map(f => [f.name, f.type == 'folder' ? vscode.FileType.Directory : vscode.FileType.File]);
+        console.log(`playcanvas: readDirectory return files ${files.length}`);
+        return folderFiles.map(f => [this.getFilename(f), f.type == 'folder' ? vscode.FileType.Directory : vscode.FileType.File]);
     }
 
     async createDirectory(uri) {
         console.log(`playcanvas: createDirectory ${uri.path}`);
         const project = this.getProject(uri.path);
-        const fileData = this.getFileData(uri);
-        if (!fileData) {
+        const asset = this.lookup(uri);
+        if (!asset) {
             const folderPath = path.dirname(uri.path);
             const folderUri = vscode.Uri.parse(`playcanvas:/${path.dirname(uri.path)}`);
             
             // Construct the new Uri using the folder path and new name
             try {
                 const root = folderPath === `/${project.name}`;
-                const folderData = root ? null : this.getFileData(folderUri);
+                const folderData = root ? null : this.lookup(folderUri);
                 const name = uri.path.split('/').pop();
-                await this.api.createAsset(project.id, project.branchId, folderData ? folderData.id : null, name, 'folder');
+                const asset = await this.api.createAsset(project.id, project.branchId, folderData ? folderData.id : null, name, 'folder');
+                this.files.set(this.getFileDataKey(uri), asset);
             } catch (error) {
                 vscode.window.showErrorMessage(`Failed to create a folder: ${error.message}`);
             }
         }
+
     }
 
     async fetchProjects() {
@@ -223,6 +239,11 @@ class CloudStorageProvider {
         return this.projects;
     }
 
+    async fetchProject(id) {
+        console.log(`playcanvas: fetchProject`);
+        return await this.api.fetchProject(id);
+    }    
+
     async fetchBranches(project) {
         console.log(`playcanvas: fetchBranches ${project.name}`);
         if (!project.branches) {
@@ -236,8 +257,8 @@ class CloudStorageProvider {
         project.branchId = project.branches.find(b => b.name === branchName).id;
     }
 
-    getFilename(fileData) {
-        return fileData.file ? fileData.file.filename : fileData.name;
+    getFilename(asset) {
+        return asset.file ? asset.file.filename : asset.name;
     }
 
     getPath(projectName, file, fileMap) {
@@ -286,14 +307,13 @@ class CloudStorageProvider {
         return project.files;
     } 
 
-    async fetchFileContent(fileData, branchId) {
-        console.log(`playcanvas: fetchFileContent ${fileData.name}`);
-        return this.api.fetchFileContent(fileData.id, fileData.file.filename, branchId);
+    async fetchFileContent(asset, branchId) {
+        console.log(`playcanvas: fetchFileContent ${asset.name}`);
+        return this.api.fetchFileContent(asset.id, asset.file.filename, branchId);
     }
 
     // key for the file map is branch id and filename
     getFileDataKey(uri) {
-        console.log(`playcanvas: getFileDataKey ${uri.path}`);
         const filename = uri.path;
         if (filename.length === 0) {
             return '';
@@ -303,7 +323,7 @@ class CloudStorageProvider {
         return `${filename}${branchId}`;
     }
 
-    getFileData(uri) {
+    lookup(uri) {
         return this.files.get(this.getFileDataKey(uri));
     }
 
@@ -334,6 +354,14 @@ class CloudStorageProvider {
         delete project.files;
         await this.fetchFiles(project);
     }
+
+    async pullLatest(path) {
+        const project = this.getProject(path);
+        const uri = vscode.Uri.parse(`playcanvas:${path}`);
+        delete project.files;
+        await this.fetchFiles(project);        
+        this._onDidChangeFile.fire([{ type: vscode.FileChangeType.Changed, uri: uri }]);
+    }    
 }
 
 module.exports = CloudStorageProvider;
