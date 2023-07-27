@@ -43,11 +43,24 @@ async function activate(context) {
 		const fileProvider = new CloudStorageProvider();
 		context.subscriptions.push(vscode.workspace.registerFileSystemProvider('playcanvas', fileProvider, { isCaseSensitive: true }));
 
-		await fileProvider.fetchProjects();
+        const config = vscode.workspace.getConfiguration('playcanvas');
+        let token = config.get('accessToken');
+        let username = config.get('username');
+		if (token && username) {
+			await fileProvider.fetchProjects();
+		}
 
 		// Register a command to open a workspace that uses your file system provider
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.addProject', async (item) => {
 
+			const config = vscode.workspace.getConfiguration('playcanvas');
+			let token = config.get('accessToken');
+			let username = config.get('username');
+			if (!token || !username) {
+				vscode.window.showErrorMessage('Please set your PlayCanvas username and access token in the extension settings.');
+				return;
+			}
+	
 			const project = await selectProject(fileProvider);
 			if (project) {
 				vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0, 0, { uri: vscode.Uri.parse(`playcanvas:/${project.name}`), name: `${project.name}` });

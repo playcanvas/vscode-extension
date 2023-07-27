@@ -2,7 +2,6 @@ const vscode = require('vscode');
 const Api = require('./api');
 const path = require('path');
 
-
 class CloudStorageProvider {
     constructor() {
         this.files = new Map();
@@ -19,7 +18,6 @@ class CloudStorageProvider {
         return this._onDidChangeFile.event;
     }
 
-
     async stat(uri) {
         console.log(`playcanvas: stat ${uri.path}`);
         
@@ -27,17 +25,15 @@ class CloudStorageProvider {
             throw vscode.FileSystemError.FileNotFound();
         } 
 
+        // make sure that we have the latest list of projects
+        await this.fetchProjects();
+
         const project = this.getProject(uri.path);
         if (!project) {
             throw vscode.FileSystemError.FileNotFound();
         }
 
         if (uri.path === `/${project.name}`) {
-            // const proj = await this.fetchProject(project.id);
-            // if (proj.modified !== project.modified) {
-            //     // trigger refresh
-            //     this.refreshUri(uri);
-            // }
             const projectModified = new Date(project.modified).getTime();
             const projectCreated = new Date(project.created).getTime();
             return { type: vscode.FileType.Directory, permissions: 0, size: 0, ctime: projectCreated, mtime: projectModified };
@@ -67,7 +63,7 @@ class CloudStorageProvider {
         }
 
         return { type: vscode.FileType.File, permissions: 0, size: asset.file.size, ctime: created, mtime: modified };
-      }
+    }
 
       async readFile(uri) {
         console.log(`playcanvas: readFile ${uri.path}`);
@@ -328,12 +324,7 @@ class CloudStorageProvider {
     }
 
     refresh(clearProjects = true) {
-
-        const config = vscode.workspace.getConfiguration('playcanvas');
-        let token = config.get('accessToken');
-        let username = config.get('username');
-        
-        this.api = new Api(username, token);
+        this.api = new Api();
 
         this.files = new Map();
         if (clearProjects) {

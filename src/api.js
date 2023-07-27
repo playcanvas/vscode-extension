@@ -1,11 +1,19 @@
 const fetch = require('node-fetch');
-const apiHost = 'https://local-playcanvas.com/api';
+const apiHost = 'https://playcanvas.com/api';
 const FormData = require('form-data');
 const Script = require('./script');
+const vscode = require('vscode');
 class Api {
-    constructor(username, token) {
-        this.username = username;
-        this.token = token;        
+    constructor() {  
+        this.token = null; 
+    }
+
+    getToken() {
+        if (!this.token) {
+            const config = vscode.workspace.getConfiguration('playcanvas');
+            this.token = config.get('accessToken');
+        }
+        return this.token;
     }
 
     async apiCall(url, method = 'GET', body = null, headers = {}) {
@@ -13,7 +21,7 @@ class Api {
             const params = {
                 method: method,
                 headers: {
-                    'Authorization': `Bearer ${this.token}`
+                    'Authorization': `Bearer ${this.getToken()}`
                 }
             };
             if (body) {
@@ -41,7 +49,11 @@ class Api {
 
     // get current user id from username
     async fetchUserId() {
-        const response = await this.apiCall(`${apiHost}/users/${this.username}`);        
+
+        const config = vscode.workspace.getConfiguration('playcanvas');
+        const username = config.get('username');
+
+        const response = await this.apiCall(`${apiHost}/users/${username}`);        
         const res = await response.json();
         return res.id;
     } 
