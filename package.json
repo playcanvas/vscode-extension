@@ -2,7 +2,7 @@
   "name": "playcanvas",
   "displayName": "PlayCanvas",
   "description": "Official PlayCanvas extension from the team",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "publisher": "playcanvas",
   "icon": "images/PlayCanvasLogo.png",
   "engines": {
@@ -13,7 +13,7 @@
     "url": "https://github.com/playcanvas/vscode-extension.git"
   },
   "capabilities": {
-    "virtualWorkspaces": false
+    "virtualWorkspaces": true
   },  
   "categories": [
     "Other"
