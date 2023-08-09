@@ -37,8 +37,12 @@ class Api {
             
             const response = await fetch(url, params);
             if (!response.ok) {
-                const res = await response.json();
-                throw new Error(res.error ? res.error : 'apiCall failed');
+                try {
+                    const res = await response.json();
+                    throw new Error(res.error ? res.error : 'apiCall failed');
+                } catch (error) {
+                    throw new Error(response.statusText);
+                }
             }
             return response;
         } catch(error) {
@@ -76,12 +80,19 @@ class Api {
         return res.result;
     }
 
-    async fetchFiles(projectId, branchId) {
+    async fetchAssets(projectId, branchId) {
         const url = `${apiHost}/projects/${projectId}/assets?view=extension&limit=10000` + (branchId ? `&branchId=${branchId}` : '');
         const response = await this.apiCall(url);
         const res = await response.json();
         return res.result;
     }
+
+    async fetchAsset(assetId, branchId) {
+        const url = `${apiHost}/assets/${assetId}` + (branchId ? `&branchId=${branchId}` : '');
+        const response = await this.apiCall(url);
+        const res = await response.json();
+        return res;
+    }    
 
     async fetchFileContent(id, fileName, branchId) {
         const url = `${apiHost}/assets/${id}/file/${fileName}` + (branchId ? `?branchId=${branchId}` : '');
@@ -90,10 +101,11 @@ class Api {
         return res;
     }
 
-    async renameAsset(id, newName, branchId) {
+    async renameAsset(id, folderId, newName, branchId) {
         const url = `${apiHost}/assets/${id}`;
         let form = new FormData();
         form.append('name', newName);
+        form.append('parent', folderId ? folderId : 'null');
         if (branchId) {
             form.append('branchId', branchId);
         }

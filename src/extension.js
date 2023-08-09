@@ -29,6 +29,24 @@ async function selectProject(fileProvider) {
 	}
 }
 
+function renameWorkspaceFolder(oldName, newName) {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+
+    if (!workspaceFolders) return;
+
+    const folder = workspaceFolders.find(folder => folder.name === oldName);
+    if (!folder) {
+        vscode.window.showErrorMessage(`Folder named ${oldName} not found.`);
+        return;
+    }
+
+    const folderUri = folder.uri;
+    const newUri = folderUri.with({ path: folderUri.path.replace(oldName, newName) });
+
+    // Remove old folder and add new folder
+    vscode.workspace.updateWorkspaceFolders(folder.index, 1, { uri: newUri, name: newName });
+}
+
 /**
  * @param {vscode.ExtensionContext} context
  */
@@ -47,8 +65,29 @@ async function activate(context) {
         let token = config.get('accessToken');
         let username = config.get('username');
 		if (token && username) {
+			await fileProvider.fetchUserId();
 			await fileProvider.fetchProjects();
 		}
+
+		// preload projects
+		let promises = [];
+		let folders = vscode.workspace.workspaceFolders;
+		if (folders) {
+			for (let folder of folders) {
+				if (folder.uri.scheme.startsWith('playcanvas')) {
+					const project = fileProvider.getProjectByName(folder.name);
+					if (project) {
+						const branch = fileProvider.getBranchByFolderName(folder.name);
+						if (branch != 'main') {
+							await fileProvider.fetchBranches(project);
+							fileProvider.switchBranch(project, branch);
+						}
+						promises.push(fileProvider.fetchAssets(project));
+					}
+				}
+			}
+		}
+		await Promise.all(promises);
 
 		// Register a command to open a workspace that uses your file system provider
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.addProject', async (item) => {
@@ -63,12 +102,16 @@ async function activate(context) {
 	
 			const project = await selectProject(fileProvider);
 			if (project) {
+				await fileProvider.fetchAssets(project);
 				vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0, 0, { uri: vscode.Uri.parse(`playcanvas:/${project.name}`), name: `${project.name}` });
 			}
 		}));
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.pullLatest', async (item) => {
 			await fileProvider.pullLatest(item.path);
+					
+			// Refresh the tree view to reflect the file rename.
+			vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
 		}));		
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', async (item) => {
@@ -91,13 +134,12 @@ async function activate(context) {
 				
 				// switch to the selected branch
 				if (prevBranch !== branch) {
-					await fileProvider.switchBranch(project, branch);
+					fileProvider.switchBranch(project, branch);
 					vscode.window.showInformationMessage(`Switched to branch ${branch}`);
-					
-					// Refresh the tree view to reflect the file rename.
 					await fileProvider.refreshProject(project);
+					vscode.commands.executeCommand('workbench.action.closeAllEditors');
 					vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
-				}				
+				}
 			}
 		}));
 		
