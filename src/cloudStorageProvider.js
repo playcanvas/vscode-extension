@@ -28,9 +28,6 @@ class CloudStorageProvider {
             throw vscode.FileSystemError.FileNotFound();
         } 
 
-        // make sure that we have the latest list of projects
-        await this.fetchProjects();
-
         const project = this.getProject(uri.path);
         if (!project) {
             throw vscode.FileSystemError.FileNotFound();
@@ -250,15 +247,16 @@ class CloudStorageProvider {
         this.userId = await this.api.fetchUserId();
     }
 
+    async getProjects() {
+        return this.projects;
+    }
+
     async fetchProjects() {
         if (!this.userId) {
             this.userId = await this.api.fetchUserId();
         }
-        if (this.projects.length === 0) {
-            console.log(`playcanvas: fetchProjects`);
-            this.projects = await this.api.fetchProjects(this.userId);
-        }
-        
+        console.log(`playcanvas: fetchProjects`);
+        this.projects = await this.api.fetchProjects(this.userId);
         return this.projects;
     }
 
@@ -383,9 +381,7 @@ class CloudStorageProvider {
 
     async pullLatest(path) {
         const project = this.getProject(path);
-        const uri = vscode.Uri.parse(`playcanvas:${path}`);
-        delete project.files;
-        await this.fetchAssets(project);        
+        this.refreshProject(project);
     }    
 }
 

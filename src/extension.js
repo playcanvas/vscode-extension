@@ -108,6 +108,9 @@ async function activate(context) {
 		}));
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.pullLatest', async (item) => {
+
+			// make sure that we have the latest list of projects
+			await this.fetchProjects();
 			await fileProvider.pullLatest(item.path);
 					
 			// Refresh the tree view to reflect the file rename.
