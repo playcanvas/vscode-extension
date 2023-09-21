@@ -5,8 +5,8 @@ const CloudStorageProvider = require('./cloudStorageProvider');
 
 async function selectProject(fileProvider) {
 	const projects = await fileProvider.fetchProjects();
-            
-	// find most recently modified 
+
+	// find most recently modified
 	projects.sort((a, b) => {
 		if (a.modified < b.modified) {
 			return 1;
@@ -95,11 +95,40 @@ async function activate(context) {
 			const config = vscode.workspace.getConfiguration('playcanvas');
 			let token = config.get('accessToken');
 			let username = config.get('username');
+
+			if (!token) {
+				token = await vscode.window.showInputBox({
+					prompt: 'Please set your PlayCanvas Access Token. Generate an access token on your [account page](https://playcanvas.com/account)',
+					placeHolder: 'Input your access token here.',
+					ignoreFocusOut: true,
+					validateInput: () => {
+						// You can add input validation here if needed
+						return null;  // return null if input is valid
+					}
+				});
+
+				await config.update('accessToken', token, vscode.ConfigurationTarget.Global);
+			}
+
+			if (!username) {
+				username = await vscode.window.showInputBox({
+					prompt: 'Please set your PlayCanvas Username. You can find your username on your [account page](https://playcanvas.com/account)',
+					placeHolder: 'Input your username here.',
+					ignoreFocusOut: true,
+					validateInput: () => {
+						// You can add input validation here if needed
+						return null;  // return null if input is valid
+					},
+				});
+
+				await config.update('username', username, vscode.ConfigurationTarget.Global);
+			}
+
 			if (!token || !username) {
 				vscode.window.showErrorMessage('Please set your PlayCanvas username and access token in the extension settings.');
 				return;
 			}
-	
+
 			const project = await selectProject(fileProvider);
 			if (project) {
 				await fileProvider.fetchAssets(project);
@@ -112,10 +141,10 @@ async function activate(context) {
 			// make sure that we have the latest list of projects
 			await this.fetchProjects();
 			await fileProvider.pullLatest(item.path);
-					
+
 			// Refresh the tree view to reflect the file rename.
 			vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
-		}));		
+		}));
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', async (item) => {
 			const project = await fileProvider.getProject(item.path);
@@ -134,7 +163,7 @@ async function activate(context) {
 			const branch = await vscode.window.showQuickPick(names, { placeHolder: 'Select a branch to switch to' });
 
 			if (branch) {
-				
+
 				// switch to the selected branch
 				if (prevBranch !== branch) {
 					fileProvider.switchBranch(project, branch);
@@ -145,7 +174,7 @@ async function activate(context) {
 				}
 			}
 		}));
-		
+
 	} catch (error) {
 		console.error('Failed to activate extension:', error);
 	}
