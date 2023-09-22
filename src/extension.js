@@ -92,37 +92,8 @@ async function activate(context) {
 		// Register a command to open a workspace that uses your file system provider
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.addProject', async (item) => {
 
-			const config = vscode.workspace.getConfiguration('playcanvas');
-			let token = config.get('accessToken');
-			let username = config.get('username');
-
-			if (!token) {
-				token = await vscode.window.showInputBox({
-					prompt: 'Please set your PlayCanvas Access Token. Generate an access token on your [account page](https://playcanvas.com/account)',
-					placeHolder: 'Input your access token here.',
-					ignoreFocusOut: true,
-					validateInput: () => {
-						// You can add input validation here if needed
-						return null;  // return null if input is valid
-					}
-				});
-
-				await config.update('accessToken', token, vscode.ConfigurationTarget.Global);
-			}
-
-			if (!username) {
-				username = await vscode.window.showInputBox({
-					prompt: 'Please set your PlayCanvas Username. You can find your username on your [account page](https://playcanvas.com/account)',
-					placeHolder: 'Input your username here.',
-					ignoreFocusOut: true,
-					validateInput: () => {
-						// You can add input validation here if needed
-						return null;  // return null if input is valid
-					},
-				});
-
-				await config.update('username', username, vscode.ConfigurationTarget.Global);
-			}
+			let token = await fileProvider.api.getToken();
+			let username = await fileProvider.api.getUsername();
 
 			if (!token || !username) {
 				vscode.window.showErrorMessage('Please set your PlayCanvas username and access token in the extension settings.');
