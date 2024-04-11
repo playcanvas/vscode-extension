@@ -110,11 +110,10 @@ async function activate(context) {
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.pullLatest', async (item) => {
 
 			// make sure that we have the latest list of projects
-			await this.fetchProjects();
+			await fileProvider.fetchProjects();
 			await fileProvider.pullLatest(item.path);
-					
-			// Refresh the tree view to reflect the file rename.
-			vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
+			const uri = vscode.Uri.parse(`playcanvas:/${item.path}`);
+			await fileProvider.refreshUri(uri);
 		}));		
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', async (item) => {

@@ -161,8 +161,10 @@ class CloudStorageProvider {
 
             if (config.get('usePlaycanvasTypes') && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
                 let strContent = new TextDecoder().decode(content);
-                strContent = strContent.substring(this.typesReference.length);
-                content.set(new TextEncoder().encode(strContent));
+                if (strContent.startsWith(this.typesReference)) {
+                    strContent = strContent.substring(this.typesReference.length);
+                    content.set(new TextEncoder().encode(strContent));
+                }
             }
 
             const updatedAsset = await this.api.uploadFile(asset.id, asset.file.filename, asset.modifiedAt, project.branchId, content);
@@ -401,7 +403,7 @@ class CloudStorageProvider {
 
     async pullLatest(path) {
         const project = this.getProject(path);
-        this.refreshProject(project);
+        await this.refreshProject(project);
     }    
 }
 
