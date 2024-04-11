@@ -52,7 +52,7 @@ The extension includes a "Find In Files" feature. Users can search for a text st
 
 #### Settings
 
-The extension has 2 settings - Access Token and PlayCanvas username. 
+The extension has 3 settings - Access Token, PlayCanvas username and usePlaycanvasTypes to add types support. 
 
 ## Requirements
 
@@ -62,6 +62,7 @@ The extension has 2 settings - Access Token and PlayCanvas username.
 
 * `playcanvas.accessToken`: Generate an access token on your [account page](https://playcanvas.com/account).
 * `playcanvas.username`: Set to your PlayCanvas username.
+* `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to Playcanvas types files for code suggestions. Line is not saved. Default is true.
 
 ## Known Issues
 

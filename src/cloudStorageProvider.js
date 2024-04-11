@@ -8,6 +8,10 @@ class CloudStorageProvider {
         this.userId = null;
         this.currentProject = null;
         this._onDidChangeFile = new vscode.EventEmitter();
+
+        const filePath = path.join(__dirname, '..', 'node_modules', 'playcanvas', 'build/playcanvas.d.ts');
+        this.typesReference = '///<reference path="' + filePath + '" />;\n';
+
         this.refresh();
     }
 
@@ -82,6 +86,13 @@ class CloudStorageProvider {
         if (asset.content === null) {       
             throw vscode.FileSystemError.FileNotFound();
         }
+
+        const config = vscode.workspace.getConfiguration('playcanvas');
+
+        if (config.get('usePlaycanvasTypes') && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
+            return new TextEncoder().encode(this.typesReference + asset.content);
+        }
+
         return new TextEncoder().encode(asset.content);
     }   
 
@@ -145,6 +156,17 @@ class CloudStorageProvider {
                 vscode.window.showErrorMessage(`Failed to create a file: ${error.message}`);
             }
         } else {
+            // remove reference line before saving
+            const config = vscode.workspace.getConfiguration('playcanvas');
+
+            if (config.get('usePlaycanvasTypes') && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
+                let strContent = new TextDecoder().decode(content);
+                if (strContent.startsWith(this.typesReference)) {
+                    strContent = strContent.substring(this.typesReference.length);
+                    content.set(new TextEncoder().encode(strContent));
+                }
+            }
+
             const updatedAsset = await this.api.uploadFile(asset.id, asset.file.filename, asset.modifiedAt, project.branchId, content);
             asset.modifiedAt = updatedAsset.modifiedAt;
             asset.content = new TextDecoder().decode(content);
@@ -381,7 +403,7 @@ class CloudStorageProvider {
 
     async pullLatest(path) {
         const project = this.getProject(path);
-        this.refreshProject(project);
+        await this.refreshProject(project);
     }    
 }
 
