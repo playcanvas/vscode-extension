@@ -89,7 +89,7 @@ class CloudStorageProvider {
 
         const config = vscode.workspace.getConfiguration('playcanvas');
 
-        if (config.get('usePlaycanvasTypes') && asset.file.filename.endsWith('.js')) {
+        if (config.get('usePlaycanvasTypes') && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
             return new TextEncoder().encode(this.typesReference + asset.content);
         }
 
@@ -159,7 +159,7 @@ class CloudStorageProvider {
             // remove reference line before saving
             const config = vscode.workspace.getConfiguration('playcanvas');
 
-            if (config.get('usePlaycanvasTypes') && asset.file.filename.endsWith('.js')) {
+            if (config.get('usePlaycanvasTypes') && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
                 let strContent = new TextDecoder().decode(content);
                 strContent = strContent.substring(this.typesReference.length);
                 content.set(new TextEncoder().encode(strContent));
