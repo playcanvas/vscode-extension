@@ -116,7 +116,6 @@ async function activate(context) {
 
 			vscode.window.visibleTextEditors.forEach(editor => {
 				if (editor.document.uri.scheme === 'playcanvas') {
-					console.log(editor.document.fileName);
 					fileProvider.refreshUri(editor.document.uri);			
 				}
 			});
