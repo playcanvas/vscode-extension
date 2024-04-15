@@ -62,7 +62,7 @@ The extension has 3 settings - Access Token, PlayCanvas username and usePlaycanv
 
 * `playcanvas.accessToken`: Generate an access token on your [account page](https://playcanvas.com/account).
 * `playcanvas.username`: Set to your PlayCanvas username.
-* `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to Playcanvas types files for code suggestions. Line is not saved. Default is true.
+* `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to PlayCanvas types files for code suggestions. Line is not saved. Default is true.
 
 ## Known Issues
 
