@@ -109,12 +109,19 @@ async function activate(context) {
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.pullLatest', async (item) => {
 
-			// make sure that we have the latest list of projects
-			await fileProvider.fetchProjects();
 			await fileProvider.pullLatest(item.path);
-			const uri = vscode.Uri.parse(`playcanvas:/${item.path}`);
-			await fileProvider.refreshUri(uri);
-		}));		
+
+			// Refresh the tree view to reflect the file rename.
+			vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
+
+			vscode.window.visibleTextEditors.forEach(editor => {
+				if (editor.document.uri.scheme === 'playcanvas') {
+					console.log(editor.document.fileName);
+					fileProvider.refreshUri(editor.document.uri);			
+				}
+			});
+
+		}));
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', async (item) => {
 			const project = await fileProvider.getProject(item.path);

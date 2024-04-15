@@ -36,13 +36,10 @@ class Api {
               }            
             
             const response = await fetch(url, params);
+            let status;
             if (!response.ok) {
-                try {
-                    const res = await response.json();
-                    throw new Error(res.error ? res.error : 'apiCall failed');
-                } catch (error) {
-                    throw new Error(response.statusText);
-                }
+                const res = await response.json();
+                throw new Error(res.error ? res.error : 'apiCall failed');
             }
             return response;
         } catch(error) {

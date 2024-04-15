@@ -163,7 +163,7 @@ class CloudStorageProvider {
                 let strContent = new TextDecoder().decode(content);
                 if (strContent.startsWith(this.typesReference)) {
                     strContent = strContent.substring(this.typesReference.length);
-                    content.set(new TextEncoder().encode(strContent));
+                    content = Buffer.from(strContent);
                 }
             }
 
@@ -404,7 +404,7 @@ class CloudStorageProvider {
     async pullLatest(path) {
         const project = this.getProject(path);
         await this.refreshProject(project);
-    }    
+    }
 }
 
 module.exports = CloudStorageProvider;
