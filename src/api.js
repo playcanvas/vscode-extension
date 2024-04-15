@@ -36,7 +36,6 @@ class Api {
               }            
             
             const response = await fetch(url, params);
-            let status;
             if (!response.ok) {
                 const res = await response.json();
                 throw new Error(res.error ? res.error : 'apiCall failed');
