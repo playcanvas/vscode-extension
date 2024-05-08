@@ -4,28 +4,34 @@ const FormData = require('form-data');
 const Script = require('./script');
 const vscode = require('vscode');
 class Api {
-    constructor() {
-        this.token = null;
+    constructor(context) {
+        this.context = context;
         this.username = null;
     }
 
 
     async getToken() {
-        if (!this.token) {
-            const config = vscode.workspace.getConfiguration("playcanvas");
-            this.token = config.get("accessToken");
 
-            if (!this.token) {
-                this.token = await vscode.window.showInputBox({
-                    prompt: "Please set your PlayCanvas Access Token. Generate an access token on your [account page](https://playcanvas.com/account)",
-                    placeHolder: "Input your access token here.",
-                    ignoreFocusOut: true,
-                });
-
-                await config.update("accessToken", this.token, vscode.ConfigurationTarget.Global);
-            }
+        // clear token from plain text storage
+        const config = vscode.workspace.getConfiguration("playcanvas");
+        const accessToken = config.get("accessToken");
+        if (accessToken) {
+            await this.context.secrets.store("playcanvas.accessToken", accessToken);
+            config.update("accessToken", "", vscode.ConfigurationTarget.Global);
         }
-        return this.token;
+
+        // get a secret
+        let token = await this.context.secrets.get("playcanvas.accessToken");
+        if (!token) {
+            token = await vscode.window.showInputBox({
+                prompt: "Please set your PlayCanvas Access Token. Generate an access token on your [account page](https://playcanvas.com/account)",
+                placeHolder: "Input your access token here.",
+                ignoreFocusOut: true,
+            });
+
+            await this.context.secrets.store("playcanvas.accessToken", token);
+        }
+        return token;
     }
 
     async getUsername() {
