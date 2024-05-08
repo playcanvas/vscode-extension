@@ -4,16 +4,46 @@ const FormData = require('form-data');
 const Script = require('./script');
 const vscode = require('vscode');
 class Api {
-    constructor() {  
-        this.token = null; 
+    constructor() {
+        this.token = null;
+        this.username = null;
     }
 
-    getToken() {
+
+    async getToken() {
         if (!this.token) {
-            const config = vscode.workspace.getConfiguration('playcanvas');
-            this.token = config.get('accessToken');
+            const config = vscode.workspace.getConfiguration("playcanvas");
+            this.token = config.get("accessToken");
+
+            if (!this.token) {
+                this.token = await vscode.window.showInputBox({
+                    prompt: "Please set your PlayCanvas Access Token. Generate an access token on your [account page](https://playcanvas.com/account)",
+                    placeHolder: "Input your access token here.",
+                    ignoreFocusOut: true,
+                });
+
+                await config.update("accessToken", this.token, vscode.ConfigurationTarget.Global);
+            }
         }
         return this.token;
+    }
+
+    async getUsername() {
+        if (!this.username) {
+            const config = vscode.workspace.getConfiguration("playcanvas");
+            this.username = config.get("username");
+
+            if (!this.username) {
+                this.username = await vscode.window.showInputBox({
+                    prompt: "Please set your PlayCanvas Username. You can find your username on your [account page](https://playcanvas.com/account)",
+                    placeHolder: "Input your username here.",
+                    ignoreFocusOut: true,
+                });
+
+                await config.update("username", this.username, vscode.ConfigurationTarget.Global);
+            }
+        }
+        return this.username;
     }
 
     async apiCall(url, method = 'GET', body = null, headers = {}) {
@@ -21,7 +51,7 @@ class Api {
             const params = {
                 method: method,
                 headers: {
-                    'Authorization': `Bearer ${this.getToken()}`
+                    'Authorization': `Bearer ${await this.getToken()}`
                 }
             };
             if (body) {
@@ -33,8 +63,8 @@ class Api {
                 if (headers.hasOwnProperty(header)) { // This checks that the key is not from the object's prototype chain
                   params.headers[header] = headers[header];
                 }
-              }            
-            
+              }
+
             const response = await fetch(url, params);
             if (!response.ok) {
                 const res = await response.json();
@@ -53,22 +83,22 @@ class Api {
         const config = vscode.workspace.getConfiguration('playcanvas');
         const username = config.get('username');
 
-        const response = await this.apiCall(`${apiHost}/users/${username}`);        
+        const response = await this.apiCall(`${apiHost}/users/${username}`);
         const res = await response.json();
         return res.id;
-    } 
+    }
 
     async fetchProjects(userId) {
         const response = await this.apiCall(`${apiHost}/users/${userId}/projects`);
         const res = await response.json();
         return res.result;
-    }  
-    
+    }
+
     async fetchProject(id) {
         const response = await this.apiCall(`${apiHost}/projects/${id}`);
         const res = await response.json();
         return res;
-    }      
+    }
 
     async fetchBranches(projectId) {
         const response = await this.apiCall(`${apiHost}/projects/${projectId}/branches`);
@@ -88,7 +118,7 @@ class Api {
         const response = await this.apiCall(url);
         const res = await response.json();
         return res;
-    }    
+    }
 
     async fetchFileContent(id, fileName, branchId) {
         const url = `${apiHost}/assets/${id}/file/${fileName}` + (branchId ? `?branchId=${branchId}` : '');
@@ -114,14 +144,14 @@ class Api {
 
         const asset = await response.json();
         return asset;
-    } 
+    }
 
     async copyAsset(sourceProjectId, sourceProjectBranchId, assetId, targetProjectId, targetProjectBranchId, folderId) {
         const url = `${apiHost}/assets/paste`;
         const body = {
             projectId: sourceProjectId,
             assets: [assetId],
-            targetProjectId: targetProjectId,          
+            targetProjectId: targetProjectId,
             targetFolderId: folderId
         };
 
@@ -143,7 +173,7 @@ class Api {
 
         const asset = await response.json();
         return asset;
-    } 
+    }
 
     async createAsset(projectId, branchId, folderId, name, type) {
         const url = `${apiHost}/assets/`;
@@ -153,7 +183,7 @@ class Api {
             contentType: 'text/plain',
             content: '',
             filename: name,
-            preload: false            
+            preload: false
         };
 
         const form = new FormData();
@@ -188,14 +218,14 @@ class Api {
         }
 
         return await response.json();
-    } 
+    }
 
     async deleteAsset(id, branchId) {
         const url = `${apiHost}/assets/${id}` + (branchId ? `?branchId=${branchId}` : '');
         const response = await this.apiCall(url, 'DELETE');
         const res = await response.text();
         return res;
-    }    
+    }
 
     async uploadFile(id, filename, modifiedAt, branchId, data) {
         const url = `${apiHost}/assets/${id}`;

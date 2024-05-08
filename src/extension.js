@@ -5,8 +5,8 @@ const CloudStorageProvider = require('./cloudStorageProvider');
 
 async function selectProject(fileProvider) {
 	const projects = await fileProvider.fetchProjects();
-            
-	// find most recently modified 
+
+	// find most recently modified
 	projects.sort((a, b) => {
 		if (a.modified < b.modified) {
 			return 1;
@@ -92,14 +92,14 @@ async function activate(context) {
 		// Register a command to open a workspace that uses your file system provider
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.addProject', async (item) => {
 
-			const config = vscode.workspace.getConfiguration('playcanvas');
-			let token = config.get('accessToken');
-			let username = config.get('username');
+			let token = await fileProvider.api.getToken();
+			let username = await fileProvider.api.getUsername();
+
 			if (!token || !username) {
 				vscode.window.showErrorMessage('Please set your PlayCanvas username and access token in the extension settings.');
 				return;
 			}
-	
+
 			const project = await selectProject(fileProvider);
 			if (project) {
 				await fileProvider.fetchAssets(project);
@@ -119,7 +119,6 @@ async function activate(context) {
 					fileProvider.refreshUri(editor.document.uri);			
 				}
 			});
-
 		}));
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', async (item) => {
@@ -139,7 +138,7 @@ async function activate(context) {
 			const branch = await vscode.window.showQuickPick(names, { placeHolder: 'Select a branch to switch to' });
 
 			if (branch) {
-				
+
 				// switch to the selected branch
 				if (prevBranch !== branch) {
 					fileProvider.switchBranch(project, branch);
@@ -150,7 +149,7 @@ async function activate(context) {
 				}
 			}
 		}));
-		
+
 	} catch (error) {
 		console.error('Failed to activate extension:', error);
 	}
