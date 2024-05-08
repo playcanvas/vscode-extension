@@ -1,8 +1,8 @@
 # PlayCanvas VS Code Extension
 
-![Copilot with PlayCanvas extension](/images/extension-ai.gif)
+![Copilot with PlayCanvas extension](/images/vscode-extension.webp)
 
-Extension that integrates with the PlayCanvas platform and helps to use a rich ecosystem of Visual Studio Code to work with PlayCanvas assets. The extension provides an interface to interact with PlayCanvas scripts and text-based files stored in cloud storage through an Explorer-like TreeView. The extension supports common file operations, version control features, collaboration capabilities and "Find In Files" functionality.
+Extension that integrates with the PlayCanvas platform and helps to use a rich ecosystem of Visual Studio Code to work with PlayCanvas assets. The extension provides an interface to interact with PlayCanvas scripts and text-based files stored in cloud storage through an Explorer-like TreeView. The extension supports common file operations, version control features and collaboration capabilities.
 
 ## Usage
 
@@ -46,13 +46,9 @@ The extension integrates with PlayCanvas' version control system, allowing users
 
 The extension supports collaboration features of PlayCanvas. Multiple users can edit a PlayCanvas project simultaneously, with changes being synchronized manually between users. Users are prevented from overwriting files, edited by others by checking modification base time in update requests on the backend - if it’s different, it means that file was modified by someone else. After that, a customer can pull the latest version of the file by choosing ‘Pull latest’ from the context menu for the file. 
 
-#### Find In Files
-
-The extension includes a "Find In Files" feature. Users can search for a text string across all script and text files in the PlayCanvas project. The search results are presented in a panel in VS Code, and users can navigate to the matching locations in files directly from the search results.
-
 #### Settings
 
-The extension has 2 settings - Access Token and PlayCanvas username. 
+The extension has 3 settings - Access Token, PlayCanvas username and usePlaycanvasTypes to add types support. 
 
 ## Requirements
 
@@ -62,10 +58,7 @@ The extension has 2 settings - Access Token and PlayCanvas username.
 
 * `playcanvas.accessToken`: Generate an access token on your [account page](https://playcanvas.com/account).
 * `playcanvas.username`: Set to your PlayCanvas username.
-
-## Known Issues
-
-* Find in Files is not yet implemented for the Beta test.
+* `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to PlayCanvas types files for code suggestions. Line is not saved. Default is true.
 
 ---
 
