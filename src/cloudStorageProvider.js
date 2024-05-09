@@ -3,7 +3,8 @@ const Api = require('./api');
 const path = require('path');
 
 class CloudStorageProvider {
-    constructor() {
+    constructor(context) {
+        this.context = context;
         this.projects = [];
         this.userId = null;
         this.currentProject = null;
@@ -381,7 +382,7 @@ class CloudStorageProvider {
     }
 
     refresh(clearProjects = true) {
-        this.api = new Api();
+        this.api = new Api(this.context);
 
         if (clearProjects) {
             this.projects = [];

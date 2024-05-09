@@ -58,11 +58,24 @@ async function activate(context) {
 
 	try {
 
-		const fileProvider = new CloudStorageProvider();
+		const fileProvider = new CloudStorageProvider(context);
 		context.subscriptions.push(vscode.workspace.registerFileSystemProvider('playcanvas', fileProvider, { isCaseSensitive: true }));
 
+		// Listen for when the configuration changes
+		context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration("playcanvas.accessToken")) {
+				const newToken = vscode.workspace.getConfiguration("playcanvas").get("accessToken");
+				if (newToken) {
+					// Save the new API key using Secret Storage
+					context.secrets.store("playcanvas.accessToken", newToken);
+					// keep the key out of plain text storage
+					vscode.workspace.getConfiguration("playcanvas").update("accessToken", "", vscode.ConfigurationTarget.Global);
+				}
+			}
+		}));
+
         const config = vscode.workspace.getConfiguration('playcanvas');
-        let token = config.get('accessToken');
+        let token = await context.secrets.get('playcanvas.accessToken');
         let username = config.get('username');
 		if (token && username) {
 			await fileProvider.fetchUserId();
