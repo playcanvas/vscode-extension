@@ -3,6 +3,8 @@
 const vscode = require('vscode');
 const CloudStorageProvider = require('./cloudStorageProvider');
 
+let fileProvider;
+
 async function selectProject(fileProvider) {
 	const projects = await fileProvider.fetchProjects();
 
@@ -57,29 +59,16 @@ async function activate(context) {
 	console.log('playcanvas: Congratulations, your extension "playcanvas" is now active!');
 
 	try {
-
-		const fileProvider = new CloudStorageProvider(context);
+		if (!fileProvider) {
+			fileProvider = new CloudStorageProvider(context);
+		}
 		context.subscriptions.push(vscode.workspace.registerFileSystemProvider('playcanvas', fileProvider, { isCaseSensitive: true }));
-
-		// Listen for when the configuration changes
-		context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration("playcanvas.accessToken")) {
-				const newToken = vscode.workspace.getConfiguration("playcanvas").get("accessToken");
-				if (newToken) {
-					// Save the new API key using Secret Storage
-					context.secrets.store("playcanvas.accessToken", newToken);
-					// keep the key out of plain text storage
-					vscode.workspace.getConfiguration("playcanvas").update("accessToken", "", vscode.ConfigurationTarget.Global);
-				}
-			}
-		}));
-
-        const config = vscode.workspace.getConfiguration('playcanvas');
-        let token = await context.secrets.get('playcanvas.accessToken');
-        let username = config.get('username');
-		if (token && username) {
-			await fileProvider.fetchUserId();
-			await fileProvider.fetchProjects();
+	    let token = await context.secrets.get('playcanvas.accessToken');
+		
+		if (token) {
+			fileProvider.fetchUserId().then(userId => {;
+				fileProvider.fetchProjects();
+			});
 		}
 
 		// preload projects
@@ -106,18 +95,36 @@ async function activate(context) {
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.addProject', async (item) => {
 
 			let token = await fileProvider.api.getToken();
-			let username = await fileProvider.api.getUsername();
-
-			if (!token || !username) {
-				vscode.window.showErrorMessage('Please set your PlayCanvas username and access token in the extension settings.');
+		
+			if (!token) {
+				vscode.window.showErrorMessage('Please generate your PlayCanvas access token.');
 				return;
 			}
 
 			const project = await selectProject(fileProvider);
 			if (project) {
-				await fileProvider.fetchAssets(project);
-				vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0, 0, { uri: vscode.Uri.parse(`playcanvas:/${project.name}`), name: `${project.name}` });
+				// await fileProvider.fetchAssets(project);
+
+				const start = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0;
+				await vscode.workspace.updateWorkspaceFolders(start, 0, { uri: vscode.Uri.parse(`playcanvas:/${project.name}`), name: `${project.name}` });
+
+				// refresh the folder after delay on timer
+				setTimeout(async () => {
+					console.log('Refreshing folder');
+					await fileProvider.refreshProject(project);
+
+					// Refresh the tree view to reflect the file rename.
+					vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
+
+					vscode.window.visibleTextEditors.forEach(editor => {
+						if (editor.document.uri.scheme === 'playcanvas') {
+							fileProvider.refreshUri(editor.document.uri);			
+						}
+					});
+
+				}, 100);
 			}
+
 		}));
 
 		context.subscriptions.push(vscode.commands.registerCommand('playcanvas.pullLatest', async (item) => {
