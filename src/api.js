@@ -1,8 +1,9 @@
 const fetch = require('node-fetch');
-const apiHost = 'https://playcanvas.com/api';
 const FormData = require('form-data');
 const Script = require('./script');
 const vscode = require('vscode');
+
+const apiHost = 'https://playcanvas.com/api';
 class Api {
     constructor(context) {
         this.context = context;
@@ -35,6 +36,12 @@ class Api {
 
     async apiCall(url, method = 'GET', body = null, headers = {}) {
         try {
+
+            // ensure token exists
+            if (!await this.getToken()) {
+                throw new Error('Unauthorized');
+            }
+
             const params = {
                 method: method,
                 headers: {
