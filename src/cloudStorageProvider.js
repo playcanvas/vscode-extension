@@ -31,7 +31,6 @@ class CloudStorageProvider {
         if (uri.path.includes('.vscode') || uri.path.includes('.git') || 
             uri.path.includes('.devcontainer') || uri.path.includes('node_modules') ||
             uri.path.includes('pom.xml') || uri.path.includes('AndroidManifest.xml')) {
-            console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
         } 
 
