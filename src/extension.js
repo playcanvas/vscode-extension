@@ -4,6 +4,7 @@ const vscode = require('vscode');
 const CloudStorageProvider = require('./cloudStorageProvider');
 
 let fileProvider;
+let workspaceFolderChangeListener;
 
 async function selectProject(fileProvider) {
 	const projects = await fileProvider.fetchProjects();
@@ -49,12 +50,6 @@ function renameWorkspaceFolder(oldName, newName) {
     vscode.workspace.updateWorkspaceFolders(folder.index, 1, { uri: newUri, name: newName });
 }
 
-async function runSequentially(tasks) {
-	for (const task of tasks) {
-	  	await task;
-	}
-}
-
 /**
  * @param {vscode.ExtensionContext} context
  */
@@ -65,6 +60,23 @@ async function activate(context) {
 	}
 	
 	context.subscriptions.push(vscode.workspace.registerFileSystemProvider('playcanvas', fileProvider, { isCaseSensitive: true }));
+
+	// Function to handle new workspace folder
+	const handleNewWorkspaceFolder = (workspaceFolder) => {
+		console.log(`New workspace folder added: ${workspaceFolder.uri.fsPath}`);
+		// Add your initialization or sync logic here
+		
+	};
+
+	// Event listener for workspace folder changes
+	workspaceFolderChangeListener = vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+		if (event.added.length > 0) {
+			event.added.forEach(handleNewWorkspaceFolder);
+		}
+	});
+
+	// Ensure the listener is disposed when the extension is deactivated
+	context.subscriptions.push(workspaceFolderChangeListener);
 
 	// Register a command to open a workspace that uses your file system provider
 	context.subscriptions.push(vscode.commands.registerCommand('playcanvas.addProject', async (item) => {
@@ -78,26 +90,21 @@ async function activate(context) {
 
 			const project = await selectProject(fileProvider);
 			if (project) {
-				// await fileProvider.fetchAssets(project);
+
+				// refresh the folder after delay on timer
+				await fileProvider.refreshProject(project);
 
 				const start = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0;
 				await vscode.workspace.updateWorkspaceFolders(start, 0, { uri: vscode.Uri.parse(`playcanvas:/${project.name}`), name: `${project.name}` });
 
-				// refresh the folder after delay on timer
-				setTimeout(async () => {
-					console.log('Refreshing folder');
-					await fileProvider.refreshProject(project);
+				// Refresh the tree view to reflect the file rename.
+				vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
 
-					// Refresh the tree view to reflect the file rename.
-					vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
-
-					vscode.window.visibleTextEditors.forEach(editor => {
-						if (editor.document.uri.scheme === 'playcanvas') {
-							fileProvider.refreshUri(editor.document.uri);			
-						}
-					});
-
-				}, 100);
+				// vscode.window.visibleTextEditors.forEach(editor => {
+				// 	if (editor.document.uri.scheme === 'playcanvas') {
+				// 		fileProvider.refreshUri(editor.document.uri);			
+				// 	}
+				// });
 			}
 		} catch (error) {
 			console.error('Add Project failed:', error);
@@ -156,46 +163,21 @@ async function activate(context) {
 		}
 	}));
 
-	try {
-		const token = await context.secrets.get('playcanvas.accessToken');
-			
-		if (token) {
-			await fileProvider.fetchUserId();
-			await fileProvider.fetchProjects();
+	// await fileProvider.syncProjects();
 
-			// preload projects
-			let promises = [];
-			let folders = vscode.workspace.workspaceFolders;
-			if (folders) {
-				for (let folder of folders) {
-					if (folder.uri.scheme.startsWith('playcanvas')) {
-						const project = fileProvider.getProjectByName(folder.name);
-						if (project) {
-							let projectPromises = [];
-							const branch = fileProvider.getBranchByFolderName(folder.name);
-							if (branch != 'main') {
-								projectPromises.push(fileProvider.fetchBranches(project));
-								projectPromises.push(fileProvider.switchBranch(project, branch));
-							}
-							projectPromises.push(fileProvider.fetchAssets(project));
-							promises.push(runSequentially(projectPromises));
-						}
-					}
-				}
-			}
-			await Promise.all(promises);
-		}
-
-	} catch (err) {
-		console.error('error during activation:', err);
-		throw err;
-	}
+	fileProvider.getToken().catch(err => {
+		vscode.window.showInformationMessage('Failed to authorize. Error: ' + err.message);
+	});
 
 	console.log('playcanvas: Congratulations, your extension "playcanvas" is now active!');
 }
 
 // This method is called when your extension is deactivated
-function deactivate() {}
+function deactivate() {
+	if (workspaceFolderChangeListener) {
+		workspaceFolderChangeListener.dispose();
+	}
+}
 
 module.exports = {
 	activate,

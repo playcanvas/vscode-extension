@@ -11,8 +11,6 @@ Extension that integrates with the PlayCanvas platform and helps to use a rich e
 * Select "PlayCanvas: Add Project" command in VS Code command menu and paste your token into the message box.
 * Work with your project in VS Code workspace.
 
-![Extension settings](/images/settings.jpg)
-
 ## Features
 
 #### PlayCanvas Hierarchical Explorer

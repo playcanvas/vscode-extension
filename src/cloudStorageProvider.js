@@ -2,11 +2,12 @@ const vscode = require('vscode');
 const Api = require('./api');
 const path = require('path');
 
-let projects = [];
-let userId = null;
-
 class CloudStorageProvider {
     constructor(context) {
+
+        this.projects = [];
+        this.userId = null;
+
         this.context = context;
         this._onDidChangeFile = new vscode.EventEmitter();
 
@@ -14,6 +15,9 @@ class CloudStorageProvider {
         this.typesReference = '///<reference path="' + filePath + '" />;\n';
 
         this.refresh();
+
+        this.syncProjectsCalled = false;
+        this.syncProjectsPromise = null;
     }
 
     get onDidChangeFile() {
@@ -34,11 +38,20 @@ class CloudStorageProvider {
             throw vscode.FileSystemError.FileNotFound();
         } 
 
-        const project = this.getProject(uri.path);
+        let project = this.getProject(uri.path);
+        if (!project) {
+
+            if (this.projects.length === 0) {
+                console.log(`playcanvas: stat ${uri.path} no projects`);
+                await this.ensureSyncProjects();                    
+                project = this.getProject(uri.path);
+            }
+        }
+
         if (!project) {
             console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
-        }
+        }                    
 
         if (this.isProjectPath(uri.path)) {
             const projectModified = new Date(project.modified).getTime();
@@ -205,7 +218,7 @@ class CloudStorageProvider {
 
     getProjectByName(name) {
         const projectBranch = name.split(':');
-        return projects.find(p => p.name === projectBranch[0]);
+        return this.projects.find(p => p.name === projectBranch[0]);
     }
 
     getBranchByFolderName(folderName) {
@@ -214,7 +227,7 @@ class CloudStorageProvider {
     }
     
     getProjectById(id) {
-        return projects.find(p => p.id === id);
+        return this.projects.find(p => p.id === id);
     }  
 
     async copy(sourceUri, targetUri) {
@@ -270,20 +283,35 @@ class CloudStorageProvider {
     }
 
     async fetchUserId() {
-        userId = await this.api.fetchUserId();
+        this.userId = await this.api.fetchUserId();
     }
 
     async getProjects() {
-        return projects;
+        return this.projects;
     }
 
     async fetchProjects() {
-        if (!userId) {
-            userId = await this.api.fetchUserId();
+        if (!this.userId) {
+            this.userId = await this.api.fetchUserId();
         }
         console.log(`playcanvas: fetchProjects`);
-        projects = await this.api.fetchProjects(userId);
-        return projects;
+
+        // preserve branch selection
+        const branchSelection = new Map();
+        this.projects.forEach(p => {
+            if (p.branchId) {
+                branchSelection.set(p.id, p.branchId);
+            }
+        });
+
+        this.projects = await this.api.fetchProjects(this.userId);
+
+        this.projects.forEach(p => {
+            if (branchSelection.get(p.id)){
+                p.branchId = branchSelection.get(p.id);
+            };
+        });
+        return this.projects;
     }
 
     async fetchProject(id) {
@@ -344,8 +372,8 @@ class CloudStorageProvider {
     }
 
     async fetchAssets(project) {
-        console.log(`playcanvas: fetchAssets ${project.name}`);
         if (!project.files) {            
+            console.log(`playcanvas: fetchAssets ${project.name}, branch: ${project.branchId}`);
             const files = await this.api.fetchAssets(project.id, project.branchId);
             project.files = new Map();
             for (const file of files) {
@@ -388,9 +416,9 @@ class CloudStorageProvider {
         this.api = new Api(this.context);
 
         if (clearProjects) {
-            projects = [];
+            this.projects = [];
         } else {
-            projects.forEach(p => { delete p.files; delete p.branches; delete p.branchId } );
+            this.projects.forEach(p => { delete p.files; delete p.branches; delete p.branchId } );
         }
     }
 
@@ -411,6 +439,62 @@ class CloudStorageProvider {
         console.log('pullLatest ' + path);
         const project = this.getProject(path);
         await this.refreshProject(project);
+    }
+
+    async runSequentially(tasks) {
+        for (const task of tasks) {
+              await task;
+        }
+    }
+
+    async ensureSyncProjects() {
+        if (!this.syncProjectsCalled) {
+          this.syncProjectsCalled = true;
+          this.syncProjectsPromise = this.syncProjects();
+        }
+        return this.syncProjectsPromise;
+      }    
+
+    async syncProjects() {
+        console.log('syncProjects');
+        try {
+            const token = await this.context.secrets.get('playcanvas.accessToken');
+                
+            if (token) {
+                await this.fetchUserId();
+                await this.fetchProjects();
+    
+                // preload projects
+                let promises = [];
+                const folders = vscode.workspace.workspaceFolders;
+                if (folders) {
+                    for (const folder of folders) {
+                        if (folder.uri.scheme.startsWith('playcanvas')) {
+                            const project = this.getProjectByName(folder.name);
+                            if (project) {
+                                let projectPromises = [];
+                                // const branch = this.getBranchByFolderName(folder.name);
+                                // if (branch != 'main') {
+                                //     projectPromises.push(this.fetchBranches(project));
+                                //     projectPromises.push(this.switchBranch(project, branch));
+                                // }
+                                projectPromises.push(this.fetchAssets(project));
+                                promises.push(this.runSequentially(projectPromises));
+                            }
+                        }
+                    }
+                }
+                await Promise.all(promises);
+            }
+    
+        } catch (err) {
+            console.error('error during activation:', err);
+            throw err;
+        }
+    }
+
+    async getToken() {
+        return this.api.getToken();
     }
 }
 
