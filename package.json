@@ -2,7 +2,7 @@
   "name": "playcanvas",
   "displayName": "PlayCanvas",
   "description": "Official PlayCanvas extension from the team",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "playcanvas",
   "icon": "images/PlayCanvasLogo.png",
   "engines": {
@@ -11,14 +11,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/playcanvas/vscode-extension.git"
-  },
-  "capabilities": {
-    "untrustedWorkspaces": {
-      "supported": "limited"
-    },
-    "virtualWorkspaces": {
-      "supported": "limited"
-    }
   },
   "categories": [
     "Other"
@@ -42,16 +34,6 @@
         "path": "./syntaxes/typescript.json"
       }],      
       "properties": {
-        "playcanvas.accessToken": {
-          "type": "string",
-          "default": "",
-          "description": "Access Token for PlayCanvas"
-        },
-        "playcanvas.username": {
-          "type": "string",
-          "default": "",
-          "description": "Username for PlayCanvas"
-        },
         "playcanvas.usePlaycanvasTypes": {
           "type": "boolean",
           "default": true,

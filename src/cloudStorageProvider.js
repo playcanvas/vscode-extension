@@ -2,12 +2,12 @@ const vscode = require('vscode');
 const Api = require('./api');
 const path = require('path');
 
+let projects = [];
+let userId = null;
+
 class CloudStorageProvider {
     constructor(context) {
         this.context = context;
-        this.projects = [];
-        this.userId = null;
-        this.currentProject = null;
         this._onDidChangeFile = new vscode.EventEmitter();
 
         const filePath = path.join(__dirname, '..', 'node_modules', 'playcanvas', 'build/playcanvas.d.ts');
@@ -29,12 +29,14 @@ class CloudStorageProvider {
         console.log(`playcanvas: stat ${uri.path}`);
         
         if (uri.path.includes('.vscode') || uri.path.includes('.git') || 
-            uri.path.includes('.devcontainer') || uri.path.includes('node_modules')) {
+            uri.path.includes('.devcontainer') || uri.path.includes('node_modules') ||
+            uri.path.includes('pom.xml') || uri.path.includes('AndroidManifest.xml')) {
             throw vscode.FileSystemError.FileNotFound();
         } 
 
         const project = this.getProject(uri.path);
         if (!project) {
+            console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
         }
 
@@ -46,6 +48,7 @@ class CloudStorageProvider {
 
         let asset = this.lookup(uri);
         if (!asset) {
+            console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
         }
 
@@ -202,7 +205,7 @@ class CloudStorageProvider {
 
     getProjectByName(name) {
         const projectBranch = name.split(':');
-        return this.projects.find(p => p.name === projectBranch[0]);
+        return projects.find(p => p.name === projectBranch[0]);
     }
 
     getBranchByFolderName(folderName) {
@@ -211,7 +214,7 @@ class CloudStorageProvider {
     }
     
     getProjectById(id) {
-        return this.projects.find(p => p.id === id);
+        return projects.find(p => p.id === id);
     }  
 
     async copy(sourceUri, targetUri) {
@@ -267,20 +270,20 @@ class CloudStorageProvider {
     }
 
     async fetchUserId() {
-        this.userId = await this.api.fetchUserId();
+        userId = await this.api.fetchUserId();
     }
 
     async getProjects() {
-        return this.projects;
+        return projects;
     }
 
     async fetchProjects() {
-        if (!this.userId) {
-            this.userId = await this.api.fetchUserId();
+        if (!userId) {
+            userId = await this.api.fetchUserId();
         }
         console.log(`playcanvas: fetchProjects`);
-        this.projects = await this.api.fetchProjects(this.userId);
-        return this.projects;
+        projects = await this.api.fetchProjects(userId);
+        return projects;
     }
 
     async fetchProject(id) {
@@ -341,8 +344,8 @@ class CloudStorageProvider {
     }
 
     async fetchAssets(project) {
-        if (!project.files) {
-            console.log(`playcanvas: fetchAssets ${project.name}`);
+        console.log(`playcanvas: fetchAssets ${project.name}`);
+        if (!project.files) {            
             const files = await this.api.fetchAssets(project.id, project.branchId);
             project.files = new Map();
             for (const file of files) {
@@ -385,24 +388,27 @@ class CloudStorageProvider {
         this.api = new Api(this.context);
 
         if (clearProjects) {
-            this.projects = [];
+            projects = [];
         } else {
-            this.projects.forEach(p => { delete p.files; delete p.branches; delete p.branchId } );
+            projects.forEach(p => { delete p.files; delete p.branches; delete p.branchId } );
         }
     }
 
     refreshUri(uri) {
+        console.log('refreshUri ' + uri.path);
         // Fire the event to signal that a file has been changed.
         // VS Code will call your readDirectory and other methods to update its view.
         this._onDidChangeFile.fire([{ type: vscode.FileChangeType.Changed, uri: uri }]);
     }
 
     async refreshProject(project) {
+        console.log('refreshProject' + project.name);
         delete project.files;
         await this.fetchAssets(project);
     }
 
     async pullLatest(path) {
+        console.log('pullLatest ' + path);
         const project = this.getProject(path);
         await this.refreshProject(project);
     }

@@ -7,9 +7,9 @@ Extension that integrates with the PlayCanvas platform and helps to use a rich e
 ## Usage
 
 * Download and install extension in VS Code.
-* Generate an access token on your [PlayCanvas account page](https://playcanvas.com/account) - check [this document](https://developer.playcanvas.com/en/user-manual/api/#authorization) for details.
-* Open VS Code, enter the token and PlayCanvas username on extension settings page. Search for 'playcanvas' in VS Code settings.
-* Select "PlayCanvas: Add Project" command in VS Code command menu
+* Generate an access token on your [PlayCanvas account page](https://playcanvas.com/account) - check [this document](https://developer.playcanvas.com/en/user-manual/api/#authorization) for details, copy it to clipboard
+* Select "PlayCanvas: Add Project" command in VS Code command menu and paste your token into the message box.
+* Work with your project in VS Code workspace.
 
 ![Extension settings](/images/settings.jpg)
 
@@ -48,7 +48,7 @@ The extension supports collaboration features of PlayCanvas. Multiple users can 
 
 #### Settings
 
-The extension has 3 settings - Access Token, PlayCanvas username and usePlaycanvasTypes to add types support. 
+The extension has just 1 setting: `usePlaycanvasTypes` (to add types support). An Access Token is requested when you are adding a project.
 
 ## Requirements
 
@@ -56,9 +56,9 @@ The extension has 3 settings - Access Token, PlayCanvas username and usePlaycanv
 
 ## Extension Settings
 
-* `playcanvas.accessToken`: Generate an access token on your [account page](https://playcanvas.com/account).
-* `playcanvas.username`: Set to your PlayCanvas username.
 * `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to PlayCanvas types files for code suggestions. Line is not saved. Default is true.
+
+A PlayCanvas Access Token is requested when you add a project. Generate an access token on your [account page](https://playcanvas.com/account).
 
 ---
 

@@ -1,21 +1,20 @@
 const fetch = require('node-fetch');
-const apiHost = 'https://playcanvas.com/api';
 const FormData = require('form-data');
 const Script = require('./script');
 const vscode = require('vscode');
+
+const apiHost = 'https://playcanvas.com/api';
 class Api {
     constructor(context) {
         this.context = context;
-        this.username = null;
     }
-
 
     async getToken() {
 
         // clear token from plain text storage
         const config = vscode.workspace.getConfiguration("playcanvas");
         const accessToken = config.get("accessToken");
-        if (accessToken) {
+        if (accessToken  && accessToken !== "") {
             await this.context.secrets.store("playcanvas.accessToken", accessToken);
             config.update("accessToken", "", vscode.ConfigurationTarget.Global);
         }
@@ -28,36 +27,28 @@ class Api {
                 placeHolder: "Input your access token here.",
                 ignoreFocusOut: true,
             });
-
+            if (!token) {
+                throw new Error('Unauthorized');
+            }
             await this.context.secrets.store("playcanvas.accessToken", token);
         }
         return token;
     }
 
-    async getUsername() {
-        if (!this.username) {
-            const config = vscode.workspace.getConfiguration("playcanvas");
-            this.username = config.get("username");
-
-            if (!this.username) {
-                this.username = await vscode.window.showInputBox({
-                    prompt: "Please set your PlayCanvas Username. You can find your username on your [account page](https://playcanvas.com/account)",
-                    placeHolder: "Input your username here.",
-                    ignoreFocusOut: true,
-                });
-
-                await config.update("username", this.username, vscode.ConfigurationTarget.Global);
-            }
-        }
-        return this.username;
-    }
 
     async apiCall(url, method = 'GET', body = null, headers = {}) {
         try {
+
+            // ensure token exists
+            const token = await this.getToken();
+            if (!token) {
+                throw new Error('Unauthorized');
+            }
+
             const params = {
                 method: method,
                 headers: {
-                    'Authorization': `Bearer ${await this.getToken()}`
+                    'Authorization': `Bearer ${token}`
                 }
             };
             if (body) {
@@ -78,18 +69,20 @@ class Api {
             }
             return response;
         } catch(error) {
+            // if message has 'Unauthorized' in the string then clear token
+            if (error.message.includes('Unauthorized')) {
+                // clear token
+                await this.context.secrets.delete('playcanvas.accessToken');
+                throw new Error('Unauthorized. Please try again.');
+            }
             console.error('API call failed:', error);
             throw error;
         }
     }
 
-    // get current user id from username
+    // get current user id
     async fetchUserId() {
-
-        const config = vscode.workspace.getConfiguration('playcanvas');
-        const username = config.get('username');
-
-        const response = await this.apiCall(`${apiHost}/users/${username}`);
+        const response = await this.apiCall(`${apiHost}/id`);
         const res = await response.json();
         return res.id;
     }

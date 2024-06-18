@@ -7,3 +7,11 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [v0.1.0]
 
 - Initial release
+
+## [v0.1.6]
+
+- Auth token is served in a more secure way now
+
+## [v0.1.7]
+
+- Authentication is reworked, only auth token from PlayCanvas account page is needed. Username and auth token settings removed from VS Code settings for PlayCanvas. Token is requested in a dialog. Issue with failing 'Add Project' command is fixed.
