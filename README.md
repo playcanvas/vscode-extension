@@ -48,7 +48,7 @@ The extension supports collaboration features of PlayCanvas. Multiple users can 
 
 #### Settings
 
-The extension has just 1 setting - usePlaycanvasTypes to add types support. Access Token is requested when you are adding a project.
+The extension has just 1 setting: `usePlaycanvasTypes` (to add types support). An Access Token is requested when you are adding a project.
 
 ## Requirements
 
