@@ -8,7 +8,7 @@ Extension that integrates with the PlayCanvas platform and helps to use a rich e
 
 * Download and install extension in VS Code.
 * Generate an access token on your [PlayCanvas account page](https://playcanvas.com/account) - check [this document](https://developer.playcanvas.com/en/user-manual/api/#authorization) for details, copy it to clipboard
-* Select "PlayCanvas: Add Project" command in VS Code command menu, paste your token into a message box
+* Select "PlayCanvas: Add Project" command in VS Code command menu and paste your token into the message box.
 * Work with your project in VS Code workspace
 
 ![Extension settings](/images/settings.jpg)
