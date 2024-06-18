@@ -58,7 +58,7 @@ The extension has just 1 setting: `usePlaycanvasTypes` (to add types support). A
 
 * `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to PlayCanvas types files for code suggestions. Line is not saved. Default is true.
 
-Playcanvas Access Token is requested when you add a project - generate an access token on your [account page](https://playcanvas.com/account).
+A PlayCanvas Access Token is requested when you add a project. Generate an access token on your [account page](https://playcanvas.com/account).
 
 ---
 
