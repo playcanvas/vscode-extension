@@ -27,7 +27,9 @@ class Api {
                 placeHolder: "Input your access token here.",
                 ignoreFocusOut: true,
             });
-
+            if (!token) {
+                throw new Error('Unauthorized');
+            }
             await this.context.secrets.store("playcanvas.accessToken", token);
         }
         return token;
@@ -38,14 +40,15 @@ class Api {
         try {
 
             // ensure token exists
-            if (!await this.getToken()) {
+            const token = await this.getToken();
+            if (!token) {
                 throw new Error('Unauthorized');
             }
 
             const params = {
                 method: method,
                 headers: {
-                    'Authorization': `Bearer ${await this.getToken()}`
+                    'Authorization': `Bearer ${token}`
                 }
             };
             if (body) {

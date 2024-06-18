@@ -29,12 +29,15 @@ class CloudStorageProvider {
         console.log(`playcanvas: stat ${uri.path}`);
         
         if (uri.path.includes('.vscode') || uri.path.includes('.git') || 
-            uri.path.includes('.devcontainer') || uri.path.includes('node_modules')) {
+            uri.path.includes('.devcontainer') || uri.path.includes('node_modules') ||
+            uri.path.includes('pom.xml') || uri.path.includes('AndroidManifest.xml')) {
+            console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
         } 
 
         const project = this.getProject(uri.path);
         if (!project) {
+            console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
         }
 
@@ -46,6 +49,7 @@ class CloudStorageProvider {
 
         let asset = this.lookup(uri);
         if (!asset) {
+            console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
         }
 
@@ -399,7 +403,7 @@ class CloudStorageProvider {
     }
 
     async refreshProject(project) {
-        console.log('refreshProjec t' + project.name);
+        console.log('refreshProject' + project.name);
         delete project.files;
         await this.fetchAssets(project);
     }
