@@ -62,7 +62,7 @@ The extension has just 2 settings:
 ## Extension Settings
 
 * `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to PlayCanvas types files for code suggestions. Line is not saved. Default is true.
-* `playcanvas.maxSearchResults`: Maximum search results to display
+* `playcanvas.maxSearchResults`: Maximum number of search results to display.
 
 A PlayCanvas Access Token is requested when you add a project. Generate an access token on your [account page](https://playcanvas.com/account).
 
