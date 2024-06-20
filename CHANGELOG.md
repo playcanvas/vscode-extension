@@ -22,4 +22,5 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [v0.1.9]
 
-- Find In Files implemented, issue with opened files during VS Code startup is fixed. 
+- Find In Files implemented.
+- Issue with opened files during VS Code startup is fixed. 
