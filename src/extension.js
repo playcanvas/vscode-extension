@@ -125,12 +125,6 @@ async function activate(context) {
 
 				// Refresh the tree view to reflect the file rename.
 				vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
-
-				// vscode.window.visibleTextEditors.forEach(editor => {
-				// 	if (editor.document.uri.scheme === 'playcanvas') {
-				// 		fileProvider.refreshUri(editor.document.uri);			
-				// 	}
-				// });
 			}
 		} catch (error) {
 			console.error('Add Project failed:', error);
