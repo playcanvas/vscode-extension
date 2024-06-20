@@ -2,7 +2,7 @@
   "name": "playcanvas",
   "displayName": "PlayCanvas",
   "description": "Official PlayCanvas extension from the team",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "publisher": "playcanvas",
   "icon": "images/PlayCanvasLogo.png",
   "engines": {
@@ -16,7 +16,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"    
+    "onFileSystem:playcanvas"
   ],
   "main": "./src/extension.js",
   "contributes": {
@@ -37,7 +37,14 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically adds PlayCanvas types reference to a source file"
-        }        
+        },
+        "playcanvas.maxSearchResults": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum number of search results to show [1..100]"
+        }
       }
     },
     "commands": [
@@ -53,8 +60,22 @@
       {
         "command": "playcanvas.pullLatest",
         "title": "PlayCanvas: Pull Latest"
-      }
+      },
+      {
+        "command": "playcanvas.search",
+        "title": "PlayCanvas: Search"
+      },
+      {
+        "command": "playcanvas.findInFolder",
+        "title": "PlayCanvas: Find In Folder",
+        "when": "explorerResourceIsFolder && resourceScheme == 'playcanvas'"
+      }      
     ],
+    "keybindings": [{
+        "command": "playcanvas.search",
+        "key": "ctrl+shift+'",
+        "mac": "cmd+shift+'"        
+    }],
     "menus": {
       "explorer/context": [
         {
@@ -68,6 +89,10 @@
         {
           "command": "playcanvas.pullLatest",
           "when": "resourceScheme == playcanvas"
+        },
+        {
+          "command": "playcanvas.findInFolder",
+          "when": "explorerResourceIsFolder && resourceScheme == 'playcanvas'"
         }
       ]
     }

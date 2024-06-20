@@ -44,9 +44,16 @@ The extension integrates with PlayCanvas' version control system, allowing users
 
 The extension supports collaboration features of PlayCanvas. Multiple users can edit a PlayCanvas project simultaneously, with changes being synchronized manually between users. Users are prevented from overwriting files, edited by others by checking modification base time in update requests on the backend - if it’s different, it means that file was modified by someone else. After that, a customer can pull the latest version of the file by choosing ‘Pull latest’ from the context menu for the file. 
 
+#### Search
+
+The extension supports searching in project files - use `PlayCanvas: Search` to search in the current project or `PlayCanvas:Find In Files` from the context menu to search for a pattern. The search is case-insensitive, the maximum number of results controlled by `maxSearchResults` setting. As soon as standard Search Dialog [supported by vscode API](https://github.com/microsoft/vscode/issues/73524), we will reimplement it. Currently standard Find dialog searched in the opened files only, so please use Playcanvas' one. 
+
 #### Settings
 
-The extension has just 1 setting: `usePlaycanvasTypes` (to add types support). An Access Token is requested when you are adding a project.
+The extension has just 2 settings: 
+
+* `usePlaycanvasTypes` (to add types support). An Access Token is requested when you are adding a project.
+* `maxSearchResults` - maximum search results to display
 
 ## Requirements
 
@@ -55,6 +62,7 @@ The extension has just 1 setting: `usePlaycanvasTypes` (to add types support). A
 ## Extension Settings
 
 * `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to PlayCanvas types files for code suggestions. Line is not saved. Default is true.
+* `playcanvas.maxSearchResults`: Maximum search results to display
 
 A PlayCanvas Access Token is requested when you add a project. Generate an access token on your [account page](https://playcanvas.com/account).
 

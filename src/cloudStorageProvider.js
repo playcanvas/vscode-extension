@@ -2,6 +2,8 @@ const vscode = require('vscode');
 const Api = require('./api');
 const path = require('path');
 
+const SEARCH_RESULT_MAX_LENGTH = 80;
+
 class CloudStorageProvider {
     constructor(context) {
 
@@ -26,24 +28,24 @@ class CloudStorageProvider {
     }
 
     isProjectPath(path) {
-        return path.split('/').length === 2;        
+        return path.split('/').length === 2;
     }
 
     async stat(uri) {
         console.log(`playcanvas: stat ${uri.path}`);
-        
-        if (uri.path.includes('.vscode') || uri.path.includes('.git') || 
+
+        if (uri.path.includes('.vscode') || uri.path.includes('.git') ||
             uri.path.includes('.devcontainer') || uri.path.includes('node_modules') ||
             uri.path.includes('pom.xml') || uri.path.includes('AndroidManifest.xml')) {
             throw vscode.FileSystemError.FileNotFound();
-        } 
+        }
 
         let project = this.getProject(uri.path);
         if (!project) {
-
+            // if projects are not synced yet
             if (this.projects.length === 0) {
                 console.log(`playcanvas: stat ${uri.path} no projects`);
-                await this.ensureSyncProjects();                    
+                await this.ensureSyncProjects();
                 project = this.getProject(uri.path);
             }
         }
@@ -51,7 +53,7 @@ class CloudStorageProvider {
         if (!project) {
             console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
-        }                    
+        }
 
         if (this.isProjectPath(uri.path)) {
             const projectModified = new Date(project.modified).getTime();
@@ -80,9 +82,18 @@ class CloudStorageProvider {
 
         if (uri.path.includes('.vscode') || uri.path.includes('.git') || uri.path.includes('.devcontainer')) {
             throw vscode.FileSystemError.FileNotFound();
-        }        
+        }
 
-        const project = this.getProject(uri.path);
+        let project = this.getProject(uri.path);
+        if (!project) {
+            // if projects are not synced yet
+            if (this.projects.length === 0) {
+                console.log(`playcanvas: stat ${uri.path} no projects`);
+                await this.ensureSyncProjects();
+                project = this.getProject(uri.path);
+            }
+        }
+
         if (!project) {
             throw vscode.FileSystemError.FileNotFound();
         }
@@ -94,13 +105,13 @@ class CloudStorageProvider {
 
         if (asset && asset.type === 'folder') {
             return new Uint8Array();
-        }       
-        
+        }
+
         if (!asset.content) {
             asset.content = await this.fetchFileContent(asset, project.branchId);
         }
 
-        if (asset.content === null) {       
+        if (asset.content === null) {
             throw vscode.FileSystemError.FileNotFound();
         }
 
@@ -111,7 +122,7 @@ class CloudStorageProvider {
         }
 
         return new TextEncoder().encode(asset.content);
-    }   
+    }
 
     addFile(path, asset) {
         const parts = path.split('/');
@@ -119,16 +130,16 @@ class CloudStorageProvider {
         if (!project || parts.length === 0) {
             return null;
         }
-        
+
         let files = project.files;
-        for (let i=2; i<parts.length-1; ++i) {
+        for (let i = 2; i < parts.length - 1; ++i) {
             const folder = files.get(parts[i]);
             if (!folder) {
                 throw new Error(`Failed to find folder ${parts[i]}`);
-            }            
+            }
             files = folder.files;
         }
-        files.set(parts[parts.length-1], asset);
+        files.set(parts[parts.length - 1], asset);
     }
 
     removeFile(path) {
@@ -137,16 +148,16 @@ class CloudStorageProvider {
         if (!project || parts.length === 0) {
             return null;
         }
-        
+
         let files = project.files;
-        for (let i=2; i<parts.length-1; ++i) {
+        for (let i = 2; i < parts.length - 1; ++i) {
             const folder = files.get(parts[i]);
             if (!folder) {
                 throw new Error(`Failed to find folder ${parts[i]}`);
-            }             
+            }
             files = folder.files;
         }
-    }    
+    }
 
     async writeFile(uri, content, options) {
         console.log(`playcanvas: writeFile ${uri.path}`);
@@ -161,7 +172,7 @@ class CloudStorageProvider {
 
             const folderPath = path.dirname(uri.path);
             const folderUri = vscode.Uri.parse(`playcanvas:${path.dirname(uri.path)}`);
-            
+
             // Construct the new Uri using the folder path and new name
             try {
                 const root = this.isProjectPath(folderPath);
@@ -190,15 +201,15 @@ class CloudStorageProvider {
         }
     }
 
-	watch(uri) {
-		// ignore, fires for all changes...
-		return new vscode.Disposable(() => { });
-	}
+    watch(uri) {
+        // ignore, fires for all changes...
+        return new vscode.Disposable(() => { });
+    }
 
     isWritableFileSystem(scheme) {
         return true;
     }
-    
+
     async rename(oldUri, newUri) {
         console.log(`playcanvas: rename ${oldUri.path}`);
 
@@ -225,10 +236,10 @@ class CloudStorageProvider {
         const projectBranch = folderName.split(':');
         return projectBranch[1] ? projectBranch[1] : 'main';
     }
-    
+
     getProjectById(id) {
         return this.projects.find(p => p.id === id);
-    }  
+    }
 
     async copy(sourceUri, targetUri) {
         console.log(`playcanvas: copy ${sourceUri.path}`);
@@ -239,9 +250,9 @@ class CloudStorageProvider {
         const sourceProject = this.getProject(sourceUri.path);
         const targetProject = this.getProject(targetUri.path);
         const folderId = folderData ? folderData.id : null;
-        await this.api.copyAsset(sourceProject.id, sourceProject.branchId, asset.id, 
-            targetProject.id, targetProject.branchId, folderId); 
-        await this.refreshProject(targetProject);     
+        await this.api.copyAsset(sourceProject.id, sourceProject.branchId, asset.id,
+            targetProject.id, targetProject.branchId, folderId);
+        await this.refreshProject(targetProject);
     }
 
     async delete(uri) {
@@ -268,7 +279,7 @@ class CloudStorageProvider {
         if (!asset) {
             const folderPath = path.dirname(uri.path);
             const folderUri = vscode.Uri.parse(`${folderPath}`);
-            
+
             // Construct the new Uri using the folder path and new name
             try {
                 const root = this.isProjectPath(folderPath);
@@ -307,7 +318,7 @@ class CloudStorageProvider {
         this.projects = await this.api.fetchProjects(this.userId);
 
         this.projects.forEach(p => {
-            if (branchSelection.get(p.id)){
+            if (branchSelection.get(p.id)) {
                 p.branchId = branchSelection.get(p.id);
             };
         });
@@ -317,13 +328,13 @@ class CloudStorageProvider {
     async fetchProject(id) {
         console.log(`playcanvas: fetchProject`);
         return await this.api.fetchProject(id);
-    }    
+    }
 
     async fetchBranches(project) {
         console.log(`playcanvas: fetchBranches ${project.name}`);
         // if (!project.branches) {
-            const branches = await this.api.fetchBranches(project.id);
-            project.branches = branches;
+        const branches = await this.api.fetchBranches(project.id);
+        project.branches = branches;
         // }
         return project.branches;
     }
@@ -351,8 +362,8 @@ class CloudStorageProvider {
             }
         } else {
             file.path = projectName + '/' + filename;
-        } 
-        
+        }
+
         return file.path;
     }
 
@@ -372,7 +383,7 @@ class CloudStorageProvider {
     }
 
     async fetchAssets(project) {
-        if (!project.files) {            
+        if (!project.files) {
             console.log(`playcanvas: fetchAssets ${project.name}, branch: ${project.branchId}`);
             const files = await this.api.fetchAssets(project.id, project.branchId);
             project.files = new Map();
@@ -384,7 +395,7 @@ class CloudStorageProvider {
             this.buildPaths(project.name, files);
         }
         return project.files;
-    } 
+    }
 
     async fetchFileContent(asset, branchId) {
         console.log(`playcanvas: fetchFileContent ${asset.name}`);
@@ -397,19 +408,19 @@ class CloudStorageProvider {
         if (!project || parts.length === 0) {
             return null;
         }
-        
+
         let files = project.files;
         if (!files) {
             return null;
         }
-        for (let i=2; i<parts.length-1; ++i) {
+        for (let i = 2; i < parts.length - 1; ++i) {
             const folder = files.get(parts[i]);
             if (!folder) {
                 return null;
-            } 
+            }
             files = folder.files;
         }
-        return files.get(parts[parts.length-1]);
+        return files.get(parts[parts.length - 1]);
     }
 
     refresh(clearProjects = true) {
@@ -418,7 +429,7 @@ class CloudStorageProvider {
         if (clearProjects) {
             this.projects = [];
         } else {
-            this.projects.forEach(p => { delete p.files; delete p.branches; delete p.branchId } );
+            this.projects.forEach(p => { delete p.files; delete p.branches; delete p.branchId });
         }
     }
 
@@ -443,27 +454,27 @@ class CloudStorageProvider {
 
     async runSequentially(tasks) {
         for (const task of tasks) {
-              await task;
+            await task;
         }
     }
 
     async ensureSyncProjects() {
         if (!this.syncProjectsCalled) {
-          this.syncProjectsCalled = true;
-          this.syncProjectsPromise = this.syncProjects();
+            this.syncProjectsCalled = true;
+            this.syncProjectsPromise = this.syncProjects();
         }
         return this.syncProjectsPromise;
-      }    
+    }
 
     async syncProjects() {
         console.log('syncProjects');
         try {
             const token = await this.context.secrets.get('playcanvas.accessToken');
-                
+
             if (token) {
                 await this.fetchUserId();
                 await this.fetchProjects();
-    
+
                 // preload projects
                 let promises = [];
                 const folders = vscode.workspace.workspaceFolders;
@@ -486,11 +497,75 @@ class CloudStorageProvider {
                 }
                 await Promise.all(promises);
             }
-    
+
         } catch (err) {
             console.error('error during activation:', err);
             throw err;
         }
+    }
+
+    async searchFiles(pattern, folder) {
+        
+        const results = [];
+        
+        try {
+            const config = vscode.workspace.getConfiguration('playcanvas');
+            const usePlaycanvasTypes = config.get('usePlaycanvasTypes');
+            const maxSearchResults = config.get('maxSearchResults');
+
+            const regex = new RegExp(pattern, 'i');            
+            const self = this;
+
+            async function searchDirectory(dir) {
+                const files = await self.readDirectory(vscode.Uri.parse(dir));
+                for (const file of files) {
+                    const filePath = path.join(dir, file[0]);
+                    
+                    if (file[1] === vscode.FileType.Directory) {
+                        await searchDirectory(filePath);
+                    } else {
+                        const content = await self.readFile(vscode.Uri.parse(filePath));
+
+                        // decode content to string
+                        const decoder = new TextDecoder();
+                        const contentString = decoder.decode(content);
+
+                        const lines = contentString.split('\n');
+                        for (let i = 0; i < lines.length; i++) {              
+                            if (regex.test(lines[i])) {
+                                results.push({
+                                    uri: vscode.Uri.parse(filePath),
+                                    line: i + (usePlaycanvasTypes ? 1 : 0),
+                                    lineText: lines[i].length > SEARCH_RESULT_MAX_LENGTH ? lines[i].substring(0, SEARCH_RESULT_MAX_LENGTH) + '...' : lines[i]
+                                });
+                            }
+
+                            if (results.length >= maxSearchResults) {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            if (folder) {
+                // search in folder
+                await searchDirectory(folder);
+            } else {
+                // global search
+                const folders = vscode.workspace.workspaceFolders;
+                if (folders) {
+                    for (const folder of folders) {
+                        if (folder.uri.scheme.startsWith('playcanvas')) {
+                            await searchDirectory(folder.uri.path);
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('error during search:', err);
+            throw err;
+        }
+        return results;
     }
 
     async getToken() {
