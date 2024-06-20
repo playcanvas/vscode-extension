@@ -5,6 +5,7 @@ const CloudStorageProvider = require('./cloudStorageProvider');
 
 let fileProvider;
 let workspaceFolderChangeListener;
+let outputChannel;
 
 async function selectProject(fileProvider) {
 	const projects = await fileProvider.fetchProjects();
@@ -48,6 +49,31 @@ function renameWorkspaceFolder(oldName, newName) {
 
     // Remove old folder and add new folder
     vscode.workspace.updateWorkspaceFolders(folder.index, 1, { uri: newUri, name: newName });
+}
+
+function displaySearchResults(results) {
+	const config = vscode.workspace.getConfiguration('playcanvas');
+	const maxSearchResults = config.get('maxSearchResults');
+
+	let count = 0;
+	for (const result of results) {
+		const filePath = result.uri.fsPath;
+		const line = result.line;
+		if (count < maxSearchResults) {
+			outputChannel.appendLine(`${filePath}:${line} - ${result.lineText}`);
+		}
+		count += 1;
+	}
+	
+	if (results.length) {
+		outputChannel.appendLine('');
+	}
+
+	if (count === maxSearchResults) {
+		outputChannel.appendLine(`Done. Displaying first ${maxSearchResults} results.`);
+	} else {
+		outputChannel.appendLine(`Done. Found ${results.length} results.`);
+	}
 }
 
 /**
@@ -99,12 +125,6 @@ async function activate(context) {
 
 				// Refresh the tree view to reflect the file rename.
 				vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
-
-				// vscode.window.visibleTextEditors.forEach(editor => {
-				// 	if (editor.document.uri.scheme === 'playcanvas') {
-				// 		fileProvider.refreshUri(editor.document.uri);			
-				// 	}
-				// });
 			}
 		} catch (error) {
 			console.error('Add Project failed:', error);
@@ -163,7 +183,84 @@ async function activate(context) {
 		}
 	}));
 
-	// await fileProvider.syncProjects();
+	context.subscriptions.push(vscode.commands.registerCommand('playcanvas.search', async () => {
+
+		// Get the currently selected text
+		const editor = vscode.window.activeTextEditor;
+		let project;
+		let selectedText = '';
+		let selectedPath = '';
+		
+		if (editor) {
+			const selection = editor.selection;
+			const document = editor.document;
+			selectedText = document.getText(selection);
+			const uri = document.uri;
+			project = fileProvider.getProject(uri.path);
+			if (project) {
+				selectedPath = `/${project.name}`;
+			}
+		}
+
+		const searchPattern = await vscode.window.showInputBox({ prompt: 'Enter search pattern', value: selectedText  });
+		if (!searchPattern) {
+		  	return;
+		}
+
+		if (searchPattern.length < 3) {
+			vscode.window.showErrorMessage('Search pattern must be at least 3 characters long.');
+			return;
+	  	}	
+
+		if (!outputChannel) {
+			outputChannel = vscode.window.createOutputChannel('PlayCanvas File Search');
+		} else {
+			outputChannel.clear();
+		}
+
+		outputChannel.show();
+
+		if (project) {
+			outputChannel.appendLine(`Searching for '${searchPattern}' in ${project.name}...`);
+		} else {
+			outputChannel.appendLine(`Searching for '${searchPattern}'...`);
+		}
+		outputChannel.appendLine('');
+	
+		const results = await fileProvider.searchFiles(searchPattern, selectedPath);
+
+		displaySearchResults(results);
+	}));
+
+	context.subscriptions.push(vscode.commands.registerCommand('playcanvas.findInFolder', async (item) => {
+		// Get the currently selected text
+		const editor = vscode.window.activeTextEditor;
+		let selectedText = '';
+		if (editor) {
+			const selection = editor.selection;
+			selectedText = editor.document.getText(selection);
+		}
+
+		const searchPattern = await vscode.window.showInputBox({ prompt: 'Enter search pattern', value: selectedText  });
+		if (!searchPattern) {
+		  	return;
+		}		
+
+		if (!outputChannel) {
+			outputChannel = vscode.window.createOutputChannel('PlayCanvas File Search');
+		} else {
+			outputChannel.clear();
+		}
+
+		outputChannel.show();
+
+		outputChannel.appendLine(`Searching for '${searchPattern}' in ${item.path}...`);
+		outputChannel.appendLine('');
+	
+		const results = await fileProvider.searchFiles(searchPattern, item.path);
+
+		displaySearchResults(results);	
+	}));
 
 	fileProvider.getToken().catch(err => {
 		vscode.window.showInformationMessage('Failed to authorize. Error: ' + err.message);

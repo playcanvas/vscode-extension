@@ -44,9 +44,16 @@ The extension integrates with PlayCanvas' version control system, allowing users
 
 The extension supports collaboration features of PlayCanvas. Multiple users can edit a PlayCanvas project simultaneously, with changes being synchronized manually between users. Users are prevented from overwriting files, edited by others by checking modification base time in update requests on the backend - if it’s different, it means that file was modified by someone else. After that, a customer can pull the latest version of the file by choosing ‘Pull latest’ from the context menu for the file. 
 
+#### Find in Files
+
+The extension supports searching in project files - use `PlayCanvas: Search` to search in the current project or `PlayCanvas:Find In Files` from the context menu to search for a pattern. The search is case-insensitive and the maximum number of results is controlled by the `maxSearchResults` setting. As soon as the standard Search Dialog is [supported by the VS Code API](https://github.com/microsoft/vscode/issues/73524), we will reimplement it. Currently, the standard Find dialog searches in opened files only, so please use the PlayCanvas one instead. The default shortcut is `Cmd+Shift+'`. Customize this shortcut in the VS Code settings (search for the `PlayCanvas: Search` command).
+
 #### Settings
 
-The extension has just 1 setting: `usePlaycanvasTypes` (to add types support). An Access Token is requested when you are adding a project.
+The extension has just 2 settings: 
+
+* `usePlaycanvasTypes` (to add types support). An Access Token is requested when you are adding a project.
+* `maxSearchResults` - the maximum number of search results to display.
 
 ## Requirements
 
@@ -55,6 +62,7 @@ The extension has just 1 setting: `usePlaycanvasTypes` (to add types support). A
 ## Extension Settings
 
 * `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to PlayCanvas types files for code suggestions. Line is not saved. Default is true.
+* `playcanvas.maxSearchResults`: Maximum number of search results to display.
 
 A PlayCanvas Access Token is requested when you add a project. Generate an access token on your [account page](https://playcanvas.com/account).
 
