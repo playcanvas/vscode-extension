@@ -22,4 +22,4 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [v0.1.9]
 
-- Hotfix for the previous release.
+- Find In Files implemented, issue with opened files during VS Code startup is fixed. 

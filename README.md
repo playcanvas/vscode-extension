@@ -46,7 +46,7 @@ The extension supports collaboration features of PlayCanvas. Multiple users can 
 
 #### Search
 
-The extension supports searching in project files - use `PlayCanvas: Search` to search in the current project or `PlayCanvas:Find In Files` from the context menu to search for a pattern. The search is case-insensitive, the maximum number of results controlled by `maxSearchResults` setting. As soon as standard Search Dialog [supported by vscode API](https://github.com/microsoft/vscode/issues/73524), we will reimplement it. Currently standard Find dialog searched in the opened files only, so please use Playcanvas' one. 
+The extension supports searching in project files - use `PlayCanvas: Search` to search in the current project or `PlayCanvas:Find In Files` from the context menu to search for a pattern. The search is case-insensitive, the maximum number of results controlled by `maxSearchResults` setting. As soon as standard Search Dialog [supported by vscode API](https://github.com/microsoft/vscode/issues/73524), we will reimplement it. Currently standard Find dialog searched in the opened files only, so please use Playcanvas' one. Default shortcut is Cmd+Shift+', change it in VS Code settings - search for PlayCanvas: Search command.
 
 #### Settings
 

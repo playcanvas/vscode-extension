@@ -203,7 +203,9 @@ async function activate(context) {
 			selectedText = document.getText(selection);
 			const uri = document.uri;
 			project = fileProvider.getProject(uri.path);
-			selectedPath = `/${project.name}`;
+			if (project) {
+				selectedPath = `/${project.name}`;
+			}
 		}
 
 		const searchPattern = await vscode.window.showInputBox({ prompt: 'Enter search pattern', value: selectedText  });

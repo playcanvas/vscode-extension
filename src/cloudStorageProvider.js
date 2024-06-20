@@ -228,6 +228,9 @@ class CloudStorageProvider {
     }
 
     getProjectByName(name) {
+        if (!name) {
+            return null;
+        }
         const projectBranch = name.split(':');
         return this.projects.find(p => p.name === projectBranch[0]);
     }
