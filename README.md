@@ -53,7 +53,7 @@ The extension supports searching in project files - use `PlayCanvas: Search` to 
 The extension has just 2 settings: 
 
 * `usePlaycanvasTypes` (to add types support). An Access Token is requested when you are adding a project.
-* `maxSearchResults` - maximum search results to display
+* `maxSearchResults` - the maximum number of search results to display.
 
 ## Requirements
 
