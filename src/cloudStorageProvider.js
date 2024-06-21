@@ -538,7 +538,7 @@ class CloudStorageProvider {
                             if (regex.test(lines[i])) {
                                 results.push({
                                     uri: vscode.Uri.parse(filePath),
-                                    line: i + (usePlaycanvasTypes ? 1 : 0),
+                                    line: i + 1,
                                     lineText: lines[i].length > SEARCH_RESULT_MAX_LENGTH ? lines[i].substring(0, SEARCH_RESULT_MAX_LENGTH) + '...' : lines[i]
                                 });
                             }
