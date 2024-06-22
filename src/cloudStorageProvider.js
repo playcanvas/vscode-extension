@@ -227,6 +227,10 @@ class CloudStorageProvider {
         return this.getProjectByName(projectName);
     }
 
+    getProjectUri(project) {
+        return vscode.Uri.parse(`playcanvas:/${project.name}`);    
+    }
+
     getProjectByName(name) {
         if (!name) {
             return null;
@@ -520,14 +524,16 @@ class CloudStorageProvider {
             const self = this;
 
             async function searchDirectory(dir) {
-                const files = await self.readDirectory(vscode.Uri.parse(dir));
+                const files = await self.readDirectory(dir);
                 for (const file of files) {
-                    const filePath = path.join(dir, file[0]);
+
+                    const newPath = dir.path + '/' + file[0];
+                    const filePath = dir.with({ path: newPath });
                     
                     if (file[1] === vscode.FileType.Directory) {
                         await searchDirectory(filePath);
                     } else {
-                        const content = await self.readFile(vscode.Uri.parse(filePath));
+                        const content = await self.readFile(filePath);
 
                         // decode content to string
                         const decoder = new TextDecoder();
@@ -537,7 +543,7 @@ class CloudStorageProvider {
                         for (let i = 0; i < lines.length; i++) {              
                             if (regex.test(lines[i])) {
                                 results.push({
-                                    uri: vscode.Uri.parse(filePath),
+                                    uri: filePath,
                                     line: i + 1,
                                     lineText: lines[i].length > SEARCH_RESULT_MAX_LENGTH ? lines[i].substring(0, SEARCH_RESULT_MAX_LENGTH) + '...' : lines[i]
                                 });
@@ -559,7 +565,7 @@ class CloudStorageProvider {
                 if (folders) {
                     for (const folder of folders) {
                         if (folder.uri.scheme.startsWith('playcanvas')) {
-                            await searchDirectory(folder.uri.path);
+                            await searchDirectory(folder.uri);
                         }
                     }
                 }

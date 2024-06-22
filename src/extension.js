@@ -60,7 +60,11 @@ function displaySearchResults(results) {
 		const filePath = result.uri.fsPath;
 		const line = result.line;
 		if (count < maxSearchResults) {
-			outputChannel.appendLine(`${filePath}:${line} - ${result.lineText}`);
+			if (process.platform === 'win32') {
+				outputChannel.appendLine(`/${filePath.substring(1)}:${line} - ${result.lineText}`);
+			} else {
+				outputChannel.appendLine(`${filePath}:${line} - ${result.lineText}`);
+			}
 		}
 		count += 1;
 	}
@@ -121,7 +125,7 @@ async function activate(context) {
 				await fileProvider.refreshProject(project);
 
 				const start = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0;
-				await vscode.workspace.updateWorkspaceFolders(start, 0, { uri: vscode.Uri.parse(`playcanvas:/${project.name}`), name: `${project.name}` });
+				await vscode.workspace.updateWorkspaceFolders(start, 0, { uri: fileProvider.getProjectUri(project), name: `${project.name}` });
 
 				// Refresh the tree view to reflect the file rename.
 				vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
@@ -189,7 +193,7 @@ async function activate(context) {
 		const editor = vscode.window.activeTextEditor;
 		let project;
 		let selectedText = '';
-		let selectedPath = '';
+		let selectedPath;
 		
 		if (editor) {
 			const selection = editor.selection;
@@ -198,7 +202,7 @@ async function activate(context) {
 			const uri = document.uri;
 			project = fileProvider.getProject(uri.path);
 			if (project) {
-				selectedPath = `/${project.name}`;
+				selectedPath = fileProvider.getProjectUri(project);
 			}
 		}
 
@@ -257,7 +261,7 @@ async function activate(context) {
 		outputChannel.appendLine(`Searching for '${searchPattern}' in ${item.path}...`);
 		outputChannel.appendLine('');
 	
-		const results = await fileProvider.searchFiles(searchPattern, item.path);
+		const results = await fileProvider.searchFiles(searchPattern, item);
 
 		displaySearchResults(results);	
 	}));
