@@ -2,13 +2,17 @@
 // Import the module and reference it with the alias vscode in your code below
 const vscode = require('vscode');
 const CloudStorageProvider = require('./cloudStorageProvider');
+const ProjectDataProvider = require('./projectDataProvider');
 
 let fileProvider;
+let projectDataProvider;
 let workspaceFolderChangeListener;
 let outputChannel;
+let statusBar;
+let currentProject;
 
 async function selectProject(fileProvider) {
-	const projects = await fileProvider.fetchProjects();
+	const projects = await fileProvider.fetchProjects(true);
 
 	// find most recently modified
 	projects.sort((a, b) => {
@@ -29,6 +33,19 @@ async function selectProject(fileProvider) {
 	const names = projects.map(project => project.name );
 	const project = await vscode.window.showQuickPick(names, { placeHolder: 'Select a project' });
 	if (project) {
+
+		const folders = vscode.workspace.workspaceFolders;
+		if (folders) {
+			for (const folder of folders) {
+				if (folder.name === project) {
+					vscode.window.showErrorMessage('Project with identical name already added. Please rename.');
+					return;
+				}
+			}
+		}
+		// cache projects
+		fileProvider.setProjects(projects);
+
 		return projects.find(p => p.name === project);
 	}
 }
@@ -57,9 +74,17 @@ function displaySearchResults(results) {
 
 	let count = 0;
 	for (const result of results) {
-		const filePath = result.uri.fsPath;
+		let filePath = result.uri.fsPath;
 		const line = result.line;
 		if (count < maxSearchResults) {
+<<<<<<< Updated upstream
+=======
+			// reverse the slashes for windows
+			filePath = filePath.replace(/\\/g, '/');
+			if (process.platform === 'win32') {
+				filePath = filePath.replace(/\\/g, '/');
+			} 
+>>>>>>> Stashed changes
 			outputChannel.appendLine(`${filePath}:${line} - ${result.lineText}`);
 		}
 		count += 1;
@@ -76,16 +101,94 @@ function displaySearchResults(results) {
 	}
 }
 
+function updateStatusBarItem(statusBarItem, uri) {
+
+	if (uri) {
+		currentProject = fileProvider.getProject(uri.path);
+		if (currentProject) {
+			const projectUri = fileProvider.getProjectUri(currentProject);
+			const data = projectDataProvider.getWorkspaceData(projectUri.path);
+			if (data) {
+				statusBarItem.text = `$(git-branch) ${currentProject.name}: ${data.branch}`;
+				statusBarItem.show();
+			}
+		}
+	} else {
+		statusBarItem.hide();
+	}
+}
+
+async function switchBranch(project) {
+	if (!project) {
+		return;
+	}
+
+	try {
+		const branches = await fileProvider.fetchBranches(project);
+
+		const prevBranch = project.branchId ? (branches.find( b => b.id === project.branchId )).name : 'main';
+		const names = branches.map(branch => branch.name );
+
+		// put current branch on the first place in the list
+		const index = names.indexOf(prevBranch);
+		if (index !== -1) {
+			names.splice(index, 1);
+			names.unshift(prevBranch);
+		}
+
+		const branch = await vscode.window.showQuickPick(names, { placeHolder: 'Select a branch to switch to' });
+
+		if (branch) {
+
+			// switch to the selected branch
+			if (prevBranch !== branch) {
+				fileProvider.switchBranch(project, branch);
+				const projectUri = fileProvider.getProjectUri(project);
+				projectDataProvider.setWorkspaceData(projectUri.path, { 
+					branch: branch
+				});
+				vscode.window.showInformationMessage(`Switched to branch ${branch}`);
+				await fileProvider.refreshProject(project);
+
+				// update status bar
+				updateStatusBarItem(statusBar, projectUri);
+
+				vscode.commands.executeCommand('workbench.action.closeAllEditors');
+				vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
+			}
+		}
+	} catch (error) {
+		console.error('Error during switching branches:', error);
+	}
+}
+
 /**
  * @param {vscode.ExtensionContext} context
  */
 async function activate(context) {
 
+	projectDataProvider = new ProjectDataProvider(context);
+	vscode.window.registerTreeDataProvider('workspaceView', projectDataProvider);
+
 	if (!fileProvider) {
-		fileProvider = new CloudStorageProvider(context);
+		fileProvider = new CloudStorageProvider(context, projectDataProvider);
 	}
-	
+
 	context.subscriptions.push(vscode.workspace.registerFileSystemProvider('playcanvas', fileProvider, { isCaseSensitive: true }));
+
+	// display the current branch in the status bar
+	statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+	statusBar.command = 'playcanvas.switchBranch';
+	context.subscriptions.push(statusBar);
+  
+	updateStatusBarItem(statusBar);
+
+    // Update status bar on editor change
+    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(editor => {
+		if (editor && editor.document) {
+        	updateStatusBarItem(statusBar, editor.document.uri);
+		}
+    }));
 
 	// Function to handle new workspace folder
 	const handleNewWorkspaceFolder = (workspaceFolder) => {
@@ -116,12 +219,23 @@ async function activate(context) {
 
 			const project = await selectProject(fileProvider);
 			if (project) {
-
 				// refresh the folder after delay on timer
 				await fileProvider.refreshProject(project);
 
+				const branches = await fileProvider.fetchBranches(project);	
+				const currentBranch = project.branchId ? (branches.find( b => b.id === project.branchId )).name : 'main';
+
 				const start = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0;
+<<<<<<< Updated upstream
 				await vscode.workspace.updateWorkspaceFolders(start, 0, { uri: vscode.Uri.parse(`playcanvas:/${project.name}`), name: `${project.name}` });
+=======
+				const projectUri = fileProvider.getProjectUri(project);
+				await vscode.workspace.updateWorkspaceFolders(start, 0, { uri: projectUri, name: `${project.name}` });
+
+				projectDataProvider.setWorkspaceData(projectUri.path, { 
+					branch: currentBranch
+				});
+>>>>>>> Stashed changes
 
 				// Refresh the tree view to reflect the file rename.
 				vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
@@ -149,38 +263,8 @@ async function activate(context) {
 	}));
 
 	context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', async (item) => {
-
-		try {
-
-			const project = await fileProvider.getProject(item.path);
-			const branches = await fileProvider.fetchBranches(project);
-
-			const prevBranch = project.branchId ? (branches.find( b => b.id === project.branchId )).name : 'main';
-			const names = branches.map(branch => branch.name );
-
-			// put current branch on the first place in the list
-			const index = names.indexOf(prevBranch);
-			if (index !== -1) {
-				names.splice(index, 1);
-				names.unshift(prevBranch);
-			}
-
-			const branch = await vscode.window.showQuickPick(names, { placeHolder: 'Select a branch to switch to' });
-
-			if (branch) {
-
-				// switch to the selected branch
-				if (prevBranch !== branch) {
-					fileProvider.switchBranch(project, branch);
-					vscode.window.showInformationMessage(`Switched to branch ${branch}`);
-					await fileProvider.refreshProject(project);
-					vscode.commands.executeCommand('workbench.action.closeAllEditors');
-					vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
-				}
-			}
-		} catch (error) {
-			console.error('Error during switching branches:', error);
-		}
+		switchBranch(item ? await fileProvider.getProject(item.path): currentProject);
+		updateStatusBarItem(statusBar);
 	}));
 
 	context.subscriptions.push(vscode.commands.registerCommand('playcanvas.search', async () => {

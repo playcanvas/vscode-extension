@@ -1,11 +1,14 @@
 const vscode = require('vscode');
 const Api = require('./api');
 const path = require('path');
+const FileDecorationProvider = require('./fileDecorationProvider');
+
+let fileDecorationProvider;
 
 const SEARCH_RESULT_MAX_LENGTH = 80;
 
 class CloudStorageProvider {
-    constructor(context) {
+    constructor(context, projectDataProvider) {
 
         this.projects = [];
         this.userId = null;
@@ -20,6 +23,7 @@ class CloudStorageProvider {
 
         this.syncProjectsCalled = false;
         this.syncProjectsPromise = null;
+        this.projectDataProvider = projectDataProvider;
     }
 
     get onDidChangeFile() {
@@ -304,7 +308,7 @@ class CloudStorageProvider {
         return this.projects;
     }
 
-    async fetchProjects() {
+    async fetchProjects(skipCaching) {
         if (!this.userId) {
             this.userId = await this.api.fetchUserId();
         }
@@ -318,14 +322,23 @@ class CloudStorageProvider {
             }
         });
 
-        this.projects = await this.api.fetchProjects(this.userId);
+        const projects = await this.api.fetchProjects(this.userId);
 
-        this.projects.forEach(p => {
+        projects.forEach(p => {
             if (branchSelection.get(p.id)) {
                 p.branchId = branchSelection.get(p.id);
             };
         });
-        return this.projects;
+
+        if (!skipCaching) {
+            this.projects = projects;
+        }
+
+        return projects;
+    }
+
+    setProjects(projects) {
+        this.projects = projects;
     }
 
     async fetchProject(id) {
@@ -341,6 +354,14 @@ class CloudStorageProvider {
         // }
         return project.branches;
     }
+
+    async initializeProject(project, branch) {
+        if (branch != 'main') {
+            await this.fetchBranches(project);
+            this.switchBranch(project, branch);
+        }
+        await this.fetchAssets(project);
+    }    
 
     switchBranch(project, branchName) {
         project.branchId = project.branches.find(b => b.name === branchName).id;
@@ -486,20 +507,19 @@ class CloudStorageProvider {
                         if (folder.uri.scheme.startsWith('playcanvas')) {
                             const project = this.getProjectByName(folder.name);
                             if (project) {
-                                let projectPromises = [];
-                                // const branch = this.getBranchByFolderName(folder.name);
-                                // if (branch != 'main') {
-                                //     projectPromises.push(this.fetchBranches(project));
-                                //     projectPromises.push(this.switchBranch(project, branch));
-                                // }
-                                projectPromises.push(this.fetchAssets(project));
-                                promises.push(this.runSequentially(projectPromises));
+                                const branch = this.projectDataProvider.getWorkspaceData(folder.uri.path).branch;
+                                promises.push(this.initializeProject(project, branch));
                             }
                         }
                     }
                 }
                 await Promise.all(promises);
             }
+
+            fileDecorationProvider = new FileDecorationProvider(this.context, this.projectDataProvider, this);
+            vscode.window.registerFileDecorationProvider(fileDecorationProvider);
+
+            this.projectDataProvider.refresh();
 
         } catch (err) {
             console.error('error during activation:', err);
