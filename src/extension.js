@@ -77,14 +77,11 @@ function displaySearchResults(results) {
 		let filePath = result.uri.fsPath;
 		const line = result.line;
 		if (count < maxSearchResults) {
-<<<<<<< Updated upstream
-=======
+
 			// reverse the slashes for windows
-			filePath = filePath.replace(/\\/g, '/');
 			if (process.platform === 'win32') {
 				filePath = filePath.replace(/\\/g, '/');
 			} 
->>>>>>> Stashed changes
 			outputChannel.appendLine(`${filePath}:${line} - ${result.lineText}`);
 		}
 		count += 1;
@@ -226,16 +223,13 @@ async function activate(context) {
 				const currentBranch = project.branchId ? (branches.find( b => b.id === project.branchId )).name : 'main';
 
 				const start = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0;
-<<<<<<< Updated upstream
-				await vscode.workspace.updateWorkspaceFolders(start, 0, { uri: vscode.Uri.parse(`playcanvas:/${project.name}`), name: `${project.name}` });
-=======
+
 				const projectUri = fileProvider.getProjectUri(project);
 				await vscode.workspace.updateWorkspaceFolders(start, 0, { uri: projectUri, name: `${project.name}` });
 
 				projectDataProvider.setWorkspaceData(projectUri.path, { 
 					branch: currentBranch
 				});
->>>>>>> Stashed changes
 
 				// Refresh the tree view to reflect the file rename.
 				vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
@@ -273,7 +267,7 @@ async function activate(context) {
 		const editor = vscode.window.activeTextEditor;
 		let project;
 		let selectedText = '';
-		let selectedPath = '';
+		let selectedPath;
 		
 		if (editor) {
 			const selection = editor.selection;
@@ -282,7 +276,7 @@ async function activate(context) {
 			const uri = document.uri;
 			project = fileProvider.getProject(uri.path);
 			if (project) {
-				selectedPath = `/${project.name}`;
+				selectedPath = fileProvider.getProjectUri(project);
 			}
 		}
 
@@ -341,7 +335,7 @@ async function activate(context) {
 		outputChannel.appendLine(`Searching for '${searchPattern}' in ${item.path}...`);
 		outputChannel.appendLine('');
 	
-		const results = await fileProvider.searchFiles(searchPattern, item.path);
+		const results = await fileProvider.searchFiles(searchPattern, item);
 
 		displaySearchResults(results);	
 	}));
