@@ -481,12 +481,6 @@ class CloudStorageProvider {
         await this.refreshProject(project);
     }
 
-    async runSequentially(tasks) {
-        for (const task of tasks) {
-            await task;
-        }
-    }
-
     async ensureSyncProjects() {
         if (!this.syncProjectsCalled) {
             this.syncProjectsCalled = true;
