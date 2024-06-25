@@ -360,7 +360,7 @@ class CloudStorageProvider {
     }
 
     async initializeProject(project, branch) {
-        if (branch != 'main') {
+        if (branch && branch != 'main') {
             await this.fetchBranches(project);
             this.switchBranch(project, branch);
         }
@@ -368,7 +368,8 @@ class CloudStorageProvider {
     }    
 
     switchBranch(project, branchName) {
-        project.branchId = project.branches.find(b => b.name === branchName).id;
+        const branch = project.branches.find(b => b.name === branchName);
+        project.branchId = branch.id;
     }
 
     getFilename(asset) {
