@@ -22,16 +22,27 @@
   "contributes": {
     "configuration": {
       "title": "PlayCanvas",
-      "languages": [{
-        "id": "typescript",
-        "extensions": [".ts", ".tsx"],
-        "aliases": ["TypeScript", "ts", "typescript"]
-      }],
-      "grammars": [{
-        "language": "typescript",
-        "scopeName": "source.ts",
-        "path": "./syntaxes/typescript.json"
-      }],      
+      "languages": [
+        {
+          "id": "typescript",
+          "extensions": [
+            ".ts",
+            ".tsx"
+          ],
+          "aliases": [
+            "TypeScript",
+            "ts",
+            "typescript"
+          ]
+        }
+      ],
+      "grammars": [
+        {
+          "language": "typescript",
+          "scopeName": "source.ts",
+          "path": "./syntaxes/typescript.json"
+        }
+      ],
       "properties": {
         "playcanvas.usePlaycanvasTypes": {
           "type": "boolean",
@@ -69,13 +80,15 @@
         "command": "playcanvas.findInFolder",
         "title": "PlayCanvas: Find In Folder",
         "when": "explorerResourceIsFolder && resourceScheme == 'playcanvas'"
-      }      
+      }
     ],
-    "keybindings": [{
+    "keybindings": [
+      {
         "command": "playcanvas.search",
         "key": "ctrl+shift+'",
-        "mac": "cmd+shift+'"        
-    }],
+        "mac": "cmd+shift+'"
+      }
+    ],
     "menus": {
       "explorer/context": [
         {
