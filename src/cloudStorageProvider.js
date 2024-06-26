@@ -232,7 +232,7 @@ class CloudStorageProvider {
     }
 
     getProjectUri(project) {
-        return vscode.Uri.parse(`playcanvas:/${project.name}`);    
+        return vscode.Uri.parse(`playcanvas:/${project.name}`);
     }
 
     getProjectByName(name) {
@@ -365,7 +365,7 @@ class CloudStorageProvider {
             this.switchBranch(project, branch);
         }
         await this.fetchAssets(project);
-    }    
+    }
 
     switchBranch(project, branchName) {
         const branch = project.branches.find(b => b.name === branchName);
@@ -527,15 +527,14 @@ class CloudStorageProvider {
     }
 
     async searchFiles(pattern, folder) {
-        
+
         const results = [];
-        
+
         try {
             const config = vscode.workspace.getConfiguration('playcanvas');
-            const usePlaycanvasTypes = config.get('usePlaycanvasTypes');
             const maxSearchResults = config.get('maxSearchResults');
 
-            const regex = new RegExp(pattern, 'i');            
+            const regex = new RegExp(pattern, 'i');
             const self = this;
 
             async function searchDirectory(dir) {
@@ -544,7 +543,7 @@ class CloudStorageProvider {
 
                     const newPath = dir.path + '/' + file[0];
                     const filePath = dir.with({ path: newPath });
-                    
+
                     if (file[1] === vscode.FileType.Directory) {
                         await searchDirectory(filePath);
                     } else {
@@ -555,7 +554,7 @@ class CloudStorageProvider {
                         const contentString = decoder.decode(content);
 
                         const lines = contentString.split('\n');
-                        for (let i = 0; i < lines.length; i++) {              
+                        for (let i = 0; i < lines.length; i++) {
                             if (regex.test(lines[i])) {
                                 results.push({
                                     uri: filePath,

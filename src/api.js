@@ -14,7 +14,7 @@ class Api {
         // clear token from plain text storage
         const config = vscode.workspace.getConfiguration("playcanvas");
         const accessToken = config.get("accessToken");
-        if (accessToken  && accessToken !== "") {
+        if (accessToken && accessToken !== "") {
             await this.context.secrets.store("playcanvas.accessToken", accessToken);
             config.update("accessToken", "", vscode.ConfigurationTarget.Global);
         }
@@ -58,9 +58,9 @@ class Api {
             }
             for (const header in headers) {
                 if (headers.hasOwnProperty(header)) { // This checks that the key is not from the object's prototype chain
-                  params.headers[header] = headers[header];
+                    params.headers[header] = headers[header];
                 }
-              }
+            }
 
             const response = await fetch(url, params);
             if (!response.ok) {
@@ -68,7 +68,7 @@ class Api {
                 throw new Error(res.error ? res.error : 'apiCall failed');
             }
             return response;
-        } catch(error) {
+        } catch (error) {
             // if message has 'Unauthorized' in the string then clear token
             if (error.message.includes('Unauthorized')) {
                 // clear token
@@ -178,7 +178,7 @@ class Api {
         const url = `${apiHost}/assets/`;
 
         const ext = name.split('.').pop();
-        const asset = (ext === 'js') ? Script.create({filename: name}) : {
+        const asset = (ext === 'js') ? Script.create({ filename: name }) : {
             contentType: 'text/plain',
             content: '',
             filename: name,
@@ -234,6 +234,7 @@ class Api {
             filename: filename,
             contentType: 'text/plain'
         });
+        
         form.append('baseModificationTime', modifiedAt);
         if (branchId) {
             form.append('branchId', branchId);

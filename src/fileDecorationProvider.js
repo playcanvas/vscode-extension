@@ -6,7 +6,7 @@ class PlayCanvasFileDecorationProvider {
     }
 
     provideFileDecoration(uri, token) {
-        
+
         const project = this.cloudStorageProvider.getProject(uri.path);
         if (project) {
             console.log('provideFileDecoration found', uri);
