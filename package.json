@@ -16,7 +16,9 @@
     "Other"
   ],
   "activationEvents": [
-    "onFileSystem:playcanvas"
+    "onFileSystem:playcanvas",
+    "onCommand:playcanvas.SwitchBranch",
+    "onCommand:playcanvas.PullLatest"
   ],
   "main": "./src/extension.js",
   "contributes": {
@@ -65,10 +67,12 @@
         "icon": "$(add)"
       },
       {
+        "enablement": "false",
         "command": "playcanvas.switchBranch",
-        "title": "PlayCanvas: Switch branch..."
-      },
+        "title": "Switch Branch"
+      },      
       {
+        "enablement": "false",
         "command": "playcanvas.pullLatest",
         "title": "PlayCanvas: Pull Latest"
       },
