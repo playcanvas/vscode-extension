@@ -2,7 +2,7 @@
   "name": "playcanvas",
   "displayName": "PlayCanvas",
   "description": "Official PlayCanvas extension from the team",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "publisher": "playcanvas",
   "icon": "images/PlayCanvasLogo.png",
   "engines": {
@@ -16,7 +16,9 @@
     "Other"
   ],
   "activationEvents": [
-    "onFileSystem:playcanvas"
+    "onFileSystem:playcanvas",
+    "onCommand:playcanvas.SwitchBranch",
+    "onCommand:playcanvas.PullLatest"
   ],
   "main": "./src/extension.js",
   "contributes": {
@@ -65,10 +67,12 @@
         "icon": "$(add)"
       },
       {
+        "enablement": "false",
         "command": "playcanvas.switchBranch",
-        "title": "PlayCanvas: Switch branch..."
-      },
+        "title": "Switch Branch"
+      },      
       {
+        "enablement": "false",
         "command": "playcanvas.pullLatest",
         "title": "PlayCanvas: Pull Latest"
       },
