@@ -99,17 +99,16 @@ function displaySearchResults(results) {
 	}
 }
 
-function updateStatusBarItem(statusBarItem, uri) {
+async function updateStatusBarItem(statusBarItem, uri) {
 
 	if (uri) {
 		currentProject = fileProvider.getProject(uri.path);
 		if (currentProject) {
 			const projectUri = fileProvider.getProjectUri(currentProject);
 			const data = projectDataProvider.getWorkspaceData(projectUri.path);
-			if (data) {
-				statusBarItem.text = `$(git-branch) ${currentProject.name}: ${data.branch}`;
-				statusBarItem.show();
-			}
+			const branchName = data ? data.branch : await fileProvider.getProjectBranchName(currentProject);
+			statusBarItem.text = `$(git-branch) ${currentProject.name}: ${branchName}`;
+			statusBarItem.show();
 		}
 	} else {
 		statusBarItem.hide();
@@ -166,7 +165,7 @@ async function switchBranch(project) {
 async function activate(context) {
 
 	projectDataProvider = new ProjectDataProvider(context);
-	vscode.window.registerTreeDataProvider('workspaceView', projectDataProvider);
+	vscode.window.registerTreeDataProvider('PlayCanvasView', projectDataProvider);
 
 	if (!fileProvider) {
 		fileProvider = new CloudStorageProvider(context, projectDataProvider);
@@ -220,9 +219,7 @@ async function activate(context) {
 				// refresh the folder after delay on timer
 				await fileProvider.refreshProject(project);
 
-				const branches = await fileProvider.fetchBranches(project);
-				const currentBranch = project.branchId ? (branches.find(b => b.id === project.branchId)).name : 'main';
-
+				const currentBranch = await fileProvider.getProjectBranchName(project);
 				const start = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0;
 
 				const projectUri = fileProvider.getProjectUri(project);
@@ -242,6 +239,20 @@ async function activate(context) {
 
 	context.subscriptions.push(vscode.commands.registerCommand('playcanvas.pullLatest', async (item) => {
 		try {
+
+			if (!item) {
+
+				// get path from the active file
+				const editor = vscode.window.activeTextEditor;
+				if (editor) {
+					item = editor.document.uri;
+				} else {
+					// show warning if no project is selected
+					vscode.window.showWarningMessage('Please use the command "PlayCanvas: Pull Latest" from the context menu.');
+					return;
+				}
+			}
+
 			await fileProvider.pullLatest(item.path);
 
 			// Refresh the tree view to reflect the file rename.
@@ -258,6 +269,18 @@ async function activate(context) {
 	}));
 
 	context.subscriptions.push(vscode.commands.registerCommand('playcanvas.switchBranch', async (item) => {
+		if (!item) {
+
+			// get path from the active file
+			const editor = vscode.window.activeTextEditor;
+			if (editor) {
+				item = editor.document.uri;
+			} else {
+				// show warning if no project is selected
+				vscode.window.showWarningMessage('Please use the command "PlayCanvas: Switch Branch" from the context menu.');
+				return;
+			}
+		}
 		switchBranch(item ? await fileProvider.getProject(item.path) : currentProject);
 		updateStatusBarItem(statusBar);
 	}));

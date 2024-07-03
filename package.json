@@ -22,6 +22,16 @@
   ],
   "main": "./src/extension.js",
   "contributes": {
+
+    "views": {
+      "explorer": [
+          {
+              "id": "PlayCanvasView",
+              "name": "PlayCanvas View"
+          }
+      ]
+    },
+
     "configuration": {
       "title": "PlayCanvas",
       "languages": [
@@ -67,12 +77,10 @@
         "icon": "$(add)"
       },
       {
-        "enablement": "false",
         "command": "playcanvas.switchBranch",
-        "title": "Switch Branch"
+        "title": "PlayCanvas: Switch Branch"
       },      
       {
-        "enablement": "false",
         "command": "playcanvas.pullLatest",
         "title": "PlayCanvas: Pull Latest"
       },

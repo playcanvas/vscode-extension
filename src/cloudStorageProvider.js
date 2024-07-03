@@ -359,6 +359,15 @@ class CloudStorageProvider {
         return project.branches;
     }
 
+    async getProjectBranchName(project) {
+        if (!project.branchId) {
+            return 'main';
+        }
+        const branches = await this.fetchBranches(project);
+        const branch = branches.find(b => b.id === project.branchId);
+        return branch ? branch.name: '';
+    }
+
     async initializeProject(project, branch) {
         if (branch && branch != 'main') {
             await this.fetchBranches(project);
