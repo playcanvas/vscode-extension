@@ -38,7 +38,7 @@ Copilot, Microsoft’s AI code generator, works fine with the extension and allo
 
 #### Version Control
 
-The extension integrates with PlayCanvas' version control system, allowing users to switch between branches of a PlayCanvas project. Switching branch is an action in a context menu for a project. After switching the branch, all operations happen in the current branch. 
+The extension integrates with PlayCanvas' version control system, allowing users to switch between branches of a PlayCanvas project. Switching branch is an action in a context menu for a project. After switching the branch, all operations happen in the current branch. Current branch is saved into workspace data, so save workspace if persistance needed. 
 
 #### Collaboration
 

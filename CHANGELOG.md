@@ -24,4 +24,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [v0.1.9]
 
 - Find In Files implemented.
-- Issue with opened files during VS Code startup is fixed. 
+- Issue with opened files during VS Code startup is fixed.
+
+## [v0.2.0]
+
+- Current branch is displayed in the status bar when source file is active. Click it to switch branches.
+- Tooltips with current branch.
+- Current branch is memorized in workspace data (if it's saved)
