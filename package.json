@@ -67,6 +67,10 @@
           "minimum": 1,
           "maximum": 100,
           "description": "Maximum number of search results to show [1..100]"
+        },
+        "playcanvas.additionalTypeScriptDefinitionFiles":{
+          "type":"array",
+          "description": "An array of file paths to TypeScript definition files (.d.ts). These reference paths will be prefixed to a source file. Paths must be absolute."
         }
       }
     },
