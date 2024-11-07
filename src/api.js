@@ -16,7 +16,7 @@ class Api {
         const accessToken = config.get("accessToken");
         if (accessToken && accessToken !== "") {
             await this.context.secrets.store("playcanvas.accessToken", accessToken);
-            config.update("accessToken", "", vscode.ConfigurationTarget.Global);
+            config.update("accessToken", undefined, vscode.ConfigurationTarget.Global);
         }
 
         // get a secret
