@@ -15,9 +15,23 @@ class CloudStorageProvider {
 
         this.context = context;
         this._onDidChangeFile = new vscode.EventEmitter();
-
+        
         const filePath = path.join(__dirname, '..', 'node_modules', 'playcanvas', 'build/playcanvas.d.ts');
-        this.typesReference = '///<reference path="' + filePath + '" />;\n';
+        this.playCanvasTypesReference = '';
+        this.additionalTypesReferences = '';
+
+        const config = vscode.workspace.getConfiguration('playcanvas');
+
+        if (config.get('usePlaycanvasTypes')){
+            this.playCanvasTypesReference = '///<reference path="' + filePath + '" />;\n';
+        }
+
+        let typeScriptDefinitionFilePaths = config.get('additionalTypeScriptDefinitionFiles');
+        if ( typeScriptDefinitionFilePaths ){
+            for (let index = 0; index < typeScriptDefinitionFilePaths.length; index++) {
+                this.additionalTypesReferences += '///<reference path="' + typeScriptDefinitionFilePaths[index] + '" />;\n';
+            }
+        }
 
         this.refresh();
 
@@ -121,8 +135,8 @@ class CloudStorageProvider {
 
         const config = vscode.workspace.getConfiguration('playcanvas');
 
-        if (config.get('usePlaycanvasTypes') && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
-            return new TextEncoder().encode(this.typesReference + asset.content);
+        if ((config.get('usePlaycanvasTypes') || config.get('additionalTypeScriptDefinitionFiles')) && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
+            return new TextEncoder().encode(this.playCanvasTypesReference + this.additionalTypesReferences + asset.content);
         }
 
         return new TextEncoder().encode(asset.content);
@@ -191,10 +205,21 @@ class CloudStorageProvider {
             // remove reference line before saving
             const config = vscode.workspace.getConfiguration('playcanvas');
 
-            if (config.get('usePlaycanvasTypes') && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
+            if ((config.get('usePlaycanvasTypes') || config.get('additionalTypeScriptDefinitionFiles')) && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
                 let strContent = new TextDecoder().decode(content);
-                if (strContent.startsWith(this.typesReference)) {
-                    strContent = strContent.substring(this.typesReference.length);
+                let contentChanged = false;
+
+                if (strContent.startsWith(this.playCanvasTypesReference)) {
+                    strContent = strContent.substring(this.playCanvasTypesReference.length);
+                    contentChanged = true;
+                }
+
+                if (strContent.startsWith(this.additionalTypesReferences)){
+                    strContent = strContent.substring(this.additionalTypesReferences.length);
+                    contentChanged = true;
+                }
+
+                if(contentChanged){
                     content = Buffer.from(strContent);
                 }
             }

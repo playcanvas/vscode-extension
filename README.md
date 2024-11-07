@@ -63,6 +63,7 @@ The extension has just 2 settings:
 
 * `playcanvas.usePlaycanvasTypes`: Automatically adds a reference to PlayCanvas types files for code suggestions. Line is not saved. Default is true.
 * `playcanvas.maxSearchResults`: Maximum number of search results to display.
+* `playcanvas.additionalTypeScriptDefinitionFiles`: Automatically adds references to user specified TypeScript definition files (.d.ts). These references are not saved. Paths must be absolute.
 
 A PlayCanvas Access Token is requested when you add a project. Generate an access token on your [account page](https://playcanvas.com/account).
 
