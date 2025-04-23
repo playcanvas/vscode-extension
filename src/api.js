@@ -63,9 +63,22 @@ class Api {
             }
 
             const response = await fetch(url, params);
+
             if (!response.ok) {
-                const res = await response.json();
-                throw new Error(res.error ? res.error : 'apiCall failed');
+                const contentType = response.headers.get('content-type');
+
+                if (contentType && contentType.includes('application/json')) {
+                    const res = await response.json();
+                    throw new Error(res.error ? res.error : 'apiCall failed');
+                } else if (contentType && contentType.includes('text/html')) {
+                    // Handle HTML response (seen with 504 errors)
+                    const text = await response.text();
+                    throw new Error(`[${response.status}] ${response.statusText}: ${text}`);
+                } else {
+                    // Fallback
+                    const text = await response.text();
+                    throw new Error(`[${response.status}] ${response.statusText}: ${text}`);
+                }
             }
             return response;
         } catch (error) {
@@ -234,7 +247,7 @@ class Api {
             filename: filename,
             contentType: 'text/plain'
         });
-        
+
         form.append('baseModificationTime', modifiedAt);
         if (branchId) {
             form.append('branchId', branchId);
