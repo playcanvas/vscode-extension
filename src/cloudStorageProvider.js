@@ -165,15 +165,18 @@ class CloudStorageProvider {
         }
     }
 
-    async isAssetSynced(uri, newContent) {
+    async checkAssetSynced(uri, newContent) {
         const project = this.getProject(uri.path);
 
         let localAsset = this.lookup(uri);
         const serverAsset = await this.api.fetchAsset(localAsset.id, project.branchId);
 
+        if (DEBUG) console.log(`playcanvas: writeFile ${uri.path}\nlocalAsset:`, localAsset);
+        if (DEBUG) console.log(`playcanvas: writeFile ${uri.path}\nserverAsset:`, serverAsset);
+
         // Important to know if modifiedAt matches, because PUT calls will fail if not matching
         // This makes the assumption that only the server updates modifiedAt
-        const isAssetSynced = serverAsset.modifiedAt !== localAsset.modifiedAt
+        const isAssetSynced = serverAsset.modifiedAt === localAsset.modifiedAt
 
         // Calculate file content hashes to determine if we need to stop
         // the user from pushing new changes.
@@ -241,7 +244,7 @@ class CloudStorageProvider {
                 isContentSynced, // Does file content match the server?
                 isAssetSynced, // Does asset metadata match the server?
                 serverAsset
-            } = await this.isAssetSynced(uri, strContent);
+            } = await this.checkAssetSynced(uri, strContent);
 
             if (!isContentSynced) {
                 if (DEBUG) console.log(`playcanvas: writeFile ${uri.path} - Latest file changes on the server have not been pulled yet.`);
