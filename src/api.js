@@ -78,7 +78,7 @@ class Api {
                 await this.context.secrets.delete('playcanvas.accessToken');
                 throw new Error('Unauthorized. Please try again.');
             } else if (error.message.includes(AssetModifiedError.message)) {
-                throw new Error('Asset was modified on server')
+                throw AssetModifiedError;
             }
 
             console.error('API call failed:', error);
