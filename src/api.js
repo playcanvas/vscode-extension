@@ -4,6 +4,9 @@ const Script = require('./script');
 const vscode = require('vscode');
 
 const apiHost = 'https://playcanvas.com/api';
+
+const AssetModifiedError = new Error('Asset was modified, please pull the latest version');
+
 class Api {
     constructor(context) {
         this.context = context;
@@ -74,7 +77,10 @@ class Api {
                 // clear token
                 await this.context.secrets.delete('playcanvas.accessToken');
                 throw new Error('Unauthorized. Please try again.');
+            } else if (error.message.includes(AssetModifiedError.message)) {
+                throw new Error('Asset was modified on server')
             }
+
             console.error('API call failed:', error);
             throw error;
         }
@@ -113,7 +119,7 @@ class Api {
     }
 
     async fetchAsset(assetId, branchId) {
-        const url = `${apiHost}/assets/${assetId}` + (branchId ? `&branchId=${branchId}` : '');
+        const url = `${apiHost}/assets/${assetId}` + (branchId ? `?branchId=${branchId}` : '');
         const response = await this.apiCall(url);
         const res = await response.json();
         return res;
@@ -234,22 +240,37 @@ class Api {
             filename: filename,
             contentType: 'text/plain'
         });
-        
+
         form.append('baseModificationTime', modifiedAt);
         if (branchId) {
             form.append('branchId', branchId);
         }
 
-        const response = await this.apiCall(url, 'PUT', form);
-        if (!response.ok) {
-            const res = await response.json();
-            console.error('file upload failed:', res.error);
-            throw new Error(res.error);
-        }
+        try {
+            const response = await this.apiCall(url, 'PUT', form);
 
-        const asset = await response.json();
-        return asset;
+            if (!response.ok) {
+                const res = await response.json();
+
+                if (res.message && res.message.includes(AssetModifiedError.message)) {
+                    throw AssetModifiedError;
+                }
+
+                throw new Error(res.error);
+            }
+
+            const asset = await response.json();
+            return asset;
+        } catch (error) {
+            switch (error) {
+                case AssetModifiedError:
+                    throw AssetModifiedError;
+                default:
+                    console.error('file upload failed:', error);
+                    throw error;
+            }
+        }
     }
 }
 
-module.exports = Api;
+module.exports = { Api, AssetModifiedError };
