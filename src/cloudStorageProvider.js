@@ -253,7 +253,7 @@ class CloudStorageProvider {
 
             // We must handle a difference in metadata because the PUT will fail
             if (!isAssetSynced) {
-                if (DEBUG) console.log(`playcanvas: writeFile ${uri.path} - asset modifed on server, but file content is synced. Pulling new metadata from server...`);
+                if (DEBUG) console.log(`playcanvas: writeFile ${uri.path} - asset modified on server, but file content is synced. Pulling new metadata from server...`);
 
                 asset = {
                     ...asset,
