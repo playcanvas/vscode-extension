@@ -5,6 +5,7 @@ const FileDecorationProvider = require('./fileDecorationProvider');
 
 let fileDecorationProvider;
 
+const DEBUG = process.env.VSCODE_DEBUG_MODE === 'true';
 const SEARCH_RESULT_MAX_LENGTH = 80;
 
 class CloudStorageProvider {
@@ -27,7 +28,7 @@ class CloudStorageProvider {
     }
 
     get onDidChangeFile() {
-        console.log('playcanvas: onDidChangeFile');
+        if (DEBUG) console.log('playcanvas: onDidChangeFile');
         return this._onDidChangeFile.event;
     }
 
@@ -36,7 +37,7 @@ class CloudStorageProvider {
     }
 
     async stat(uri) {
-        console.log(`playcanvas: stat ${uri.path}`);
+        if (DEBUG) console.log(`playcanvas: stat ${uri.path}`);
 
         if (uri.path.includes('.vscode') || uri.path.includes('.git') ||
             uri.path.includes('.devcontainer') || uri.path.includes('node_modules') ||
@@ -48,14 +49,14 @@ class CloudStorageProvider {
         if (!project) {
             // if projects are not synced yet
             if (this.projects.length === 0) {
-                console.log(`playcanvas: stat ${uri.path} no projects`);
+                if (DEBUG) console.log(`playcanvas: stat ${uri.path} no projects`);
                 await this.ensureSyncProjects();
                 project = this.getProject(uri.path);
             }
         }
 
         if (!project) {
-            console.log(`playcanvas: stat ${uri.path} not found`);
+            if (DEBUG) console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
         }
 
@@ -67,7 +68,7 @@ class CloudStorageProvider {
 
         let asset = this.lookup(uri);
         if (!asset) {
-            console.log(`playcanvas: stat ${uri.path} not found`);
+            if (DEBUG) console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
         }
 
@@ -82,7 +83,7 @@ class CloudStorageProvider {
     }
 
     async readFile(uri) {
-        console.log(`playcanvas: readFile ${uri.path}`);
+        if (DEBUG) console.log(`playcanvas: readFile ${uri.path}`);
 
         if (uri.path.includes('.vscode') || uri.path.includes('.git') || uri.path.includes('.devcontainer')) {
             throw vscode.FileSystemError.FileNotFound();
@@ -92,7 +93,7 @@ class CloudStorageProvider {
         if (!project) {
             // if projects are not synced yet
             if (this.projects.length === 0) {
-                console.log(`playcanvas: stat ${uri.path} no projects`);
+                if (DEBUG) console.log(`playcanvas: stat ${uri.path} no projects`);
                 await this.ensureSyncProjects();
                 project = this.getProject(uri.path);
             }
@@ -164,7 +165,7 @@ class CloudStorageProvider {
     }
 
     async writeFile(uri, content, options) {
-        console.log(`playcanvas: writeFile ${uri.path}`);
+        if (DEBUG) console.log(`playcanvas: writeFile ${uri.path}`);
 
         const project = this.getProject(uri.path);
         const asset = this.lookup(uri);
