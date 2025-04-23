@@ -1,7 +1,8 @@
 const vscode = require('vscode');
-const Api = require('./api');
+const { Api, AssetModifiedError } = require('./api');
 const path = require('path');
 const FileDecorationProvider = require('./fileDecorationProvider');
+const crypto = require('crypto');
 
 let fileDecorationProvider;
 
@@ -164,13 +165,47 @@ class CloudStorageProvider {
         }
     }
 
+    async isAssetSynced(uri, newContent) {
+        const project = this.getProject(uri.path);
+
+        let localAsset = this.lookup(uri);
+        const serverAsset = await this.api.fetchAsset(localAsset.id, project.branchId);
+
+        // Important to know if modifiedAt matches, because PUT calls will fail if not matching
+        // This makes the assumption that only the server updates modifiedAt
+        const isAssetSynced = serverAsset.modifiedAt !== localAsset.modifiedAt
+
+        // Calculate file content hashes to determine if we need to stop
+        // the user from pushing new changes.
+        const remoteHash = serverAsset.file.hash;
+        // This makes the assumption that only the server updates asset.file.hash
+        const previousSyncHash = localAsset.file.hash;
+        // Hash of our "new" file changes
+        const localHash = crypto.createHash('md5').update(newContent).digest('hex');
+        /* File is "synced" if one of these is true:
+            A) Our last sync matches remote
+            B) Our current file matches the remote file
+        */
+        const isContentSynced = remoteHash === previousSyncHash || localHash === remoteHash;
+
+        if (DEBUG) console.log(`playcanvas: writeFile ${uri.path}\nremoteHash: ${remoteHash}\npreviousSyncHash: ${previousSyncHash}\nlocalHash: ${localHash}`);
+        if (DEBUG) console.log(`playcanvas: writeFile ${uri.path}\nisContentSynced: ${isContentSynced}\nisAssetSynced: ${isAssetSynced}`);
+
+        return {
+            isAssetSynced,
+            isContentSynced,
+            serverAsset,
+            localAsset,
+        }
+    }
+
     async writeFile(uri, content, options) {
         if (DEBUG) console.log(`playcanvas: writeFile ${uri.path}`);
 
         const project = this.getProject(uri.path);
-        const asset = this.lookup(uri);
-        if (!asset) {
+        let asset = this.lookup(uri);
 
+        if (!asset) {
             if (!options.create) {
                 throw vscode.FileSystemError.FileNotFound();
             }
@@ -189,20 +224,62 @@ class CloudStorageProvider {
                 vscode.window.showErrorMessage(`Failed to create a file: ${error.message}`);
             }
         } else {
-            // remove reference line before saving
+            let strContent = new TextDecoder().decode(content);
+
+            // Remove reference line before saving
             const config = vscode.workspace.getConfiguration('playcanvas');
 
             if (config.get('usePlaycanvasTypes') && (asset.file.filename.endsWith('.js') || asset.file.filename.endsWith('.mjs'))) {
-                let strContent = new TextDecoder().decode(content);
                 if (strContent.startsWith(this.typesReference)) {
                     strContent = strContent.substring(this.typesReference.length);
                     content = Buffer.from(strContent);
                 }
             }
 
-            const updatedAsset = await this.api.uploadFile(asset.id, asset.file.filename, asset.modifiedAt, project.branchId, content);
-            asset.modifiedAt = updatedAsset.modifiedAt;
-            asset.content = new TextDecoder().decode(content);
+            // Check if the file asset is synced with the server
+            const {
+                isContentSynced, // Does file content match the server?
+                isAssetSynced, // Does asset metadata match the server?
+                serverAsset
+            } = await this.isAssetSynced(uri, strContent);
+
+            if (!isContentSynced) {
+                if (DEBUG) console.log(`playcanvas: writeFile ${uri.path} - Latest file changes on the server have not been pulled yet.`);
+                throw AssetModifiedError
+            }
+
+            // We must handle a difference in metadata because the PUT will fail
+            if (!isAssetSynced) {
+                if (DEBUG) console.log(`playcanvas: writeFile ${uri.path} - asset modifed on server, but file content is synced. Pulling new metadata from server...`);
+
+                asset = {
+                    ...asset,
+                    // Overwrite local metadata with server metadata
+                    // Note: This method only merges the top-level properties
+                    ...serverAsset,
+                    // Add new file contents (since asset.content is from the previous update)
+                    content: strContent,
+                }
+            }
+
+            // Update server asset
+            const updatedAsset = await this.api.uploadFile(asset.id, asset.file.filename, asset.modifiedAt, project.branchId, strContent);
+            if (DEBUG) console.log('playcanvas: writeFile updatedAsset:', updatedAsset);
+
+            // Pull in new metadata from the server, and add the new file contents
+            asset = {
+                ...asset,
+                // Overwrite local metadata with server metadata
+                // Note: This method only merges the top-level properties
+                ...updatedAsset,
+                // Add new file contents (since asset.content is from the previous update)
+                content: strContent,
+            }
+
+            // Update local state
+            project.files.set(this.getFilename(asset), asset);
+
+            if (DEBUG) console.log('playcanvas: local asset updated to:', this.lookup(uri))
         }
     }
 
@@ -366,7 +443,7 @@ class CloudStorageProvider {
         }
         const branches = await this.fetchBranches(project);
         const branch = branches.find(b => b.id === project.branchId);
-        return branch ? branch.name: '';
+        return branch ? branch.name : '';
     }
 
     async initializeProject(project, branch) {
