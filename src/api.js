@@ -70,12 +70,8 @@ class Api {
                 if (contentType && contentType.includes('application/json')) {
                     const res = await response.json();
                     throw new Error(res.error ? res.error : 'apiCall failed');
-                } else if (contentType && contentType.includes('text/html')) {
-                    // Handle HTML response (seen with 504 errors)
-                    const text = await response.text();
-                    throw new Error(`[${response.status}] ${response.statusText}: ${text}`);
                 } else {
-                    // Fallback
+                    // Fallback (HTML, and other)
                     const text = await response.text();
                     throw new Error(`[${response.status}] ${response.statusText}: ${text}`);
                 }
