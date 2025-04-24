@@ -30,10 +30,19 @@ class Api {
                 placeHolder: "Input your access token here.",
                 ignoreFocusOut: true,
             });
+
             if (!token) {
                 throw new Error('Unauthorized');
             }
+
             await this.context.secrets.store("playcanvas.accessToken", token);
+
+            // Test access token
+            try {
+                await this.fetchUserId()
+            } catch (error) {
+                throw new Error('Invalid access token. Please check your token and try again.');
+            }
         }
         return token;
     }
