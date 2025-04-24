@@ -75,9 +75,18 @@ class Api {
             }
 
             const response = await fetch(url, params);
+
             if (!response.ok) {
-                const res = await response.json();
-                throw new Error(res.error ? res.error : 'apiCall failed');
+                const contentType = response.headers.get('content-type');
+
+                if (contentType && contentType.includes('application/json')) {
+                    const res = await response.json();
+                    throw new Error(res.error ? res.error : 'apiCall failed');
+                } else {
+                    // Fallback (HTML, and other)
+                    const text = await response.text();
+                    throw new Error(`[${response.status}] ${response.statusText}: ${text}`);
+                }
             }
             return response;
         } catch (error) {
