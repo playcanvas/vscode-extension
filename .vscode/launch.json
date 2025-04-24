@@ -9,10 +9,13 @@
 			"name": "Run Extension",
 			"type": "extensionHost",
 			"request": "launch",
-			"cwd":"${workspaceFolder}",
+			"cwd": "${workspaceFolder}",
 			"args": [
 				"--extensionDevelopmentPath=${workspaceFolder}"
-			]
+			],
+			"env": {
+				"VSCODE_DEBUG_MODE": "true"
+			}
 		},
 		{
 			"name": "Extension Tests",
@@ -21,7 +24,10 @@
 			"args": [
 				"--extensionDevelopmentPath=${workspaceFolder}",
 				"--extensionTestsPath=${workspaceFolder}/test/suite/index"
-			]
+			],
+			"env": {
+				"VSCODE_DEBUG_MODE": "true"
+			}
 		}
 	]
 }
