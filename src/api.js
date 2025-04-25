@@ -8,6 +8,35 @@ const apiHost = 'https://playcanvas.com/api';
 const AssetModifiedError = new Error('Asset was modified, please pull the latest version');
 
 /**
+ * @typedef {Error} Project
+ * @property {string} access_level - The access level of the user on the project.
+ * @property {string} created - The creation date of the project.
+ * @property {string} description - The project description.
+ * @property {number} fork_count - The number of times the project has been forked.
+ * @property {number} id - The project ID.
+ * @property {boolean} locked - Whether the project is locked.
+ * @property {string} modified - The last modification date of the project.
+ * @property {string} name - The project name.
+ * @property {string|null} new_owner - The new owner of the project, if applicable.
+ * @property {string} owner - The username of the project owner.
+ * @property {number} owner_id - The user ID of the project owner.
+ * @property {{admin: Array<string>, write: Array<string>, read: Array<string>}} permissions - The permissions for the project.
+ * @property {number} plays - The number of times the project has been played.
+ * @property {number} primary_app - The primary application ID for the project.
+ * @property {string} primary_app_url - The URL of the primary application.
+ * @property {boolean} private - Whether the project is private.
+ * @property {{total: number, code: number, apps: number, assets: number, checkpoints: number}} size - The size of the project in bytes.
+ * @property {number} starred - The number of stars the project has received.
+ * @property {{s: string, m: string, l: string, xl: string}} thumbnails - The URLs of the project thumbnails in different sizes.
+ * @property {number} views - The number of views the project has received.
+ */
+
+/**
+ * TODO: Define Branch type.
+ * Right now, the list branches endpoint is returning undefined, not sure why.
+ */
+
+/**
  * @typedef {Object} Asset
  * @property {number} id
  * @property {string} modifiedAt
@@ -22,6 +51,14 @@ const AssetModifiedError = new Error('Asset was modified, please pull the latest
  * @property {boolean} preload
  * @property {{hash: string, filename: string, size: number, url: string}} file
  * @property {number} parent
+ */
+
+/**
+ * @typedef {Object} ApiErrorResponse
+ * @property {string} message
+ * @property {number} code
+ * @property {string} [error]
+ * @property {string} [details]
  */
 
 class Api {
@@ -78,7 +115,7 @@ class Api {
      * @param {string} [method='GET'] - HTTP method.
      * @param {any} [body=null] - Request body.
      * @param {Object} [headers={}] - Additional headers.
-     * @returns {Promise<Response>} The fetch response object.
+     * @returns {Promise<fetch.Response>} The fetch response object.
      * @throws {Error} On HTTP or network error.
      */
     async apiCall(url, method = 'GET', body = null, headers = {}) {
@@ -107,6 +144,7 @@ class Api {
                 }
             }
 
+            /** @type {fetch.Response} */
             const response = await fetch(url, params);
 
             if (!response.ok) {
@@ -121,6 +159,7 @@ class Api {
                     throw new Error(`[${response.status}] ${response.statusText}: ${text}`);
                 }
             }
+
             return response;
         } catch (error) {
             // if message has 'Unauthorized' in the string then clear token
@@ -143,19 +182,32 @@ class Api {
      */
     async fetchUserId() {
         const response = await this.apiCall(`${apiHost}/id`);
-        const res = await response.json();
-        return res.id;
+
+        /** @type {Asset} */
+        const asset = await response.json();
+        if (asset && typeof asset.id === 'number') {
+            return asset.id;
+        }
+
+        throw new Error('Invalid response from /id endpoint');
     }
 
     /**
      * Fetches all projects for a given user.
      * @param {number} userId - The PlayCanvas user ID.
-     * @returns {Promise<Array>} List of projects.
+     * @returns {Promise<Array<Project>>} List of projects.
      */
     async fetchProjects(userId) {
         const response = await this.apiCall(`${apiHost}/users/${userId}/projects`);
-        const res = await response.json();
-        return res.result;
+
+        /** @type {{ result: Array<Project> }} */
+        const asset = await response.json();
+        if (asset && Array.isArray(asset.result)) {
+            console.log('Fetched projects:', asset.result);
+            return asset.result;
+        }
+
+        throw new Error('Invalid response from /users/{userId}/projects endpoint');
     }
 
     /**
@@ -165,19 +217,33 @@ class Api {
      */
     async fetchProject(id) {
         const response = await this.apiCall(`${apiHost}/projects/${id}`);
+
+        /** @type {Project} */
         const res = await response.json();
-        return res;
+        if (res && typeof res === 'object') {
+            console.log('Fetched project:', res);
+            return res;
+        }
+
+        throw new Error('Invalid response from /projects/{id} endpoint');
     }
 
     /**
      * Fetches all branches for a given project.
      * @param {number} projectId - The project ID.
-     * @returns {Promise<Array>} List of branches.
+     * @returns {Promise<Array<Object | undefined>>} List of branches.
      */
     async fetchBranches(projectId) {
         const response = await this.apiCall(`${apiHost}/projects/${projectId}/branches`);
+
+        /** @type {{ result: Array<Object | undefined> }} */
         const res = await response.json();
-        return res.result;
+        if (res && Array.isArray(res.result)) {
+            console.log('Fetched branches:', res.result);
+            return res.result;
+        }
+
+        throw new Error('Invalid response from /projects/{projectId}/branches endpoint');
     }
 
     /**
@@ -189,8 +255,14 @@ class Api {
     async fetchAssets(projectId, branchId) {
         const url = `${apiHost}/projects/${projectId}/assets?view=extension&limit=10000` + (branchId ? `&branchId=${branchId}` : '');
         const response = await this.apiCall(url);
+
+        /** @type {{ result: Asset[] }} */
         const res = await response.json();
-        return res.result;
+        if (res && Array.isArray(res.result)) {
+            return res.result;
+        }
+
+        throw new Error('Invalid response from /projects/{projectId}/assets endpoint');
     }
 
     /**
@@ -202,8 +274,14 @@ class Api {
     async fetchAsset(assetId, branchId) {
         const url = `${apiHost}/assets/${assetId}` + (branchId ? `?branchId=${branchId}` : '');
         const response = await this.apiCall(url);
-        const res = await response.json();
-        return res;
+
+        /** @type {Asset} */
+        const asset = await response.json();
+        if (asset && typeof asset.id === 'number') {
+            return asset;
+        }
+
+        throw new Error('Invalid response from /assets/{assetId} endpoint');
     }
 
     /**
@@ -216,6 +294,7 @@ class Api {
     async fetchFileContent(id, fileName, branchId) {
         const url = `${apiHost}/assets/${id}/file/${fileName}` + (branchId ? `?branchId=${branchId}` : '');
         const response = await this.apiCall(url);
+        /** @type {string} */
         const res = await response.text();
         return res;
     }
@@ -239,11 +318,14 @@ class Api {
 
         const response = await this.apiCall(url, 'PUT', form);
         if (!response.ok) {
+            /** @type {ApiErrorResponse} */
             const res = await response.json();
             throw new Error(res.error);
         }
 
+        /** @type {Asset} */
         const asset = await response.json();
+
         return asset;
     }
 
@@ -278,11 +360,14 @@ class Api {
             'Content-Type': "application/json"
         });
         if (!response.ok) {
+            /** @type {ApiErrorResponse} */
             const res = await response.json();
             throw new Error(res.error);
         }
 
+        /** @type {Asset} */
         const asset = await response.json();
+
         return asset;
     }
 
@@ -332,6 +417,7 @@ class Api {
 
         const response = await this.apiCall(url, 'POST', form);
         if (!response.ok) {
+            /** @type {ApiErrorResponse} */
             const res = await response.json();
             console.error('file upload failed:', res.error);
             throw new Error(res.error);
@@ -381,6 +467,7 @@ class Api {
             const response = await this.apiCall(url, 'PUT', form);
 
             if (!response.ok) {
+                /** @type {ApiErrorResponse} */
                 const res = await response.json();
 
                 if (res.message && res.message.includes(AssetModifiedError.message)) {
@@ -390,7 +477,9 @@ class Api {
                 throw new Error(res.error);
             }
 
+            /** @type {Asset} */
             const asset = await response.json();
+
             return asset;
         } catch (error) {
             switch (error) {
