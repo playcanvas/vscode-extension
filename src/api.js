@@ -38,27 +38,27 @@ const AssetModifiedError = new Error('Asset was modified, please pull the latest
 
 /**
  * @typedef {Object} Asset
- * @property {number} id
- * @property {string} modifiedAt
- * @property {string} createdAt
- * @property {"ready"|"processing"|"error"} state
- * @property {string} name
- * @property {string} type
- * @property {{type: string, id: number}} scope
- * @property {boolean} source
- * @property {boolean} sourceId
- * @property {string[]} tags
- * @property {boolean} preload
- * @property {{hash: string, filename: string, size: number, url: string}} file
- * @property {number} parent
+ * @property {number} id - The asset ID.
+ * @property {string} modifiedAt - The last modification date of the asset.
+ * @property {string} createdAt - The creation date of the asset.
+ * @property {"ready"|"processing"|"error"} state - The current server processing state of the asset.
+ * @property {string} name - The name of the asset.
+ * @property {string} type - The type of the asset (e.g., "model", "texture", "script").
+ * @property {{type: string, id: number}} scope - The scope of the asset, including its type and ID.
+ * @property {boolean} source - Whether the asset is a source file.
+ * @property {boolean} sourceId - Whether the asset has a source ID.
+ * @property {string[]} tags - The tags associated with the asset.
+ * @property {boolean} preload - Whether the asset is preloaded.
+ * @property {{hash: string, filename: string, size: number, url: string}} file - The file details of the asset.
+ * @property {number} parent - The ID of the parent asset, if applicable.
  */
 
 /**
  * @typedef {Object} ApiErrorResponse
- * @property {string} message
- * @property {number} code
- * @property {string} [error]
- * @property {string} [details]
+ * @property {string} message - A human-readable error message.
+ * @property {number} code - The HTTP status code of the error.
+ * @property {string} [error] - A specific error code, if applicable.
+ * @property {string} [details] - Additional error details, if available.
  */
 
 class Api {
