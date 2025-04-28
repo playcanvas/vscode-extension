@@ -280,7 +280,7 @@ class CloudStorageProvider {
             }
 
             // Update local state
-            project.files.set(this.getFilename(asset), asset);
+            this.updateLocalAsset(uri, asset);
 
             if (DEBUG) console.log('playcanvas: local asset updated to:', this.lookup(uri))
         }
@@ -540,6 +540,34 @@ class CloudStorageProvider {
             files = folder.files;
         }
         return files.get(parts[parts.length - 1]);
+    }
+
+    /**
+     * Updates an asset in the local project file structure. Only updates the local state.
+     * 
+     * @param {vscode.Uri} uri - The URI of the asset to update
+     * @param {Object} asset - The updated asset data
+     * @returns {Object|null} - The updated asset or null if project or parent folder wasn't found
+     */
+    updateLocalAsset(uri, asset) {
+        const parts = uri.path.split('/');
+        const project = this.getProjectByName(parts[1]);
+        if (!project || parts.length === 0) {
+            return null;
+        }
+
+        // Either find the parent asset, or the project root
+        let files = project.files;
+        for (let i = 2; i < parts.length - 1; ++i) {
+            const folder = files.get(parts[i]);
+            if (!folder) {
+                return null;
+            }
+            files = folder.files;
+        }
+
+        // Update the asset in the local state
+        files.set(parts[parts.length - 1], asset);
     }
 
     refresh(clearProjects = true) {
