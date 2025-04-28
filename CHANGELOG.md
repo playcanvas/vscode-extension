@@ -35,3 +35,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [v0.2.1]
 
 - The issue with authorization is fixed
+
+## [v0.2.2]
+
+- If the user provides a bad token, show an error message [PR](https://github.com/playcanvas/vscode-extension/pull/29) by [Christopher-Hayes](https://github.com/Christopher-Hayes)
+- Improve File Asset Syncing [PR](https://github.com/playcanvas/vscode-extension/pull/26)
