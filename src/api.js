@@ -1,7 +1,9 @@
-const fetch = require('node-fetch');
+// @ts-nocheck
 const FormData = require('form-data');
-const Script = require('./script');
+const fetch = require('node-fetch');
 const vscode = require('vscode');
+
+const Script = require('./script.js');
 
 const apiHost = 'https://playcanvas.com/api';
 
@@ -15,31 +17,31 @@ class Api {
     async getToken() {
 
         // clear token from plain text storage
-        const config = vscode.workspace.getConfiguration("playcanvas");
-        const accessToken = config.get("accessToken");
-        if (accessToken && accessToken !== "") {
-            await this.context.secrets.store("playcanvas.accessToken", accessToken);
-            config.update("accessToken", undefined, vscode.ConfigurationTarget.Global);
+        const config = vscode.workspace.getConfiguration('playcanvas');
+        const accessToken = config.get('accessToken');
+        if (accessToken && accessToken !== '') {
+            await this.context.secrets.store('playcanvas.accessToken', accessToken);
+            config.update('accessToken', undefined, vscode.ConfigurationTarget.Global);
         }
 
         // get a secret
-        let token = await this.context.secrets.get("playcanvas.accessToken");
+        let token = await this.context.secrets.get('playcanvas.accessToken');
         if (!token) {
             token = await vscode.window.showInputBox({
-                prompt: "Please set your PlayCanvas Access Token. Generate an access token on your [account page](https://playcanvas.com/account)",
-                placeHolder: "Input your access token here.",
-                ignoreFocusOut: true,
+                prompt: 'Please set your PlayCanvas Access Token. Generate an access token on your [account page](https://playcanvas.com/account)',
+                placeHolder: 'Input your access token here.',
+                ignoreFocusOut: true
             });
 
             if (!token) {
                 throw new Error('Unauthorized');
             }
 
-            await this.context.secrets.store("playcanvas.accessToken", token);
+            await this.context.secrets.store('playcanvas.accessToken', token);
 
             // Test access token
             try {
-                await this.fetchUserId()
+                await this.fetchUserId();
             } catch (error) {
                 throw new Error('Invalid access token. Please check your token and try again.');
             }
@@ -66,7 +68,7 @@ class Api {
             if (body) {
                 params.body = body;
             } else {
-                params.headers['Content-Type'] = "application/json";
+                params.headers['Content-Type'] = 'application/json';
             }
             for (const header in headers) {
                 if (headers.hasOwnProperty(header)) { // This checks that the key is not from the object's prototype chain
@@ -130,21 +132,21 @@ class Api {
     }
 
     async fetchAssets(projectId, branchId) {
-        const url = `${apiHost}/projects/${projectId}/assets?view=extension&limit=10000` + (branchId ? `&branchId=${branchId}` : '');
+        const url = `${apiHost}/projects/${projectId}/assets?view=extension&limit=10000${branchId ? `&branchId=${branchId}` : ''}`;
         const response = await this.apiCall(url);
         const res = await response.json();
         return res.result;
     }
 
     async fetchAsset(assetId, branchId) {
-        const url = `${apiHost}/assets/${assetId}` + (branchId ? `?branchId=${branchId}` : '');
+        const url = `${apiHost}/assets/${assetId}${branchId ? `?branchId=${branchId}` : ''}`;
         const response = await this.apiCall(url);
         const res = await response.json();
         return res;
     }
 
     async fetchFileContent(id, fileName, branchId) {
-        const url = `${apiHost}/assets/${id}/file/${fileName}` + (branchId ? `?branchId=${branchId}` : '');
+        const url = `${apiHost}/assets/${id}/file/${fileName}${branchId ? `?branchId=${branchId}` : ''}`;
         const response = await this.apiCall(url);
         const res = await response.text();
         return res;
@@ -152,7 +154,7 @@ class Api {
 
     async renameAsset(id, folderId, newName, branchId) {
         const url = `${apiHost}/assets/${id}`;
-        let form = new FormData();
+        const form = new FormData();
         form.append('name', newName);
         form.append('parent', folderId ? folderId : 'null');
         if (branchId) {
@@ -187,7 +189,7 @@ class Api {
         }
 
         const response = await this.apiCall(url, 'POST', JSON.stringify(body), {
-            'Content-Type': "application/json"
+            'Content-Type': 'application/json'
         });
         if (!response.ok) {
             const res = await response.json();
@@ -244,7 +246,7 @@ class Api {
     }
 
     async deleteAsset(id, branchId) {
-        const url = `${apiHost}/assets/${id}` + (branchId ? `?branchId=${branchId}` : '');
+        const url = `${apiHost}/assets/${id}${branchId ? `?branchId=${branchId}` : ''}`;
         const response = await this.apiCall(url, 'DELETE');
         const res = await response.text();
         return res;

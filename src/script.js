@@ -1,13 +1,12 @@
-const filenameValid = /^([^0-9.#<>$+%!`&='{}@\\/:*?"<>|\n])([^#<>$+%!`&='{}@\\/:*?"<>|\n])*$/i;
+// @ts-nocheck
+// eslint-disable-next-line regexp/no-unused-capturing-group
+const filenameValid = /^([^0-9.#<>$+%!`&='{}@\\/:*?"|\n])([^#<>$+%!`&='{}@\\/:*?"|\n])*$/;
 const LOAD_SCRIPT_AS_ASSET = 0;
 
 class Script {
-    constructor() {
-    }
-
     static create(args) {
         const filename = args.filename || 'script.js';
-    
+
         const name = filename.slice(0, -3);
         let className = args.className || '';
         let scriptName = args.scriptName || '';
@@ -16,13 +15,14 @@ class Script {
             // tokenize filename
             const tokens = [];
             const string = name.replace(/([^A-Z])([A-Z][^A-Z])/g, '$1 $2').replace(/([A-Z0-9]{2,})/g, ' $1');
-            const parts = string.split(/(\s|\-|_|\.)/g);
+            const parts = string.split(/([\s\-_.])/g);
 
             // filter valid tokens
             for (let i = 0; i < parts.length; i++) {
                 parts[i] = parts[i].toLowerCase().trim();
-                if (parts[i] && parts[i] !== '-' && parts[i] !== '_' && parts[i] !== '.')
+                if (parts[i] && parts[i] !== '-' && parts[i] !== '_' && parts[i] !== '.') {
                     tokens.push(parts[i]);
+                }
             }
 
             if (tokens.length) {
@@ -40,16 +40,19 @@ class Script {
                     }
                 }
             } else {
-                if (!className)
+                if (!className) {
                     className = 'Script';
+                }
 
-                if (!scriptName)
+                if (!scriptName) {
                     scriptName = 'script';
+                }
             }
         }
 
-        if (!filenameValid.test(className))
+        if (!filenameValid.test(className)) {
             className = 'Script';
+        }
 
         const content = `
 var ${className} = pc.createScript('${scriptName}');
@@ -79,7 +82,7 @@ ${className}.prototype.update = function(dt) {
             contentType: 'text/javascript',
             preload: true
         };
-    };
+    }
 }
 
 module.exports = Script;

@@ -1,4 +1,14 @@
+// @ts-nocheck
 const vscode = require('vscode');
+
+class WorkspaceItem extends vscode.TreeItem {
+    constructor(folder, data) {
+        super(folder.name, vscode.TreeItemCollapsibleState.None);
+        this.folder = folder;
+        this.description = data;
+        this.contextValue = 'workspaceItem';
+    }
+}
 
 class ProjectDataProvider {
     constructor(context) {
@@ -38,13 +48,4 @@ class ProjectDataProvider {
     }
 }
 
-class WorkspaceItem extends vscode.TreeItem {
-    constructor(folder, data) {
-        super(folder.name, vscode.TreeItemCollapsibleState.None);
-        this.folder = folder;
-        this.description = data;
-        this.contextValue = 'workspaceItem';
-    }
-}
-
-module.exports = ProjectDataProvider;
+export default ProjectDataProvider;

@@ -9,13 +9,14 @@
 			"name": "Run Extension",
 			"type": "extensionHost",
 			"request": "launch",
-			"cwd": "${workspaceFolder}",
+			"cwd": "${workspaceFolder}/dist",
 			"args": [
-				"--extensionDevelopmentPath=${workspaceFolder}"
+				"--extensionDevelopmentPath=${workspaceFolder}/dist"
 			],
 			"env": {
 				"VSCODE_DEBUG_MODE": "true"
-			}
+			},
+			"preLaunchTask": "npm: watch"
 		},
 		{
 			"name": "Extension Tests",

@@ -1,8 +1,12 @@
-const vscode = require('vscode');
-const { Api, AssetModifiedError } = require('./api');
-const path = require('path');
-const FileDecorationProvider = require('./fileDecorationProvider');
+// @ts-nocheck
 const crypto = require('crypto');
+const path = require('path');
+
+const vscode = require('vscode');
+
+const { Api, AssetModifiedError } = require('./api.js');
+const FileDecorationProvider = require('./fileDecorationProvider.js');
+
 
 let fileDecorationProvider;
 
@@ -19,7 +23,7 @@ class CloudStorageProvider {
         this._onDidChangeFile = new vscode.EventEmitter();
 
         const filePath = path.join(__dirname, '..', 'node_modules', 'playcanvas', 'build/playcanvas.d.ts');
-        this.typesReference = '///<reference path="' + filePath + '" />;\n';
+        this.typesReference = `///<reference path="${filePath}" />;\n`;
 
         this.refresh();
 
@@ -67,7 +71,7 @@ class CloudStorageProvider {
             return { type: vscode.FileType.Directory, permissions: 0, size: 0, ctime: projectCreated, mtime: projectModified };
         }
 
-        let asset = this.lookup(uri);
+        const asset = this.lookup(uri);
         if (!asset) {
             if (DEBUG) console.log(`playcanvas: stat ${uri.path} not found`);
             throw vscode.FileSystemError.FileNotFound();
@@ -104,7 +108,7 @@ class CloudStorageProvider {
             throw vscode.FileSystemError.FileNotFound();
         }
 
-        let asset = this.lookup(uri);
+        const asset = this.lookup(uri);
         if (!asset) {
             throw vscode.FileSystemError.FileNotFound();
         }
@@ -168,7 +172,7 @@ class CloudStorageProvider {
     async checkAssetSynced(uri, newContent) {
         const project = this.getProject(uri.path);
 
-        let localAsset = this.lookup(uri);
+        const localAsset = this.lookup(uri);
         const serverAsset = await this.api.fetchAsset(localAsset.id, project.branchId);
 
         if (DEBUG) console.log(`playcanvas: writeFile ${uri.path}\nlocalAsset:`, localAsset);
@@ -176,7 +180,7 @@ class CloudStorageProvider {
 
         // Important to know if modifiedAt matches, because PUT calls will fail if not matching
         // This makes the assumption that only the server updates modifiedAt
-        const isAssetSynced = serverAsset.modifiedAt === localAsset.modifiedAt
+        const isAssetSynced = serverAsset.modifiedAt === localAsset.modifiedAt;
 
         // Calculate file content hashes to determine if we need to stop
         // the user from pushing new changes.
@@ -185,10 +189,10 @@ class CloudStorageProvider {
         const previousSyncHash = localAsset.file.hash;
         // Hash of our "new" file changes
         const localHash = crypto.createHash('md5').update(newContent).digest('hex');
-        /* File is "synced" if one of these is true:
-            A) Our last sync matches remote
-            B) Our current file matches the remote file
-        */
+        // File is "synced" if one of these is true:
+        //  A) Our last sync matches remote
+        //  B) Our current file matches the remote file
+        //
         const isContentSynced = remoteHash === previousSyncHash || localHash === remoteHash;
 
         if (DEBUG) console.log(`playcanvas: writeFile ${uri.path}\nremoteHash: ${remoteHash}\npreviousSyncHash: ${previousSyncHash}\nlocalHash: ${localHash}`);
@@ -198,8 +202,8 @@ class CloudStorageProvider {
             isAssetSynced,
             isContentSynced,
             serverAsset,
-            localAsset,
-        }
+            localAsset
+        };
     }
 
     async writeFile(uri, content, options) {
@@ -248,7 +252,7 @@ class CloudStorageProvider {
 
             if (!isContentSynced) {
                 if (DEBUG) console.log(`playcanvas: writeFile ${uri.path} - Latest file changes on the server have not been pulled yet.`);
-                throw AssetModifiedError
+                throw AssetModifiedError;
             }
 
             // We must handle a difference in metadata because the PUT will fail
@@ -261,8 +265,8 @@ class CloudStorageProvider {
                     // Note: This method only merges the top-level properties
                     ...serverAsset,
                     // Add new file contents (since asset.content is from the previous update)
-                    content: strContent,
-                }
+                    content: strContent
+                };
             }
 
             // Update server asset
@@ -276,13 +280,13 @@ class CloudStorageProvider {
                 // Note: This method only merges the top-level properties
                 ...updatedAsset,
                 // Add new file contents (since asset.content is from the previous update)
-                content: strContent,
-            }
+                content: strContent
+            };
 
             // Update local state
             this.updateLocalAsset(uri, asset);
 
-            if (DEBUG) console.log('playcanvas: local asset updated to:', this.lookup(uri))
+            if (DEBUG) console.log('playcanvas: local asset updated to:', this.lookup(uri));
         }
     }
 
@@ -303,7 +307,9 @@ class CloudStorageProvider {
         const project = this.getProject(oldUri.path);
         const folder = this.lookup(vscode.Uri.parse(`playcanvas:${path.dirname(newUri.path)}`));
         const asset = await this.api.renameAsset(oldAsset.id, folder ? folder.id : null, newName, project.branchId);
-        asset.modifiedAt = asset.modifiedAt;
+
+        oldAsset.modifiedAt = asset.modifiedAt;
+
         await this.refreshProject(project);
     }
 
@@ -361,7 +367,7 @@ class CloudStorageProvider {
         const folder = this.lookup(uri);
         const folderFiles = folder ? [...folder.files.values()] : [...project.files.values()];
         console.log(`playcanvas: readDirectory return files ${folderFiles.length}`);
-        return folderFiles.map(f => [this.getFilename(f), f.type == 'folder' ? vscode.FileType.Directory : vscode.FileType.File]);
+        return folderFiles.map(f => [this.getFilename(f), f.type === 'folder' ? vscode.FileType.Directory : vscode.FileType.File]);
     }
 
     async createDirectory(uri) {
@@ -389,7 +395,7 @@ class CloudStorageProvider {
         this.userId = await this.api.fetchUserId();
     }
 
-    async getProjects() {
+    getProjects() {
         return this.projects;
     }
 
@@ -397,11 +403,11 @@ class CloudStorageProvider {
         if (!this.userId) {
             this.userId = await this.api.fetchUserId();
         }
-        console.log(`playcanvas: fetchProjects`);
+        console.log('playcanvas: fetchProjects');
 
         // preserve branch selection
         const branchSelection = new Map();
-        this.projects.forEach(p => {
+        this.projects.forEach((p) => {
             if (p.branchId) {
                 branchSelection.set(p.id, p.branchId);
             }
@@ -409,10 +415,10 @@ class CloudStorageProvider {
 
         const projects = await this.api.fetchProjects(this.userId);
 
-        projects.forEach(p => {
+        projects.forEach((p) => {
             if (branchSelection.get(p.id)) {
                 p.branchId = branchSelection.get(p.id);
-            };
+            }
         });
 
         if (!skipCaching) {
@@ -427,16 +433,17 @@ class CloudStorageProvider {
     }
 
     async fetchProject(id) {
-        console.log(`playcanvas: fetchProject`);
+        console.log('playcanvas: fetchProject');
         return await this.api.fetchProject(id);
     }
 
     async fetchBranches(project) {
         console.log(`playcanvas: fetchBranches ${project.name}`);
-        // if (!project.branches) {
+
         const branches = await this.api.fetchBranches(project.id);
+        // eslint-disable-next-line require-atomic-updates
         project.branches = branches;
-        // }
+
         return project.branches;
     }
 
@@ -450,7 +457,7 @@ class CloudStorageProvider {
     }
 
     async initializeProject(project, branch) {
-        if (branch && branch != 'main') {
+        if (branch && branch !== 'main') {
             await this.fetchBranches(project);
             this.switchBranch(project, branch);
         }
@@ -476,11 +483,11 @@ class CloudStorageProvider {
         if (file.parent) {
             const parent = fileMap.get(file.parent);
             if (parent) {
-                file.path = this.getPath(projectName, parent, fileMap) + '/' + filename;
+                file.path = `${this.getPath(projectName, parent, fileMap)}/${filename}`;
                 parent.files.set(filename, file);
             }
         } else {
-            file.path = projectName + '/' + filename;
+            file.path = `${projectName}/${filename}`;
         }
 
         return file.path;
@@ -505,6 +512,7 @@ class CloudStorageProvider {
         if (!project.files) {
             console.log(`playcanvas: fetchAssets ${project.name}, branch: ${project.branchId}`);
             const files = await this.api.fetchAssets(project.id, project.branchId);
+            // eslint-disable-next-line require-atomic-updates
             project.files = new Map();
             for (const file of files) {
                 if (!file.parent) {
@@ -516,7 +524,7 @@ class CloudStorageProvider {
         return project.files;
     }
 
-    async fetchFileContent(asset, branchId) {
+    fetchFileContent(asset, branchId) {
         console.log(`playcanvas: fetchFileContent ${asset.name}`);
         return this.api.fetchFileContent(asset.id, asset.file.filename, branchId);
     }
@@ -544,7 +552,7 @@ class CloudStorageProvider {
 
     /**
      * Updates an asset in the local project file structure. Only updates the local state.
-     * 
+     *
      * @param {vscode.Uri} uri - The URI of the asset to update
      * @param {Object} asset - The updated asset data
      * @returns {Object|null} - The updated asset or null if project or parent folder wasn't found
@@ -568,6 +576,8 @@ class CloudStorageProvider {
 
         // Update the asset in the local state
         files.set(parts[parts.length - 1], asset);
+
+        return asset;
     }
 
     refresh(clearProjects = true) {
@@ -576,30 +586,32 @@ class CloudStorageProvider {
         if (clearProjects) {
             this.projects = [];
         } else {
-            this.projects.forEach(p => { delete p.files; delete p.branches; delete p.branchId });
+            this.projects.forEach((p) => {
+                delete p.files; delete p.branches; delete p.branchId;
+            });
         }
     }
 
     refreshUri(uri) {
-        console.log('refreshUri ' + uri.path);
+        console.log(`refreshUri ${uri.path}`);
         // Fire the event to signal that a file has been changed.
         // VS Code will call your readDirectory and other methods to update its view.
         this._onDidChangeFile.fire([{ type: vscode.FileChangeType.Changed, uri: uri }]);
     }
 
     async refreshProject(project) {
-        console.log('refreshProject' + project.name);
+        console.log(`refreshProject${project.name}`);
         delete project.files;
         await this.fetchAssets(project);
     }
 
     async pullLatest(path) {
-        console.log('pullLatest ' + path);
+        console.log(`pullLatest ${path}`);
         const project = this.getProject(path);
         await this.refreshProject(project);
     }
 
-    async ensureSyncProjects() {
+    ensureSyncProjects() {
         if (!this.syncProjectsCalled) {
             this.syncProjectsCalled = true;
             this.syncProjectsPromise = this.syncProjects();
@@ -617,7 +629,7 @@ class CloudStorageProvider {
                 await this.fetchProjects();
 
                 // preload projects
-                let promises = [];
+                const promises = [];
                 const folders = vscode.workspace.workspaceFolders;
                 if (folders) {
                     for (const folder of folders) {
@@ -655,11 +667,12 @@ class CloudStorageProvider {
             const regex = new RegExp(pattern, 'i');
             const self = this;
 
+            // eslint-disable-next-line no-inner-declarations
             async function searchDirectory(dir) {
                 const files = await self.readDirectory(dir);
-                for (const file of files) {
+                for await (const file of files) {
 
-                    const newPath = dir.path + '/' + file[0];
+                    const newPath = `${dir.path}/${file[0]}`;
                     const filePath = dir.with({ path: newPath });
 
                     if (file[1] === vscode.FileType.Directory) {
@@ -677,7 +690,7 @@ class CloudStorageProvider {
                                 results.push({
                                     uri: filePath,
                                     line: i + 1,
-                                    lineText: lines[i].length > SEARCH_RESULT_MAX_LENGTH ? lines[i].substring(0, SEARCH_RESULT_MAX_LENGTH) + '...' : lines[i]
+                                    lineText: lines[i].length > SEARCH_RESULT_MAX_LENGTH ? `${lines[i].substring(0, SEARCH_RESULT_MAX_LENGTH)}...` : lines[i]
                                 });
                             }
 
@@ -695,7 +708,7 @@ class CloudStorageProvider {
                 // global search
                 const folders = vscode.workspace.workspaceFolders;
                 if (folders) {
-                    for (const folder of folders) {
+                    for await (const folder of folders) {
                         if (folder.uri.scheme.startsWith('playcanvas')) {
                             await searchDirectory(folder.uri);
                         }
@@ -709,9 +722,9 @@ class CloudStorageProvider {
         return results;
     }
 
-    async getToken() {
+    getToken() {
         return this.api.getToken();
     }
 }
 
-module.exports = CloudStorageProvider;
+export default CloudStorageProvider;
