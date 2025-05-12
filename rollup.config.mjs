@@ -1,21 +1,9 @@
-// import commonjs from '@rollup/plugin-commonjs';
-// import resolve from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
 import typescript from '@rollup/plugin-typescript';
 
 export default {
     input: 'src/extension.js',
     output: [
-        // {
-        //         file: 'dist/extension.mjs',
-        //         format: 'esm',
-        //         sourcemap: true
-        // },
-        // {
-        //         file: 'dist/extension.cjs',
-        //         format: 'cjs',
-        //         sourcemap: true
-        // },
         {
             file: 'dist/extension.debug.js',
             name: 'ext',
@@ -31,9 +19,6 @@ export default {
         }
     ],
     plugins: [
-        // resolve(),
-        // commonjs(),
-
         // @ts-ignore
         typescript({
             tsconfig: './tsconfig.json',
