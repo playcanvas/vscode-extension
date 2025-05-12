@@ -127,7 +127,7 @@
     "test": "node ./test/runTest.js",
     "package": "npm run build && vsce package",
     "publish": "vsce publish",
-    "watch": "rollup -c -w &"
+    "watch": "rollup -c -w"
   },
   "devDependencies": {
     "@playcanvas/eslint-config": "^2.1.0",

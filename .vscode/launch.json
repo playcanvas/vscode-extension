@@ -16,7 +16,7 @@
 			"env": {
 				"VSCODE_DEBUG_MODE": "true"
 			},
-			"preLaunchTask": "npm: watch"
+			"preLaunchTask": "npm: build"
 		},
 		{
 			"name": "Extension Tests",
