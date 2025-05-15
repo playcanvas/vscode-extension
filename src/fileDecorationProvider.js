@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 class PlayCanvasFileDecorationProvider {
     constructor(context, projectDataProvider, cloudStorageProvider) {
         this.context = context;
@@ -22,6 +24,6 @@ class PlayCanvasFileDecorationProvider {
             console.log('provideFileDecoration', uri);
         }
     }
-};
+}
 
 module.exports = PlayCanvasFileDecorationProvider;
