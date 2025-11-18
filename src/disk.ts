@@ -349,7 +349,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (timeout) {
                 clearTimeout(timeout);
             }
-            setTimeout(() => {
+            timeout = setTimeout(() => {
                 if (!queue.length) {
                     timeout = null;
                     return;

@@ -16,7 +16,7 @@ import { computed, effect } from './utils/signal';
 import { projectToName, uriStartsWith } from './utils/utils';
 
 export const activate = async (context: vscode.ExtensionContext) => {
-    // ! defer by 1 tick to allow for tests to stub mdodules before extension loads
+    // ! defer by 1 tick to allow for tests to stub modules before extension loads
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     // root uri
