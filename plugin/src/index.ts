@@ -92,5 +92,5 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
     return { create, getExternalFiles };
 };
 
-// use export = to ensure its commonjs
+// use export = to ensure it's commonjs
 export = init;
