@@ -33,7 +33,7 @@ jobs:
 
             - name: Build PlayCanvas VS Code Extension
               run: |
-                  npm run build ${{ github.event.inputs.prerelease == 'true' && '--pre-release' || '' }}
+                  npm run build ${{ github.event.inputs.prerelease == 'true' && '-- --pre-release' || '' }}
             - name: Publish VS Code Extension
               run: |
                   vsce publish \
