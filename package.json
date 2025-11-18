@@ -1,0 +1,118 @@
+{
+    "name": "playcanvas",
+    "displayName": "PlayCanvas",
+    "version": "1.0.0",
+    "description": "PlayCanvas Editor VS Code Extension",
+    "categories": [
+        "Other"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/playcanvas/vscode-extension.git"
+    },
+    "license": "MIT",
+    "publisher": "PlayCanvas",
+    "type": "commonjs",
+    "main": "./out/extension.js",
+    "browser": "./out/browser.js",
+    "scripts": {
+        "build": "node ./scripts/build.mjs",
+        "compile": "tsc -p ./",
+        "compile:plugin": "tsc -p ./plugin && node ./scripts/playcanvas-dts.mjs",
+        "compile:web": "rollup -c",
+        "lint": "prettier --check . && eslint .",
+        "lint:fix": "prettier --write . && eslint --fix .",
+        "pretest": "npm run compile && npm run lint && node ./scripts/vscode-storage.mjs",
+        "test": "vscode-test",
+        "test:web": "vscode-test-web --extensionDevelopmentPath=.",
+        "watch": "tsc -watch -p ./",
+        "watch:plugin": "tsc -watch -p ./plugin && node ./scripts/playcanvas-dts.mjs",
+        "watch:web": "rollup -c -w"
+    },
+    "contributes": {
+        "commands": [
+            {
+                "command": "playcanvas.login",
+                "title": "PlayCanvas: Login"
+            },
+            {
+                "command": "playcanvas.openProject",
+                "title": "PlayCanvas: Open Project"
+            },
+            {
+                "command": "playcanvas.reloadProject",
+                "title": "PlayCanvas: Reload Project"
+            },
+            {
+                "command": "playcanvas.switchBranch",
+                "title": "PlayCanvas: Switch Branch"
+            }
+        ],
+        "typescriptServerPlugins": [
+            {
+                "name": "playcanvas-plugin",
+                "enableForWorkspaceTypeScriptVersions": true
+            }
+        ],
+        "views": {
+            "explorer": [
+                {
+                    "id": "collab-view",
+                    "name": "Collaborators",
+                    "icon": "organization",
+                    "when": "resourceDirname =~ /playcanvas/"
+                }
+            ]
+        }
+    },
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "dependencies": {
+        "ignore": "^7.0.5",
+        "isomorphic-ws": "^5.0.0",
+        "ot-text": "github:playcanvas/ot-text",
+        "playcanvas-plugin": "file:plugin",
+        "sharedb": "3.2.1",
+        "ws": "^8.18.3"
+    },
+    "devDependencies": {
+        "@eslint/js": "^9.37.0",
+        "@rollup/plugin-commonjs": "^28.0.6",
+        "@rollup/plugin-node-resolve": "^16.0.3",
+        "@rollup/plugin-replace": "^6.0.2",
+        "@rollup/plugin-swc": "^0.4.0",
+        "@types/express": "^5.0.5",
+        "@types/mocha": "^10.0.10",
+        "@types/node": "22.x",
+        "@types/sharedb": "3.2.1",
+        "@types/sinon": "^17.0.4",
+        "@types/vscode": "^1.98.0",
+        "@types/ws": "^8.18.1",
+        "@typescript-eslint/eslint-plugin": "^8.42.0",
+        "@typescript-eslint/parser": "^8.42.0",
+        "@vscode/test-cli": "^0.0.11",
+        "@vscode/test-electron": "^2.5.2",
+        "@vscode/test-web": "^0.0.74",
+        "dotenv": "^17.2.3",
+        "eslint": "^9.34.0",
+        "eslint-config-prettier": "^10.1.8",
+        "eslint-import-resolver-typescript": "^4.4.4",
+        "eslint-plugin-import": "^2.32.0",
+        "eslint-plugin-package-json": "^0.57.0",
+        "eslint-plugin-prettier": "^5.5.4",
+        "globals": "^16.4.0",
+        "jsonc-eslint-parser": "^2.4.1",
+        "playcanvas": "2.12.3",
+        "prettier": "^3.6.2",
+        "rollup": "^4.52.4",
+        "rollup-plugin-polyfill-node": "^0.13.0",
+        "sinon": "^21.0.0",
+        "typescript": "^5.9.2",
+        "typescript-eslint": "^8.46.0"
+    },
+    "engines": {
+        "vscode": "^1.98.0"
+    },
+    "icon": "resources/logo.png"
+}

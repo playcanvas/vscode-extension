@@ -1,0 +1,15 @@
+.vscode/**
+.vscode-test/**
+src/**
+scripts/**
+plugin/**
+out/test/**
+.gitignore
+.yarnrc
+.env
+TODO.md
+**/globals.d.ts
+**/tsconfig.json
+**/*.config.mjs
+**/*.map
+**/.vscode-test.*
