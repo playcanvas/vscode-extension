@@ -1,8 +1,8 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 
-const WEB = process.env.args?.includes('--web') || false;
-const BETA = process.env.args?.includes('--beta') || false;
+const WEB = process.argv.includes('--web') || false;
+const BETA = process.argv.includes('--beta') || false;
 
 const pkg = JSON.parse(fs.readFileSync('./plugin/package.json', 'utf8'));
 
