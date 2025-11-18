@@ -2,6 +2,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 
 const WEB = process.env.args?.includes('--web') || false;
+const BETA = process.env.args?.includes('--beta') || false;
 
 const pkg = JSON.parse(fs.readFileSync('./plugin/package.json', 'utf8'));
 
@@ -45,4 +46,4 @@ execSync('npm pack', { stdio: 'inherit', cwd: './plugin' });
 execSync(`npm install ./plugin/${pkg.name}-0.0.0.tgz`, { stdio: 'inherit' });
 
 // pack extension
-execSync(`vsce package ${WEB ? '-t web' : ''}`, { stdio: 'inherit' });
+execSync(`vsce package ${WEB ? '-t web' : ''} ${BETA ? '--pre-release' : ''}`, { stdio: 'inherit' });
