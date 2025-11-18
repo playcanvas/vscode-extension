@@ -34,7 +34,7 @@ class MockRest extends Rest {
                 parent?: number;
                 filename?: string;
                 file?: Blob;
-            },
+            }
         ],
         Promise<Asset>
     >;
@@ -45,7 +45,7 @@ class MockRest extends Rest {
         super({
             url: '',
             origin: '',
-            accessToken,
+            accessToken
         });
 
         this.id = sandbox.spy(async () => user.id);
@@ -66,7 +66,7 @@ class MockRest extends Rest {
                     parent?: number;
                     filename?: string;
                     file?: Blob;
-                },
+                }
             ) => {
                 // add new asset to assets map
                 const id = uniqueId.next().value;
@@ -74,11 +74,11 @@ class MockRest extends Rest {
                     uniqueId: id,
                     item_id: `${id}`,
                     file: {
-                        filename: data.filename || data.name,
+                        filename: data.filename || data.name
                     },
                     type: data.type,
                     path: data.parent ? [data.parent] : [],
-                    name: data.name,
+                    name: data.name
                 };
                 assets.set(id, asset);
 
@@ -93,13 +93,13 @@ class MockRest extends Rest {
                             id: asset.item_id,
                             name: asset.name,
                             type: asset.type,
-                            branchId: _branchId,
-                        },
-                    },
+                            branchId: _branchId
+                        }
+                    }
                 });
 
                 return asset;
-            },
+            }
         );
         this.assetRename = sandbox.spy(async (_projectId: number, _branchId: string, assetId: number, name: string) => {
             // find asset and document
@@ -119,10 +119,10 @@ class MockRest extends Rest {
                     [
                         {
                             p: ['name'],
-                            oi: name,
-                        },
+                            oi: name
+                        }
                     ],
-                    { source: 'source' },
+                    { source: 'source' }
                 );
             }
 

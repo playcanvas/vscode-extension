@@ -9,13 +9,13 @@ const FILES = new Map([
     ['globals.d.ts', fs.readFileSync(path.join(__dirname, 'playcanvas.d.ts'), 'utf8')],
 
     // 'playcanvas' module declaration
-    ['module.d.ts', 'declare module "playcanvas" { export = pc; }'],
+    ['module.d.ts', 'declare module "playcanvas" { export = pc; }']
 ]);
 
 const COMPILER_OPTIONS: ts.CompilerOptions = {
     allowJs: true,
     checkJs: true,
-    noEmit: true,
+    noEmit: true
 };
 
 const log = (project: ts.server.Project, message: string) => {

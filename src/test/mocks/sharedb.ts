@@ -308,8 +308,8 @@ class MockShareDb extends ShareDb {
                     }
                     messenger.emit('assets.delete', {
                         data: {
-                            assets: json.ids.map((id) => id.toString()),
-                        },
+                            assets: json.ids.map((id) => id.toString())
+                        }
                     });
                     return;
                 }
@@ -332,7 +332,7 @@ class MockShareDb extends ShareDb {
                                 } else if (path.length === 1 && asset.path.length === 1) {
                                     // moved between folders
                                     doc.submitOp([{ p: ['path'], ld: path[0], li: asset.path[0] }], {
-                                        source: 'remote',
+                                        source: 'remote'
                                     });
                                 }
                             }

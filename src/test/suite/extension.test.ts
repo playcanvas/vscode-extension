@@ -58,7 +58,7 @@ const watchFilePromise = (folderUri: vscode.Uri, file: string, action: 'create' 
         new vscode.RelativePattern(folderUri, file),
         action !== 'create',
         action !== 'change',
-        action !== 'delete',
+        action !== 'delete'
     );
     return new Promise<vscode.Uri>((resolve) => {
         switch (action) {
@@ -148,9 +148,9 @@ suite('Extension Test Suite', () => {
                 parent: parent,
                 preload: true,
                 filename: `${name}.js`,
-                file: new Blob([content], { type: 'text/plain' }),
+                file: new Blob([content], { type: 'text/plain' })
             }),
-            'rest.assetCreate',
+            'rest.assetCreate'
         );
 
         // wait for local file creation
@@ -232,11 +232,11 @@ suite('Extension Test Suite', () => {
             uniqueId: id,
             item_id: `${id}`,
             file: {
-                filename: `${name}.js`,
+                filename: `${name}.js`
             },
             path: [],
             name: name,
-            type: 'script',
+            type: 'script'
         };
         assets.set(asset.uniqueId, asset);
         documents.set(asset.uniqueId, document);
@@ -249,9 +249,9 @@ suite('Extension Test Suite', () => {
                     id: asset.item_id,
                     name: asset.name,
                     type: asset.type,
-                    branchId: projectSettings.branch,
-                },
-            },
+                    branchId: projectSettings.branch
+                }
+            }
         });
 
         // check if local file was created
@@ -304,8 +304,8 @@ suite('Extension Test Suite', () => {
                 parent: undefined,
                 preload: true,
                 filename: `${name}.js`,
-                file: new Blob([document], { type: 'text/plain' }),
-            },
+                file: new Blob([document], { type: 'text/plain' })
+            }
         ]);
     });
 
@@ -356,7 +356,7 @@ suite('Extension Test Suite', () => {
 
         // create update promise
         const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [0, '// LOCAL TEST COMMENT\n'], // insert at start
+            [0, '// LOCAL TEST COMMENT\n'] // insert at start
         ]);
 
         // make local change by editing the document
@@ -385,7 +385,7 @@ suite('Extension Test Suite', () => {
         // create asset
         const asset = await assetCreate({
             name: 'override_local_remote.js',
-            content: '// 123456',
+            content: '// 123456'
         });
         const insert = '789';
         assert.ok(asset);
@@ -400,7 +400,7 @@ suite('Extension Test Suite', () => {
         // create update promise
         const insertIndex = document.length;
         const updated1 = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [insertIndex, insert], // insert at end
+            [insertIndex, insert] // insert at end
         ]);
 
         // make local change by editing the document
@@ -430,7 +430,7 @@ suite('Extension Test Suite', () => {
         // create update promise for override
         const updated2 = assertOpsPromise(`documents:${asset.uniqueId}`, [
             [0, { d: documentRemote.length }], // delete remote change
-            [0, `${document}${insert}`], // add local changes
+            [0, `${document}${insert}`] // add local changes
         ]);
 
         // save the document to trigger override
@@ -460,8 +460,8 @@ suite('Extension Test Suite', () => {
         // fire messenger event for asset deletion
         messenger.emit('assets.delete', {
             data: {
-                assets: [asset.item_id],
-            },
+                assets: [asset.item_id]
+            }
         });
 
         // check if local file was deleted
@@ -507,8 +507,8 @@ suite('Extension Test Suite', () => {
         assert.deepStrictEqual(call.args, [
             `fs${JSON.stringify({
                 op: 'delete',
-                ids: [asset.uniqueId],
-            })}`,
+                ids: [asset.uniqueId]
+            })}`
         ]);
     });
 
@@ -538,10 +538,10 @@ suite('Extension Test Suite', () => {
             [
                 {
                     p: ['name'],
-                    oi: newName,
-                },
+                    oi: newName
+                }
             ],
-            { source: 'remote' },
+            { source: 'remote' }
         );
         asset.name = newName;
 
@@ -574,7 +574,7 @@ suite('Extension Test Suite', () => {
 
         // create renamed promise
         const renamed = assertOpsPromise(`assets:${asset.uniqueId}`, [
-            [{ p: ['name'], oi: newName }], // rename op
+            [{ p: ['name'], oi: newName }] // rename op
         ]);
 
         // reset rest assetRename spy call history
@@ -623,10 +623,10 @@ suite('Extension Test Suite', () => {
             [
                 {
                     p: ['path'],
-                    li: folderAssetId,
-                },
+                    li: folderAssetId
+                }
             ],
-            { source: 'remote' },
+            { source: 'remote' }
         );
         asset.path = [folderAssetId];
 
@@ -662,7 +662,7 @@ suite('Extension Test Suite', () => {
 
         // create moved promise
         const moved = assertOpsPromise(`assets:${asset.uniqueId}`, [
-            [{ p: ['path'], ld: folderAssetId }], // move op
+            [{ p: ['path'], ld: folderAssetId }] // move op
         ]);
 
         // reset sharedb sendRaw spy call history
@@ -682,8 +682,8 @@ suite('Extension Test Suite', () => {
             `fs${JSON.stringify({
                 op: 'move',
                 ids: [asset.uniqueId],
-                to: 0,
-            })}`,
+                to: 0
+            })}`
         ]);
 
         // check content of renamed file

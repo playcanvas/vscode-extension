@@ -21,7 +21,7 @@ class Auth {
             debug: DEBUG,
             url: API_URL,
             origin: HOME_URL,
-            accessToken,
+            accessToken
         });
         const [error] = await catchError(() => rest.id());
         if (error && /HTTP 4\d{2}/.test(error.message)) {
@@ -37,7 +37,7 @@ class Auth {
             return vscode.window.showInputBox({
                 prompt: 'Enter your PlayCanvas Editor Access Token',
                 ignoreFocusOut: true,
-                password: true,
+                password: true
             });
         }
 
@@ -60,9 +60,9 @@ class Auth {
                     const res2 = await fetch(`${LOGIN_URL}/auth/oauth2`, {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json',
+                            'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({ code }),
+                        body: JSON.stringify({ code })
                     });
                     if (!res2.ok) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -77,8 +77,8 @@ class Auth {
                     // fetch access token
                     const res3 = await fetch(`${HOME_URL}/editor`, {
                         headers: {
-                            Cookie: cookie,
-                        },
+                            Cookie: cookie
+                        }
                     });
                     if (!res3.ok) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -108,7 +108,7 @@ class Auth {
             server
                 .listen(PORT, () => {
                     const oauthUri = vscode.Uri.parse(LOGIN_URL).with({
-                        query: `came_from=http://localhost:${PORT}/auth/callback`,
+                        query: `came_from=http://localhost:${PORT}/auth/callback`
                     });
                     vscode.env.openExternal(oauthUri);
                 })
@@ -154,8 +154,8 @@ class Auth {
         await vscode.window.showErrorMessage(
             [reason, 'Token will be reset and the window will be reloaded.'].join('\n\n'),
             {
-                modal: true,
-            },
+                modal: true
+            }
         );
         await this._context.secrets.delete('playcanvas.accessToken');
         vscode.commands.executeCommand('workbench.action.reloadWindow');

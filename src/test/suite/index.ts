@@ -9,7 +9,7 @@ export function run(): Promise<void> {
         ui: 'tdd',
         color: true,
         timeout: 5000,
-        fgrep: process.env.FGREP,
+        fgrep: process.env.FGREP
     });
 
     const testsRoot = path.resolve(__dirname, '..');

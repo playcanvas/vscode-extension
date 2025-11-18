@@ -28,7 +28,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // auth
     const auth = new Auth(context);
     context.subscriptions.push(
-        vscode.commands.registerCommand('playcanvas.login', async () => auth.getAccessToken(true)),
+        vscode.commands.registerCommand('playcanvas.login', async () => auth.getAccessToken(true))
     );
     const accessToken = await auth.getAccessToken();
     const checkAuthError = async (error?: Error) => {
@@ -42,7 +42,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     context.subscriptions.push(
         new vscode.Disposable(() => {
             events.removeAllListeners();
-        }),
+        })
     );
 
     // start rest client
@@ -50,7 +50,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         debug: DEBUG,
         url: API_URL,
         origin: HOME_URL,
-        accessToken,
+        accessToken
     });
     effect(() => checkAuthError(rest.error.get()));
 
@@ -58,41 +58,41 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const sharedb = new ShareDb({
         debug: DEBUG,
         url: REALTIME_URL,
-        origin: HOME_URL,
+        origin: HOME_URL
     });
     effect(() => checkAuthError(sharedb.error.get()));
     await sharedb.connect(accessToken);
     context.subscriptions.push(
         new vscode.Disposable(() => {
             sharedb.disconnect();
-        }),
+        })
     );
 
     // start messenger
     const messenger = new Messenger({
         debug: DEBUG,
         url: MESSENGER_URL,
-        origin: HOME_URL,
+        origin: HOME_URL
     });
     await messenger.connect(accessToken);
     context.subscriptions.push(
         new vscode.Disposable(() => {
             messenger.disconnect();
-        }),
+        })
     );
 
     // start relay
     const relay = new Relay({
         debug: DEBUG,
         url: RELAY_URL,
-        origin: HOME_URL,
+        origin: HOME_URL
     });
     effect(() => checkAuthError(relay.error.get()));
     await relay.connect(accessToken);
     context.subscriptions.push(
         new vscode.Disposable(() => {
             relay.disconnect();
-        }),
+        })
     );
 
     // find user id
@@ -102,7 +102,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const state: {
         projectId: number | null;
     } = {
-        projectId: null,
+        projectId: null
     };
 
     // cache
@@ -116,7 +116,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     const disk = new Disk({
         debug: DEBUG,
-        events,
+        events
     });
 
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
@@ -136,14 +136,14 @@ export const activate = async (context: vscode.ExtensionContext) => {
         debug: DEBUG,
         events,
         relay,
-        rest,
+        rest
     });
     context.subscriptions.push(vscode.window.registerTreeDataProvider('collab-view', collabProvider));
 
     // connection status bar item
     const connectionStatusColors = {
         connected: '#2ecc71',
-        disconnected: '#e74c3c',
+        disconnected: '#e74c3c'
     };
     const connectionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10000);
     context.subscriptions.push(connectionStatusItem);
@@ -253,7 +253,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             messenger.off('branch.close', branchClose);
             messenger.off('checkpoint.revertEnded', checkpointRevert);
             messenger.off('checkpoint.hardResetEnded', checkpointHardReset);
-        }),
+        })
     );
 
     // open project
@@ -265,7 +265,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             // show picker
             const list = projects.map((p) => projectToName(p)).reverse();
             const chosen = await vscode.window.showQuickPick(list, {
-                placeHolder: 'Select a project',
+                placeHolder: 'Select a project'
             });
             const project = projects.find((p) => chosen === projectToName(p));
             if (!project) {
@@ -276,7 +276,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const folder = vscode.Uri.joinPath(rootUri, projectToName(project));
             await vscode.workspace.fs.createDirectory(folder);
             await vscode.commands.executeCommand('vscode.openFolder', folder, false);
-        }),
+        })
     );
 
     // reload project
@@ -299,7 +299,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await reload(projectManager);
 
             reloadDone();
-        }),
+        })
     );
 
     // switch branch
@@ -328,7 +328,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
             // show picker
             const chosen = await vscode.window.showQuickPick(branchNames, {
-                placeHolder: 'Select a branch',
+                placeHolder: 'Select a branch'
             });
             if (!chosen) {
                 return;
@@ -343,7 +343,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             // checkout branch
             // NOTE: branch switch flow continues in messenger event above
             await rest.branchCheckout(branch.id);
-        }),
+        })
     );
 
     // load project
@@ -373,7 +373,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         context.subscriptions.push(
             new vscode.Disposable(() => {
                 doc.destroy();
-            }),
+            })
         );
         const branchId = doc.data?.branch ?? '';
 
@@ -390,7 +390,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         context.subscriptions.push(
             new vscode.Disposable(() => {
                 messenger.unwatch(project.id);
-            }),
+            })
         );
 
         // load project
@@ -400,17 +400,17 @@ export const activate = async (context: vscode.ExtensionContext) => {
             sharedb,
             messenger,
             relay,
-            rest,
+            rest
         });
         effect(() => checkAuthError(projectManager.error.get()));
         await projectManager.link({
             projectId: project.id,
-            branchId: branchId,
+            branchId: branchId
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
                 projectManager.unlink();
-            }),
+            })
         );
 
         const folderUri = vscode.Uri.joinPath(rootUri, projectToName(project));
@@ -418,23 +418,23 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // mount disk
         await disk.link({
             folderUri,
-            projectManager,
+            projectManager
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
                 disk.unlink();
-            }),
+            })
         );
 
         // link collab provider
         collabProvider.link({
             folderUri,
-            projectManager,
+            projectManager
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
                 collabProvider.unlink();
-            }),
+            })
         );
 
         // store in cache
@@ -442,7 +442,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         context.subscriptions.push(
             new vscode.Disposable(() => {
                 cache.delete(project.id);
-            }),
+            })
         );
 
         // update active project

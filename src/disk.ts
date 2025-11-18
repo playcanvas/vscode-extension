@@ -67,7 +67,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             key,
             promise.then(async () => {
                 await res;
-            }),
+            })
         );
         return res;
     }
@@ -187,7 +187,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._debouncer.add(`${uri}:delete`);
             await vscode.workspace.fs.delete(uri, {
                 recursive: true,
-                useTrash: false,
+                useTrash: false
             });
 
             this._log(`delete.remote file ${uri}`);
@@ -210,7 +210,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._debouncer.add(`${oldUri}:delete`);
             this._debouncer.add(`${newUri}:create`);
             await vscode.workspace.fs.rename(oldUri, newUri, {
-                overwrite: false,
+                overwrite: false
             });
 
             this._log(`rename.remote ${oldUri.path} -> ${newUri.path}`);
@@ -400,7 +400,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             new vscode.RelativePattern(folderUri, '**'),
             false,
             true,
-            false,
+            false
         );
         watcher.onDidCreate(async (uri) => {
             if (folderUri.scheme !== uri.scheme) {
@@ -421,7 +421,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 action: 'create',
                 uri,
                 type,
-                content,
+                content
             });
         });
         watcher.onDidDelete(async (uri) => {
@@ -438,7 +438,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
             defer({
                 action: 'delete',
-                uri,
+                uri
             });
         });
         return () => {

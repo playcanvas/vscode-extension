@@ -58,8 +58,8 @@ class ShareDb {
             ? undefined
             : {
                   headers: {
-                      origin: this.origin,
-                  },
+                      origin: this.origin
+                  }
               };
         const socket = new WebSocket(this.url, options);
 

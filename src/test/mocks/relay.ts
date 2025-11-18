@@ -16,7 +16,7 @@ class MockRelay extends Relay {
     constructor(sandbox: sinon.SinonSandbox) {
         super({
             url: '',
-            origin: '',
+            origin: ''
         });
 
         this.connect = sandbox.spy(async () => {

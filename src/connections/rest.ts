@@ -16,7 +16,7 @@ class Rest {
         debug = false,
         url,
         origin,
-        accessToken,
+        accessToken
     }: {
         debug?: boolean;
         url: string;
@@ -42,10 +42,10 @@ class Rest {
         path: string,
         body?: object | FormData,
         type: 'json' | 'buffer' = 'json',
-        auth = true,
+        auth = true
     ): Promise<T> {
         const headers: Record<string, string> = {
-            origin: this.origin,
+            origin: this.origin
         };
         if (auth) {
             headers['Authorization'] = `Bearer ${this.accessToken}`;
@@ -53,7 +53,7 @@ class Rest {
         const res = await fetch(`${this.url}/${path}`, {
             method,
             headers,
-            body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
+            body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined
         });
         if (!res.ok) {
             const error = new Error(`HTTP ${res.status} ${res.statusText}: ${await res.text()}`);
@@ -84,7 +84,7 @@ class Rest {
             parent?: number;
             filename?: string;
             file?: Blob;
-        },
+        }
     ) {
         const form = new FormData();
         form.append('projectId', `${projectId}`);

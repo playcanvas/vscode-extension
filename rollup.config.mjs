@@ -10,7 +10,7 @@ export default {
     output: {
         file: 'out/browser.js',
         format: 'cjs',
-        sourcemap: true,
+        sourcemap: true
     },
     external: ['vscode'],
     plugins: [
@@ -30,16 +30,16 @@ export default {
                 'process.env.LOGIN_URL': JSON.stringify(process.env.LOGIN_URL),
                 'process.env.REALTIME_URL': JSON.stringify(process.env.REALTIME_URL),
                 'process.env.RELAY_URL': JSON.stringify(process.env.RELAY_URL),
-                'process.env.MESSENGER_URL': JSON.stringify(process.env.MESSENGER_URL),
-            },
+                'process.env.MESSENGER_URL': JSON.stringify(process.env.MESSENGER_URL)
+            }
         }),
         nodeResolve({
             browser: true,
             preferBuiltins: false,
-            extensions: ['.js', '.ts'],
+            extensions: ['.js', '.ts']
         }),
         commonjs(),
         polyfills(),
-        swc(),
-    ],
+        swc()
+    ]
 };

@@ -6,14 +6,14 @@ export const user: User = {
     id: 1,
     username: 'testuser',
     full_name: 'Test User',
-    organization: 'Test Org',
+    organization: 'Test Org'
 };
 
 export const project: Project = {
     id: 1,
     name: 'Test Project',
     owner: user.username,
-    private: false,
+    private: false
 };
 
 export const branches = new Map<string, Branch>([
@@ -24,8 +24,8 @@ export const branches = new Map<string, Branch>([
             projectId: project.id,
             name: 'main',
             closed: false,
-            permanent: true,
-        },
+            permanent: true
+        }
     ],
     [
         'other',
@@ -34,13 +34,13 @@ export const branches = new Map<string, Branch>([
             projectId: project.id,
             name: 'other',
             closed: false,
-            permanent: false,
-        },
-    ],
+            permanent: false
+        }
+    ]
 ]);
 
 export const projectSettings = {
-    branch: branches.get('main')!.id,
+    branch: branches.get('main')!.id
 };
 
 export const assets = new Map<number, Asset>(
@@ -49,23 +49,23 @@ export const assets = new Map<number, Asset>(
             uniqueId: 1,
             item_id: '1',
             file: {
-                filename: 'file.js.js',
+                filename: 'file.js.js'
             },
             name: 'file.js',
             path: [],
-            type: 'script',
+            type: 'script'
         },
         {
             uniqueId: 2,
             item_id: '2',
             file: {
-                filename: 'folder',
+                filename: 'folder'
             },
             name: 'folder',
             path: [],
-            type: 'folder',
-        },
-    ].map((asset) => [asset.uniqueId, asset]),
+            type: 'folder'
+        }
+    ].map((asset) => [asset.uniqueId, asset])
 );
 
 export const documents = new Map<number, string>([[1, `console.log('Hello, World!');`]]);

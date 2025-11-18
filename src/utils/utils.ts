@@ -62,7 +62,7 @@ export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[]) =
             case 'object': {
                 // delete
                 edits.push(
-                    vscode.TextEdit.delete(new vscode.Range(doc.positionAt(index), doc.positionAt(index + data.d))),
+                    vscode.TextEdit.delete(new vscode.Range(doc.positionAt(index), doc.positionAt(index + data.d)))
                 );
                 break;
             }

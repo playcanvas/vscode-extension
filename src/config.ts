@@ -22,6 +22,6 @@ if (DEBUG) {
         LOGIN_URL,
         MESSENGER_URL,
         REALTIME_URL,
-        RELAY_URL,
+        RELAY_URL
     });
 }

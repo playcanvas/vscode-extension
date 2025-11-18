@@ -8,13 +8,13 @@ export const simpleNotification = (message: string) => {
             {
                 location: vscode.ProgressLocation.Notification,
                 title: message,
-                cancellable: false,
+                cancellable: false
             },
             () => {
                 return new Promise<void>((end) => {
                     resolve(end);
                 });
-            },
+            }
         );
     });
 };
@@ -25,7 +25,7 @@ export const progressNotification = (message: string, total: number) => {
             {
                 location: vscode.ProgressLocation.Notification,
                 title: message,
-                cancellable: false,
+                cancellable: false
             },
             (progress) => {
                 const deferred = new Deferred<void>();
@@ -47,7 +47,7 @@ export const progressNotification = (message: string, total: number) => {
                 }
 
                 return deferred.promise;
-            },
+            }
         );
     });
 };

@@ -45,7 +45,7 @@ class CollabProvider
         debug,
         events,
         relay,
-        rest,
+        rest
     }: {
         debug?: boolean;
         events: EventEmitter<EventMap>;

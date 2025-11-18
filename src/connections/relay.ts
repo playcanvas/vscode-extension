@@ -49,8 +49,8 @@ class Relay extends EventEmitter<EventMap> {
                   headers: {
                       origin: this.origin,
                       authorization: `Bearer ${accessToken}`,
-                      cookie: 't=0',
-                  },
+                      cookie: 't=0'
+                  }
               };
         const socket = new WebSocket(this.url, options);
 
@@ -134,8 +134,8 @@ class Relay extends EventEmitter<EventMap> {
             name: name,
             authentication: {
                 type: 'project',
-                id: projectId,
-            },
+                id: projectId
+            }
         }).then(() => {
             this._log(`joined room ${name}`);
         });
@@ -144,7 +144,7 @@ class Relay extends EventEmitter<EventMap> {
     leave(name: string) {
         this.send({
             t: 'room:leave',
-            name: name,
+            name: name
         }).then(() => {
             this._log(`left room ${name}`);
         });
@@ -155,7 +155,7 @@ class Relay extends EventEmitter<EventMap> {
             t: 'room:msg',
             msg: msg,
             name: name,
-            to: userId,
+            to: userId
         }).then(() => {
             this._log(`sent message to room ${name}`, msg);
         });

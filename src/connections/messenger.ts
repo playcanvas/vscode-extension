@@ -16,14 +16,14 @@ type EventMap = {
                     branchId: string;
                 };
             };
-        },
+        }
     ];
     'assets.delete': [
         {
             data: {
                 assets: string[];
             };
-        },
+        }
     ];
     'branch.switch': [
         {
@@ -32,7 +32,7 @@ type EventMap = {
                 branch_id: string;
                 name: string;
             };
-        },
+        }
     ];
     'branch.close': [
         {
@@ -41,7 +41,7 @@ type EventMap = {
                 branch_id: string;
                 status: 'success' | 'error';
             };
-        },
+        }
     ];
     'checkpoint.revertEnded': [
         {
@@ -51,7 +51,7 @@ type EventMap = {
                 checkpoint_id: string;
                 status: 'success' | 'error';
             };
-        },
+        }
     ];
     'checkpoint.hardResetEnded': [
         {
@@ -61,7 +61,7 @@ type EventMap = {
                 checkpoint_id: string;
                 status: 'success' | 'error';
             };
-        },
+        }
     ];
 };
 
@@ -100,8 +100,8 @@ class Messenger extends EventEmitter<EventMap> {
             ? undefined
             : {
                   headers: {
-                      origin: this.origin,
-                  },
+                      origin: this.origin
+                  }
               };
         const socket = new WebSocket(this.url, options);
 
@@ -113,8 +113,8 @@ class Messenger extends EventEmitter<EventMap> {
                 JSON.stringify({
                     name: 'authenticate',
                     token: accessToken,
-                    type: 'designer',
-                }),
+                    type: 'designer'
+                })
             );
         });
 
@@ -199,7 +199,7 @@ class Messenger extends EventEmitter<EventMap> {
             name: 'project.watch',
             target: { type: 'general' },
             env: ['*'],
-            data: { id: projectId },
+            data: { id: projectId }
         }).then(() => {
             this._log(`watching project ${projectId}`);
         });
@@ -210,7 +210,7 @@ class Messenger extends EventEmitter<EventMap> {
             name: 'project.unwatch',
             target: { type: 'general' },
             env: ['*'],
-            data: { id: projectId },
+            data: { id: projectId }
         }).then(() => {
             this._log(`unwatched project ${projectId}`);
         });

@@ -33,7 +33,7 @@ export const computed = <T>(fn: () => T): { get: () => T } => {
     });
 
     return {
-        get: result.get,
+        get: result.get
     };
 };
 

@@ -24,7 +24,7 @@ const EXT_TO_ASSET = new Map<string, { assetType: string; blobType: string }>([
     ['js', { assetType: 'script', blobType: 'text/plain' }],
     ['mjs', { assetType: 'script', blobType: 'text/plain' }],
     ['txt', { assetType: 'text', blobType: 'text/plain' }],
-    ['glsl', { assetType: 'shader', blobType: 'text/x-glsl' }],
+    ['glsl', { assetType: 'shader', blobType: 'text/x-glsl' }]
 ]);
 
 type VirtualFile = {
@@ -71,7 +71,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         sharedb,
         messenger,
         relay,
-        rest,
+        rest
     }: {
         debug?: boolean;
         events: EventEmitter<EventMap>;
@@ -214,7 +214,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             mtime: now,
             uniqueId,
             doc,
-            saved: true,
+            saved: true
         };
         this._files.set(path, file);
 
@@ -254,7 +254,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             type: 'folder',
             ctime: now,
             mtime: now,
-            uniqueId,
+            uniqueId
         };
         this._files.set(path, file);
         this._events.emit('asset:file:create', path, 'folder', new Uint8Array());
@@ -516,13 +516,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 type: 'folder',
                 name,
                 parent,
-                preload: false,
+                preload: false
             };
         } else {
             let ext = name.split('.').pop()?.toLowerCase() ?? '';
             const { assetType, blobType } = EXT_TO_ASSET.get(ext) ?? {
                 assetType: 'text',
-                blobType: 'text/plain',
+                blobType: 'text/plain'
             };
             const src = content?.length ? buffer.toString(content) : '\n';
             ext = EXT_TO_ASSET.has(ext) ? ext : 'txt';
@@ -532,7 +532,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 parent,
                 preload: true,
                 filename: `${name}.${ext}`,
-                file: new Blob([src], { type: blobType }),
+                file: new Blob([src], { type: blobType })
             };
         }
         this._rest.assetCreate(this._projectId, this._branchId, asset).then(rest.resolve).catch(rest.reject);
@@ -552,8 +552,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._sharedb.sendRaw(
             `fs${JSON.stringify({
                 op: 'delete',
-                ids: [file.uniqueId],
-            })}`,
+                ids: [file.uniqueId]
+            })}`
         );
 
         // wait for messenger to notify of asset delete
@@ -646,8 +646,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             `fs${JSON.stringify({
                 op: 'move',
                 ids: [srcFile.uniqueId],
-                to: destFile.uniqueId,
-            })}`,
+                to: destFile.uniqueId
+            })}`
         );
 
         // file updated
@@ -685,10 +685,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // overwrite entire document content
             // vscode -> shareDB
             file.doc.submitOp([0, { d: file.doc.data.length }], {
-                source: ShareDb.SOURCE,
+                source: ShareDb.SOURCE
             });
             file.doc.submitOp([0, buffer.toString(content)], {
-                source: ShareDb.SOURCE,
+                source: ShareDb.SOURCE
             });
         }
 
@@ -720,7 +720,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             type: 'folder',
             ctime: Date.now(),
             mtime: Date.now(),
-            uniqueId: 0,
+            uniqueId: 0
         });
 
         const loadAssetNext = await progressNotification('Loading Assets', assets.length);
@@ -766,8 +766,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             },
             {
                 folders: [] as typeof ordered,
-                files: [] as typeof ordered,
-            },
+                files: [] as typeof ordered
+            }
         );
 
         const loadFileNext = await progressNotification('Loading Files', folders.length + files.length);
