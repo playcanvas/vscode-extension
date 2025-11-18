@@ -5,8 +5,9 @@ on:
         inputs:
             prerelease:
                 description: 'Publish as prerelease'
+                type: boolean
                 required: false
-                default: 'false'
+                default: false
 
 jobs:
     publish:
