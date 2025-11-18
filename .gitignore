@@ -1,6 +1,7 @@
 out
 dist
 node_modules
+.npmrc
 .env
 .vscode-test/
 .vscode-test-web/
