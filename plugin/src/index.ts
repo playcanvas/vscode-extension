@@ -18,6 +18,8 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
     noEmit: true
 };
 
+const PROJECT_REGEX = /playcanvas\.playcanvas\/\w+\/[\w\s]+ \(\d+\)/;
+
 const log = (project: ts.server.Project, message: string) => {
     if (!DEBUG) {
         return;
@@ -29,10 +31,14 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
     const ts = modules.typescript;
 
     const create = (info: ts.server.PluginCreateInfo): ts.LanguageService => {
-        log(info.project, `Initializing plugin...`);
-
-        // Get the project's root directory to form a normalized, unique path for the virtual file
+        // check if we are inside a project
         const projectDir = info.project.getCurrentDirectory();
+        if (!PROJECT_REGEX.test(projectDir)) {
+            return info.languageService;
+        }
+        log(info.project, `Initializing plugin ${projectDir}`);
+
+        // add virtual file paths
         const paths: string[] = [];
         for (const [name] of FILES) {
             paths.push(ts.server.toNormalizedPath(path.join(projectDir, name)));
