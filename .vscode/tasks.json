@@ -1,12 +1,81 @@
+// See https://go.microsoft.com/fwlink/?LinkId=733558
+// for the documentation about the tasks.json format
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "npm: watch",
-      "type": "shell",
-      "command": "npm run watch",
-      "isBackground": true,
-      "problemMatcher": "$tsc-watch"
-    }
-  ]
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "watch",
+            "dependsOn": ["npm: watch:extension", "npm: watch:plugin"],
+            "presentation": {
+                "panel": "dedicated",
+                "reveal": "never"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "npm: watch:extension",
+            "type": "npm",
+            "script": "watch",
+            "problemMatcher": "$tsc-watch",
+            "isBackground": true,
+            "presentation": {
+                "reveal": "never"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "npm: watch:web",
+            "type": "npm",
+            "script": "watch:web",
+            "problemMatcher": {
+                "owner": "rollup-ts",
+                "base": "$tsc-watch",
+                "fileLocation": "absolute",
+                "background": {
+                    "beginsPattern": "^.*bundles .*\\.\\.\\..*$",
+                    "endsPattern": "^.*waiting for changes.*$"
+                }
+            },
+            "isBackground": true,
+            "presentation": {
+                "reveal": "never"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "npm: watch:plugin",
+            "type": "npm",
+            "script": "watch:plugin",
+            "problemMatcher": "$tsc-watch",
+            "isBackground": true,
+            "presentation": {
+                "reveal": "never"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "npm: pretest",
+            "type": "npm",
+            "script": "pretest",
+            "presentation": {
+                "reveal": "never"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": false
+            }
+        }
+    ]
 }

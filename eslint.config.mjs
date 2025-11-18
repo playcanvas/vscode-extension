@@ -1,60 +1,85 @@
-import playcanvasConfig from '@playcanvas/eslint-config';
-import tsPlugin from '@typescript-eslint/eslint-plugin';
+import eslint from '@eslint/js';
+import typescriptEslint from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
+import { defineConfig } from 'eslint/config';
+import pluginImport from 'eslint-plugin-import';
+import * as pluginPackageJson from 'eslint-plugin-package-json';
+import pluginPrettierRecommended from 'eslint-plugin-prettier/recommended';
 import globals from 'globals';
+import jsoncEslintParser from 'jsonc-eslint-parser';
+import tseslint from 'typescript-eslint';
 
-export default [
-    ...playcanvasConfig,
-    {
-        files: ['**/*.js', '**/*.mjs'],
-        languageOptions: {
-            ecmaVersion: 2020,
-            sourceType: 'module',
-            globals: {
-                ...globals.node,
-                ...globals.es2020,
-                ...globals.mocha
+const ignoreConfig = {
+    ignores: ['**/node_modules', '**/out', '.vscode-test*/**', '.vscode-storage/**']
+};
+
+const baseConfig = {
+    rules: {
+        curly: 'error',
+        'import/order': [
+            'error',
+            {
+                alphabetize: { order: 'asc', caseInsensitive: true },
+                'newlines-between': 'always',
+                groups: ['builtin', 'external', 'internal', 'parent', 'sibling', 'index', 'object']
             }
-        },
-        rules: {
-            'no-const-assign': 'warn',
-            'no-this-before-super': 'warn',
-            'no-undef': 'warn',
-            'no-unreachable': 'warn',
-            'no-unused-vars': 'warn',
-            'constructor-super': 'warn',
-            'valid-typeof': 'warn'
-        }
+        ],
+        '@typescript-eslint/no-invalid-void-type': 'off',
+        '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
+        '@typescript-eslint/no-unused-vars': [
+            'error',
+            {
+                argsIgnorePattern: '^_',
+                varsIgnorePattern: '^_',
+                caughtErrorsIgnorePattern: '^_'
+            }
+        ]
     },
-    {
-        files: ['**/*.ts'],
-        languageOptions: {
-            parser: tsParser,
-            ecmaVersion: 2020,
-            sourceType: 'module',
-            globals: {
-                ...globals.node,
-                ...globals.es2020,
-                ...globals.mocha
-            }
-        },
-        plugins: {
-            '@typescript-eslint': tsPlugin
-        },
-        settings: {
-            'import/resolver': {
-                typescript: {}
-            }
-        },
-        rules: {
-            ...tsPlugin.configs.recommended.rules,
-            // Ensure that PlayCanvas rules override "recommended" rules
-            ...playcanvasConfig.map(r => r.rules).reduce((acc, rules) => ({ ...acc, ...rules }), {}),
-            '@typescript-eslint/ban-ts-comment': 'off',
-            '@typescript-eslint/no-explicit-any': 'off',
-            '@typescript-eslint/no-unused-vars': 'off',
-            'jsdoc/require-param-type': 'off',
-            'jsdoc/require-returns-type': 'off'
+    settings: {
+        'import/resolver': {
+            typescript: true
         }
     }
-];
+};
+
+const tsFilesConfig = {
+    files: ['**/*.{js,mjs,ts}'],
+    plugins: {
+        '@typescript-eslint': typescriptEslint
+    },
+    languageOptions: {
+        parser: tsParser,
+        ecmaVersion: 2022,
+        sourceType: 'module',
+        globals: globals.node
+    },
+    rules: {
+        '@typescript-eslint/consistent-type-imports': 'error',
+        '@typescript-eslint/no-dynamic-delete': 'off',
+        '@typescript-eslint/no-non-null-assertion': 'off'
+    }
+};
+
+const packageJsonConfig = {
+    files: ['**/package.json', '**/package-lock.json'],
+    languageOptions: {
+        parser: jsoncEslintParser
+    },
+    plugins: {
+        'package-json': pluginPackageJson
+    },
+    rules: pluginPackageJson.configs.recommended.rules
+};
+
+export default defineConfig(
+    eslint.configs.recommended,
+    tseslint.configs.recommended,
+    tseslint.configs.strict,
+    tseslint.configs.stylistic,
+    pluginPrettierRecommended,
+    pluginImport.flatConfigs.recommended,
+    ignoreConfig,
+    baseConfig,
+    tsFilesConfig,
+    packageJsonConfig
+);

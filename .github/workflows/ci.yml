@@ -1,0 +1,74 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+
+jobs:
+    build:
+        name: Build
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out code
+              uses: actions/checkout@v5
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: 24.x
+                  cache: 'npm'
+                  registry-url: 'https://registry.npmjs.org/'
+
+            - name: Install Dependencies
+              run: npm ci
+
+            - name: Install vsce
+              run: npm install -g @vscode/vsce
+
+            - name: Build PlayCanvas VS Code Extension
+              run: npm run build
+
+    lint:
+        name: Lint
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out code
+              uses: actions/checkout@v5
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: 24.x
+                  cache: 'npm'
+                  registry-url: 'https://registry.npmjs.org/'
+
+            - name: Install Dependencies
+              run: npm ci
+
+            - name: Run ESLint
+              run: npm run lint
+
+    test:
+        name: Test
+        runs-on: ubuntu-latest
+        steps:
+            - name: Check out code
+              uses: actions/checkout@v5
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: 24.x
+                  cache: 'npm'
+                  registry-url: 'https://registry.npmjs.org/'
+
+            - name: Install Dependencies
+              run: npm ci
+
+            - name: Install Xvfb
+              run: sudo apt-get install -y xvfb
+
+            - name: Run Tests
+              run: xvfb-run -a --server-args="-screen 0 1024x768x24" npm test

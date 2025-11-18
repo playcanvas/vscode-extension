@@ -1,32 +1,189 @@
 {
-  "compilerOptions": {
-    "target": "ES2020",
-    "module": "NodeNext",
-    "lib": [
-      "ES2020"
-    ],
-    "declaration": true,
-    "declarationDir": "./dist",
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "strict": true,
-    "moduleResolution": "nodenext",
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "sourceMap": true,
-    "removeComments": false,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "checkJs": true,
-  },
-  "include": [
-    "src/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist"
-  ]
+    "compilerOptions": {
+        // --- Type Checking and Strictness ---
+        /** Enables all strict type-checking options. (Original: true) */
+        "strict": true,
+        /** Check for `null` and `undefined` in expressions. (Included in "strict") */
+        // "strictNullChecks": true,
+        /** Ensure properties are initialized in the constructor when strict mode is active. (Included in "strict") */
+        // "strictPropertyInitialization": true,
+        /** Enable strict checking of function types. (Included in "strict") */
+        // "strictFunctionTypes": true,
+        /** Check that the `this` context for a function is appropriate. (Included in "strict") */
+        // "strictBindCallApply": true,
+        /** Raise error on expressions and declarations with an implied `any` type. (Included in "strict") */
+        // "noImplicitAny": true,
+        /** Report errors on unused local variables. */
+        // "noUnusedLocals": false,
+        /** Report errors on unused parameters. (Original: true) */
+        "noUnusedParameters": true,
+        /** Report errors on code paths that do not return a value. (Original: true) */
+        "noImplicitReturns": true,
+        /** Enable error reporting for fallthrough cases in switch statements. (Original: true) */
+        "noFallthroughCasesInSwitch": true,
+        /** Enable error reporting when a local variable is shadowed by a parameter. */
+        // "noImplicitThis": true,
+        /** Report errors when an imported symbol is not used. */
+        // "noUnusedImports": false,
+        /** Report errors for invalid uses of `new`. */
+        // "noImplicitOverride": false,
+        /** Disable error reporting for `case` statements in `switch` blocks that do not have `break` or `return`. */
+        // "allowUnreachableCode": false,
+        /** Disable error reporting for variables that are declared but not used. */
+        // "allowUnusedLabels": false,
+        /** Include `undefined` in types when accessing a property by string index. */
+        // "noPropertyAccessFromIndexSignature": false,
+        /** Report an error when a destructured array element is not used. */
+        // "noUncheckedIndexedAccess": false,
+        /** Report errors when a property is declared but not used. */
+        // "useUnknownInCatchVariables": false,
+        /** Skip type checking of declaration files. */
+        "skipLibCheck": true,
+        /** Disable reporting of `ts(2370)` error for legacy decorators. */
+        // "suppressImplicitAnyIndexErrors": false,
+        /** Report an error when `super()` is not called in a constructor of a derived class. */
+        // "forceConsistentCasingInFileNames": true,
+        /** Ensure no compiler errors are issued for files that are not explicitly included in the project. */
+        // "maxNodeModuleJsDepth": 0,
+        /** Include compiler-inferred type definitions in global scope. */
+        // "allowSyntheticDefaultImports": false,
+        /** Report errors for invalid uses of `new`. */
+        // "noImplicitThis": true,
+        /** Report errors on uninitialized class properties. */
+        // "useDefineForClassFields": false,
+        /** Require all property access to be explicit. */
+        // "noImplicitOverride": false,
+        /** Raise an error when `super()` is not called in a derived class. */
+        // "alwaysStrict": true, // Always emit `"use strict"` at the top of the output file.
+
+        // --- Module and Import Resolution ---
+        /** Specify the module code generation method. (Original: Node16) */
+        "module": "Node16",
+        /** Specify how modules are resolved. (Should align with 'module' option) */
+        // "moduleResolution": "Node16",
+        /** Enable importing `.json` files. (Original: true) */
+        "resolveJsonModule": true,
+        /** Allow default imports from modules with no default export. (Requires `esModuleInterop`) */
+        // "allowSyntheticDefaultImports": false,
+        /** Enables 'esModule interop' for better compatibility with CommonJS/AMD/etc. */
+        // "esModuleInterop": false,
+        /** Enable a single root folder for all modules. (Original: src) */
+        "rootDir": "src",
+        /** Specify where to find modules based on a series of path mappings. (Original: set below) */
+        "paths": {
+            "sharedb/lib/client/index.js": ["./node_modules/@types/sharedb/lib/client"]
+        },
+        /** A non-relative base path for resolving `module` names. */
+        // "baseUrl": "./",
+        /** A list of directories to search for type definitions. */
+        // "typeRoots": ["./node_modules/@types"],
+        /** A list of packages to include as type definitions. */
+        // "types": ["node"],
+        /** Allow JavaScript files to be compiled. */
+        // "allowJs": false,
+        /** Disable resolving symlinks to their real path. */
+        // "preserveSymlinks": false,
+        /** List of file extensions to search for modules. */
+        // "moduleSuffixes": [".d.ts", ".ts"],
+        /** When compiling modules, don't include output module names in the compiler output. */
+        // "preserveWatchOutput": false,
+
+        // --- Emit (Output) Configuration ---
+        /** Specify the output directory for built files. (Original: out) */
+        "outDir": "out",
+        /** Specify the target JavaScript language version for the emitted JavaScript. (Original: ES2022) */
+        "target": "ES2022",
+        /** Generates corresponding '.map' files. (Original: true) */
+        "sourceMap": true,
+        /** Emit ECMAScript-standard `decorators`. */
+        // "experimentalDecorators": false,
+        /** Emit design-type metadata for decorated declarations. */
+        // "emitDecoratorMetadata": false,
+        /** Don't emit any output. */
+        // "noEmit": false,
+        /** Only emit `.d.ts` files. */
+        // "declaration": false,
+        /** Output `.d.ts` files to a specified directory. */
+        // "declarationDir": "./types",
+        /** Concatenate and emit output to a single file. */
+        // "outFile": "./dist/main.js",
+        /** Do not emit comments to output. */
+        // "removeComments": false,
+        /** Do not emit helper functions (e.g., `__extends`, `__decorate`). */
+        // "noEmitHelpers": false,
+        /** Output file to overwrite. */
+        // "tsBuildInfoFile": "./.tsbuildinfo",
+        /** Preserve JSX as-is for consumption by a separate JSX transform step. */
+        // "jsx": "react",
+        /** Specify the JSX factory function to use when targeting React JSX emit. */
+        // "jsxFactory": "React.createElement",
+        /** Specify the JSX Fragment factory function to use when targeting React JSX emit. */
+        // "jsxFragmentFactory": "React.Fragment",
+        /** Specify the JSX namespace. */
+        // "jsxImportSource": "react",
+        /** Specify file extension for output files. */
+        // "outSuffixes": [".js", ".jsx"],
+        /** Emit a `source map` for each output file. */
+        // "inlineSourceMap": false,
+        /** Emit the source code alongside the `source map`. */
+        // "inlineSources": false,
+        /** Don't emit **`.js`** files. */
+        // "emitDeclarationOnly": false,
+        /** Force TypeScript to use `importHelpers` everywhere. */
+        // "importHelpers": false,
+
+        // --- Project and File Configuration ---
+        /** Specify a list of available libraries to be included in the compilation. (Original: ES2022) */
+        "lib": ["ES2022"]
+        /** Enable incremental compilation. */
+        // "incremental": true,
+        /** Compile a project reference. */
+        // "composite": false,
+        /** Specify the folder for generated `.d.ts` files relative to the output folder. */
+        // "declarationMap": false,
+        /** Don't allow a `tsconfig.json` to be used for compilation. */
+        // "disableSourceOfProjectReferenceRedirect": false,
+        /** Ensure that source files are only read from the referenced project's output directory. */
+        // "disableSizeLimit": false,
+        /** Allows TypeScript to compile out of order. */
+        // "disableReferencedProjectLoad": false,
+        /** Configure the watch mode to check for changes to files. */
+        // "watch": false,
+        /** Specify the root directory of the project. */
+        // "project": "./",
+
+        // --- Interoperability and Environment ---
+        /** Treat commonjs modules as es modules. (Requires `esModuleInterop`) */
+        // "esModuleInterop": false,
+        /** Disable resolving symlinks to their real path. */
+        // "preserveSymlinks": false,
+        /** Use a different set of defaults for `moduleResolution` */
+        // "moduleResolution": "node",
+        /** Use case-sensitive file names. */
+        // "forceConsistentCasingInFileNames": true,
+        /** Use the system's newline character for output. */
+        // "newLine": "lf",
+        /** Allows accessing properties on types like `Record<string, unknown>` via bracket notation. */
+        // "exactOptionalPropertyTypes": false,
+        /** Require all property access to be explicit. */
+        // "noPropertyAccessFromIndexSignature": false,
+        /** Disables reporting an error when an imported symbol is not used. */
+        // "noUnusedImports": false,
+        /** Allows importing modules that do not have an explicit export. */
+        // "allowImportingTsExtensions": false,
+        /** Disallow default imports from modules with no default export. */
+        // "allowUmdGlobalAccess": false,
+        /** Report errors on all non-relative imports. */
+        // "verbatimModuleSyntax": false
+    },
+    /** Specify an array of filenames or patterns that should be excluded from the program. (Original: out, plugin) */
+    "exclude": ["out", "plugin", ".vscode*"]
+
+    // --- Project References and Includes ---
+    /** Specify an array of filenames or patterns that should be included in the program. */
+    // "include": ["src/**/*"],
+    /** Specify a list of file names to be included in the program. */
+    // "files": [],
+    /** Specify references to other projects that should be compiled. */
+    // "references": []
 }

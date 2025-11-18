@@ -1,0 +1,14 @@
+{
+    "name": "playcanvas-plugin",
+    "version": "0.0.0",
+    "description": "PlayCanvas Code Editor Typescript Server Plugin",
+    "license": "MIT",
+    "type": "commonjs",
+    "main": "out/index.js",
+    "files": [
+        "out"
+    ],
+    "dependencies": {
+        "typescript": "*"
+    }
+}
