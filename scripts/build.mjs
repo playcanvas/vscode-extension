@@ -2,7 +2,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 
 const WEB = process.argv.includes('--web') || false;
-const BETA = process.argv.includes('--beta') || false;
+const PRE = process.argv.includes('--pre-release') || false;
 
 const pkg = JSON.parse(fs.readFileSync('./plugin/package.json', 'utf8'));
 
@@ -46,4 +46,4 @@ execSync('npm pack', { stdio: 'inherit', cwd: './plugin' });
 execSync(`npm install ./plugin/${pkg.name}-0.0.0.tgz`, { stdio: 'inherit' });
 
 // pack extension
-execSync(`vsce package ${WEB ? '-t web' : ''} ${BETA ? '--pre-release' : ''}`, { stdio: 'inherit' });
+execSync(`vsce package ${WEB ? '-t web' : ''} ${PRE ? '--pre-release' : ''}`, { stdio: 'inherit' });
