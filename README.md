@@ -39,20 +39,19 @@ To initialize a local development environment for the Editor Frontend, ensure yo
 
 1. Clone the repository:
 
-   ```sh
-   git clone https://github.com/playcanvas/vscode-extension.git
-   cd vscode-extension
-   ```
+    ```sh
+    git clone https://github.com/playcanvas/vscode-extension.git
+    cd vscode-extension
+    ```
 
 2. Install dependencies for extension and plugin
 
-   ```sh
-   npm install
-   cd plugin
-   npm install
-   ```
+    ```sh
+    npm install
+    cd plugin
+    npm install
+    ```
 
 3. Run and Debug (F5) with the `Run Extension` configuration to start the extension a development environment. More information about how to develop extensions can be found [here](https://code.visualstudio.com/api/get-started/your-first-extension)
 
 4. To test your extension switch the launch configuration to `Test Extension` to run the testing suite
- 
