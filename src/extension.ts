@@ -45,7 +45,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         })
     );
 
-    // start rest client
+    // rest client
     const rest = new Rest({
         debug: DEBUG,
         url: API_URL,
@@ -54,46 +54,28 @@ export const activate = async (context: vscode.ExtensionContext) => {
     });
     effect(() => checkAuthError(rest.error.get()));
 
-    // start realtime connection
+    // realtime connection
     const sharedb = new ShareDb({
         debug: DEBUG,
         url: REALTIME_URL,
         origin: HOME_URL
     });
     effect(() => checkAuthError(sharedb.error.get()));
-    await sharedb.connect(accessToken);
-    context.subscriptions.push(
-        new vscode.Disposable(() => {
-            sharedb.disconnect();
-        })
-    );
 
-    // start messenger
+    // messenger
     const messenger = new Messenger({
         debug: DEBUG,
         url: MESSENGER_URL,
         origin: HOME_URL
     });
-    await messenger.connect(accessToken);
-    context.subscriptions.push(
-        new vscode.Disposable(() => {
-            messenger.disconnect();
-        })
-    );
 
-    // start relay
+    // relay
     const relay = new Relay({
         debug: DEBUG,
         url: RELAY_URL,
         origin: HOME_URL
     });
     effect(() => checkAuthError(relay.error.get()));
-    await relay.connect(accessToken);
-    context.subscriptions.push(
-        new vscode.Disposable(() => {
-            relay.disconnect();
-        })
-    );
 
     // find user id
     const userId = await rest.id();
@@ -361,6 +343,32 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // ensure folder directory exists
         await vscode.workspace.fs.createDirectory(folder.uri);
+
+        // connect sharedb, messenger, relay if not connected
+        if (!sharedb.connected.get()) {
+            await sharedb.connect(accessToken);
+            context.subscriptions.push(
+                new vscode.Disposable(() => {
+                    sharedb.disconnect();
+                })
+            );
+        }
+        if (!messenger.connected.get()) {
+            await messenger.connect(accessToken);
+            context.subscriptions.push(
+                new vscode.Disposable(() => {
+                    messenger.disconnect();
+                })
+            );
+        }
+        if (!relay.connected.get()) {
+            await relay.connect(accessToken);
+            context.subscriptions.push(
+                new vscode.Disposable(() => {
+                    relay.disconnect();
+                })
+            );
+        }
 
         // find project
         const project = projects.find((p) => projectToName(p) === folder.name);
