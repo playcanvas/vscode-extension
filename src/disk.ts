@@ -51,8 +51,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _ignoring = (_uri: vscode.Uri) => false;
 
-    private _ignoreAlert = false;
-
     constructor({ debug = false, events }: { debug?: boolean; events: EventEmitter<EventMap> }) {
         super(debug);
 
@@ -84,11 +82,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return;
         }
 
-        if (this._ignoreAlert) {
-            return;
-        }
-        this._ignoreAlert = true;
-
         // TODO: re-parse ignore file. For now notify to reload project
         vscode.window
             .showInformationMessage(
@@ -96,7 +89,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 'Reload'
             )
             .then(async (res) => {
-                this._ignoreAlert = false;
                 if (res === 'Reload') {
                     await vscode.commands.executeCommand('playcanvas.reloadProject');
                 }
@@ -325,9 +317,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // check if ignore updated
-            this._handleIgnoreUpdate(document.uri);
-
             // submit ops
             vscode2sharedb(contentChanges).forEach(([op, options]) => {
                 file.doc.submitOp(op, options);
@@ -340,6 +329,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;
+
+            // check if ignore updated
+            this._handleIgnoreUpdate(document.uri);
 
             // write to project
             const content = buffer.from(document.getText());
