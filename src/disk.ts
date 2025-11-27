@@ -51,6 +51,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _ignoring = (_uri: vscode.Uri) => false;
 
+    private _ignoreAlert = false;
+
     constructor({ debug = false, events }: { debug?: boolean; events: EventEmitter<EventMap> }) {
         super(debug);
 
@@ -72,7 +74,36 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         return res;
     }
 
-    private _parseIgnore(text: string, folderUri: vscode.Uri) {
+    private _handleIgnoreUpdate(uri: vscode.Uri) {
+        const folderUri = this._folderUri;
+        if (!folderUri) {
+            return;
+        }
+        const path = relativePath(uri, folderUri);
+        if (path !== Disk.IGNORE_FILE) {
+            return;
+        }
+
+        if (this._ignoreAlert) {
+            return;
+        }
+        this._ignoreAlert = true;
+
+        // TODO: re-parse ignore file. For now notify to reload project
+        vscode.window
+            .showInformationMessage(
+                `The ignore file has changed on disk. Please reload the project to apply the new ignore rules.`,
+                'Reload'
+            )
+            .then(async (res) => {
+                this._ignoreAlert = false;
+                if (res === 'Reload') {
+                    await vscode.commands.executeCommand('playcanvas.reloadProject');
+                }
+            });
+    }
+
+    private _parseIgnoreText(text: string, folderUri: vscode.Uri) {
         if (!text) {
             this._ignoring = (_uri: vscode.Uri) => false;
             this._log(`cleared ignore rules from empty ignore file`);
@@ -220,19 +251,24 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _watchEvents(folderUri: vscode.Uri) {
         const assetFileCreate = this._events.on('asset:file:create', async (path, type, content) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
+            this._handleIgnoreUpdate(uri);
             this._create(uri, type, content);
         });
         const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
+            this._handleIgnoreUpdate(uri);
             this._update(uri, op, content);
         });
         const assetFileDelete = this._events.on('asset:file:delete', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
+            this._handleIgnoreUpdate(uri);
             this._delete(uri);
         });
         const assetFileRename = this._events.on('asset:file:rename', async (oldPath, newPath) => {
             const oldUri = vscode.Uri.joinPath(folderUri, oldPath);
             const newUri = vscode.Uri.joinPath(folderUri, newPath);
+            this._handleIgnoreUpdate(oldUri);
+            this._handleIgnoreUpdate(newUri);
             this._rename(oldUri, newUri);
         });
         return () => {
@@ -288,6 +324,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (file.doc.data === document.getText()) {
                 return;
             }
+
+            // check if ignore updated
+            this._handleIgnoreUpdate(document.uri);
 
             // submit ops
             vscode2sharedb(contentChanges).forEach(([op, options]) => {
@@ -502,7 +541,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // parse ignore file
         const file = projectManager.files.get(Disk.IGNORE_FILE);
         if (file?.type === 'file') {
-            this._parseIgnore(file.doc.data, folderUri);
+            this._parseIgnoreText(file.doc.data, folderUri);
         }
 
         // read files to disk
