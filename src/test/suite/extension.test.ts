@@ -719,15 +719,12 @@ suite('Extension Test Suite', () => {
             'fs.writeFile'
         );
 
-        // add new asset to project
+        // add regular file that should be created as asset
         const name = 'regular_file.js';
         const document = `console.log('regular file');\n`;
 
         // create created promises
-        const createdPromises = [
-            watchFilePromise(folderUri, name, 'create')
-            // ignored files should not trigger creation watchers
-        ];
+        const createWatcher = watchFilePromise(folderUri, name, 'create');
 
         // remote asset creation
         const res = await assertResolves(
@@ -742,7 +739,7 @@ suite('Extension Test Suite', () => {
         );
 
         // wait for local file creation
-        await assertResolves(Promise.all(createdPromises), 'watcher.create');
+        await assertResolves(createWatcher, 'watcher.create');
 
         // check created asset
         const asset = assets.get(res.uniqueId);
