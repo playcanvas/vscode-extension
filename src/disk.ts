@@ -330,12 +330,21 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;
 
+            // check if file is in memory
+            const path = relativePath(document.uri, folderUri);
+            const file = projectManager.files.get(path);
+            if (!file || file.type !== 'file') {
+                return;
+            }
+
             // check if ignore updated
-            this._handleIgnoreUpdate(document.uri);
+            if (!file.saved) {
+                this._handleIgnoreUpdate(document.uri);
+            }
 
             // write to project
             const content = buffer.from(document.getText());
-            projectManager.writeFile(relativePath(document.uri, folderUri), content);
+            projectManager.writeFile(path, content);
         });
 
         return () => {
