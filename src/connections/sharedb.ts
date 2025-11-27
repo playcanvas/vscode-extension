@@ -189,6 +189,13 @@ class ShareDb {
     }
 
     async subscribe(type: string, key: string) {
+        // check if already subscribed
+        if (this.subscriptions.has(`${type}:${key}`)) {
+            this._log('skipped as already subscribed to', type, key);
+            return this.subscriptions.get(`${type}:${key}`);
+        }
+
+        // subscribe to doc
         const [connection] = await this._active.promise;
         return new Promise<sharedb.Doc | undefined>((resolve) => {
             const doc = connection.get(type, key);
@@ -206,6 +213,7 @@ class ShareDb {
             doc.subscribe();
             this._log('doc.subscribe', type, key);
 
+            // track subscription
             this.subscriptions.set(`${type}:${key}`, doc);
         });
     }
@@ -221,13 +229,18 @@ class ShareDb {
     }
 
     async unsubscribe(type: string, key: string) {
-        await this._active.promise;
+        // check if subscribed
         const doc = this.subscriptions.get(`${type}:${key}`);
         if (!doc) {
             this._log('skipped as not subscribed to', type, key);
             return;
         }
+
+        // unsubscribe from doc
+        await this._active.promise;
         doc.destroy();
+
+        // remove subscription
         this.subscriptions.delete(`${type}:${key}`);
     }
 

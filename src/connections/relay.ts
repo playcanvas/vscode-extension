@@ -23,6 +23,8 @@ class Relay extends EventEmitter<EventMap> {
 
     origin: string;
 
+    rooms = new Map<number, Set<string>>();
+
     connected = signal<boolean>(false);
 
     error = signal<Error | undefined>(undefined);
@@ -40,6 +42,10 @@ class Relay extends EventEmitter<EventMap> {
             return;
         }
         console.log(`[${this.constructor.name}]`, ...args);
+    }
+
+    private _warn(...args: unknown[]) {
+        console.warn(`[${this.constructor.name}]`, ...args);
     }
 
     private _connect(accessToken: string) {
@@ -113,7 +119,12 @@ class Relay extends EventEmitter<EventMap> {
                 return;
             }
             try {
-                const { t, ...rest } = JSON.parse(raw.toString());
+                const { t, error, ...rest } = JSON.parse(raw.toString());
+                if (error) {
+                    this._warn('relay.error', error);
+                    return;
+                }
+
                 this._log('socket.message', t, rest);
                 this.emit(t, rest);
             } catch (e) {
@@ -129,6 +140,13 @@ class Relay extends EventEmitter<EventMap> {
     }
 
     join(name: string, projectId: number) {
+        // check if already joined
+        if (this.rooms.get(projectId)?.has(name)) {
+            this._log(`skipped joining room ${name} as already joined`);
+            return;
+        }
+
+        // join room
         this.send({
             t: 'room:join',
             name: name,
@@ -139,15 +157,31 @@ class Relay extends EventEmitter<EventMap> {
         }).then(() => {
             this._log(`joined room ${name}`);
         });
+
+        // track joined rooms
+        if (!this.rooms.has(projectId)) {
+            this.rooms.set(projectId, new Set());
+        }
+        this.rooms.get(projectId)?.add(name);
     }
 
-    leave(name: string) {
+    leave(name: string, projectId: number) {
+        // check if joined
+        if (!this.rooms.get(projectId)?.has(name)) {
+            this._log(`skipped leaving room ${name} as not joined`);
+            return;
+        }
+
+        // leave room
         this.send({
             t: 'room:leave',
             name: name
         }).then(() => {
             this._log(`left room ${name}`);
         });
+
+        // track left rooms
+        this.rooms.get(projectId)?.delete(name);
     }
 
     message(name: string, msg: object, userId?: number) {
