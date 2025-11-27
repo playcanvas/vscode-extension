@@ -45,6 +45,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _projectManager?: ProjectManager;
 
+    private _opened = new Set<string>();
+
     private _debouncer: Set<string> = new Set<string>();
 
     private _promises = new Map<string, Promise<void>>();
@@ -187,6 +189,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 // save document
                 await open.save();
             } else {
+                this._debouncer.add(`${uri}:change`);
                 await vscode.workspace.fs.writeFile(uri, content);
             }
 
@@ -277,6 +280,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 continue;
             }
             const path = relativePath(open.uri, folderUri);
+            this._opened.add(open.uri.path);
             this._events.emit('asset:doc:open', path);
         }
         const onopen = vscode.workspace.onDidOpenTextDocument((document) => {
@@ -284,6 +288,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
             const path = relativePath(document.uri, folderUri);
+            this._opened.add(document.uri.path);
             this._events.emit('asset:doc:open', path);
         });
         const onclose = vscode.workspace.onDidCloseTextDocument((document) => {
@@ -291,6 +296,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
             const path = relativePath(document.uri, folderUri);
+            this._opened.delete(document.uri.path);
             this._events.emit('asset:doc:close', path);
         });
 
@@ -365,6 +371,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                   content?: Uint8Array;
               }
             | {
+                  action: 'change';
+                  uri: vscode.Uri;
+                  type: 'file';
+                  content: Uint8Array;
+              }
+            | {
                   action: 'delete';
                   uri: vscode.Uri;
                   type?: 'file' | 'folder';
@@ -422,6 +434,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             projectManager.create(path, type, op.content);
                             break;
                         }
+                        case 'change': {
+                            const path = relativePath(op.uri, folderUri);
+                            this._log(`change.local ${op.uri}`);
+                            projectManager.writeFile(path, op.content);
+                            break;
+                        }
                         case 'delete': {
                             const path = relativePath(op.uri, folderUri);
                             this._log(`delete.local ${op.uri}`);
@@ -436,24 +454,24 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         };
 
         // file system watcher
-        const watcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(folderUri, '**'),
-            false,
-            true,
-            false
-        );
+        const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folderUri, '**'));
         watcher.onDidCreate(async (uri) => {
             if (folderUri.scheme !== uri.scheme) {
                 return;
             }
             const key = `${uri}:create`;
+
+            // check local echo
             if (this._debouncer.has(key)) {
                 this._debouncer.delete(key);
                 return;
             }
+
+            // ignore check
             if (this._ignoring(uri)) {
                 return;
             }
+
             const stat = await vscode.workspace.fs.stat(uri);
             const type = stat.type === vscode.FileType.Directory ? 'folder' : 'file';
             const content = type === 'file' ? await vscode.workspace.fs.readFile(uri) : undefined;
@@ -464,18 +482,64 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 content
             });
         });
+        watcher.onDidChange(async (uri) => {
+            if (folderUri.scheme !== uri.scheme) {
+                return;
+            }
+            const key = `${uri}:change`;
+
+            // check local echo
+            if (this._debouncer.has(key)) {
+                this._debouncer.delete(key);
+                return;
+            }
+
+            // ignore check
+            if (this._ignoring(uri)) {
+                return;
+            }
+
+            // check if document is not open
+            // NOTE: document change event handles open files
+            if (this._opened.has(uri.path)) {
+                return;
+            }
+
+            // check if file is in memory and of type file
+            const path = relativePath(uri, folderUri);
+            const file = projectManager.files.get(path);
+            if (!file || file.type !== 'file') {
+                return;
+            }
+
+            // NOTE: mark as unsaved to allow project manager write
+            file.saved = false;
+
+            const content = await vscode.workspace.fs.readFile(uri);
+            defer({
+                action: 'change',
+                uri,
+                type: 'file',
+                content
+            });
+        });
         watcher.onDidDelete(async (uri) => {
             if (folderUri.scheme !== uri.scheme) {
                 return;
             }
             const key = `${uri}:delete`;
+
+            // check local echo
             if (this._debouncer.has(key)) {
                 this._debouncer.delete(key);
                 return;
             }
+
+            // ignore check
             if (this._ignoring(uri)) {
                 return;
             }
+
             defer({
                 action: 'delete',
                 uri
