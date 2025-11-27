@@ -431,6 +431,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this.waitForFile(path).then((file) => {
                 // join relay room
                 this._relay.join(`document-${file.uniqueId}`, projectId);
+                this._cleanup.push(async () => {
+                    this._relay.leave(`document-${file.uniqueId}`, projectId);
+                });
             });
         });
         const docCloseHandle = this._events.on('asset:doc:close', (path: string) => {
@@ -441,7 +444,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
 
             // leave relay room
-            this._relay.leave(`document-${file.uniqueId}`);
+            this._relay.leave(`document-${file.uniqueId}`, projectId);
         });
 
         return () => {

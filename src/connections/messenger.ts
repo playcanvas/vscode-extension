@@ -78,6 +78,8 @@ class Messenger extends EventEmitter<EventMap> {
 
     origin: string;
 
+    watchers = new Set<number>();
+
     connected = signal<boolean>(false);
 
     constructor({ debug = false, url, origin }: { debug?: boolean; url: string; origin: string }) {
@@ -195,6 +197,13 @@ class Messenger extends EventEmitter<EventMap> {
     }
 
     watch(projectId: number) {
+        // check if already watching
+        if (this.watchers.has(projectId)) {
+            this._log(`skipped as already watching project ${projectId}`);
+            return;
+        }
+
+        // send watch request
         this.send({
             name: 'project.watch',
             target: { type: 'general' },
@@ -203,9 +212,19 @@ class Messenger extends EventEmitter<EventMap> {
         }).then(() => {
             this._log(`watching project ${projectId}`);
         });
+
+        // track watchers
+        this.watchers.add(projectId);
     }
 
     unwatch(projectId: number) {
+        // check if watching
+        if (!this.watchers.has(projectId)) {
+            this._log(`skipped unwatching project ${projectId} as not watching`);
+            return;
+        }
+
+        // send unwatch request
         this.send({
             name: 'project.unwatch',
             target: { type: 'general' },
@@ -214,6 +233,9 @@ class Messenger extends EventEmitter<EventMap> {
         }).then(() => {
             this._log(`unwatched project ${projectId}`);
         });
+
+        // remove from watchers
+        this.watchers.delete(projectId);
     }
 
     async send(data: object) {
