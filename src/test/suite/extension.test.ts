@@ -691,7 +691,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(Buffer.from(content).toString(), document);
     });
 
-    test('ignore file support', async () => {
+    test('.pcignore parsing (file and folder)', async () => {
         const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
         assert.ok(extension);
         await assertResolves(extension.activate(), 'extension.activate');
