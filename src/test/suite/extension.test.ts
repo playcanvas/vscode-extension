@@ -336,7 +336,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(Buffer.from(content).toString(), `// REMOTE COMMENT\n${document}`);
     });
 
-    test('file changes (local -> remote)', async () => {
+    test('file changes (opened local -> remote)', async () => {
         const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
         assert.ok(extension);
         await assertResolves(extension.activate(), 'extension.activate');
@@ -346,7 +346,7 @@ suite('Extension Test Suite', () => {
         assert.ok(folderUri);
 
         // get asset and its document content
-        const asset = await assetCreate({ name: 'change_local_remote.js', content: '// SAMPLE CONTENT' });
+        const asset = await assetCreate({ name: 'change_opened_local_remote.js', content: '// SAMPLE CONTENT' });
         assert.ok(asset);
         const document = documents.get(asset.uniqueId);
         assert.ok(document);
@@ -367,6 +367,40 @@ suite('Extension Test Suite', () => {
         // save document to trigger remote update
         const tdoc = await vscode.workspace.openTextDocument(uri);
         await tdoc.save();
+
+        // wait for remote update to be detected
+        await assertResolves(updated, 'sharedb.op');
+    });
+
+    test('file changes (closed local -> remote)', async () => {
+        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
+        assert.ok(extension);
+        await assertResolves(extension.activate(), 'extension.activate');
+
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri);
+
+        // create asset
+        const asset = await assetCreate({ name: 'change_closed_local_remote.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset);
+
+        // get document content
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document);
+
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // create update promise
+        const newContent = `// CLOSED LOCAL TEST COMMENT\n${document}`;
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
+            [0, { d: document.length }], // delete existing content
+            [0, newContent] // add new content
+        ]);
+
+        // make local change by writing to the file directly
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(newContent));
 
         // wait for remote update to be detected
         await assertResolves(updated, 'sharedb.op');
