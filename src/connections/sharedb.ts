@@ -53,6 +53,10 @@ class ShareDb {
         console.log(`[${this.constructor.name}]`, ...args);
     }
 
+    private _warn(...args: unknown[]) {
+        console.warn(`[${this.constructor.name}]`, ...args);
+    }
+
     private _connect(accessToken: string) {
         const options = WEB
             ? undefined
@@ -224,7 +228,8 @@ class ShareDb {
         await this._active.promise;
         const doc = this.subscriptions.get(`${type}:${key}`);
         if (!doc) {
-            throw new Error('Not subscribed');
+            this._warn('not subscribed to', type, key);
+            return;
         }
         doc.destroy();
         this.subscriptions.delete(`${type}:${key}`);
