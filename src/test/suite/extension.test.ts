@@ -407,7 +407,7 @@ suite('Extension Test Suite', () => {
     });
 
     // FIXME: fails as notification popup shows when override applied
-    test.skip('file changes (local overrides remote)', async () => {
+    test('file changes (local overrides remote)', async () => {
         const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
         assert.ok(extension);
         await assertResolves(extension.activate(), 'extension.activate');
