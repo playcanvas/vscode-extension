@@ -32,6 +32,7 @@ The PlayCanvas VS Code Extension is a realtime editing environment for text-base
 - Integrated types with type checking
 - Branch switching
 - List view for currently online collaborators per file
+- Ignore file support (Beta)
 
 ## Local Development
 
