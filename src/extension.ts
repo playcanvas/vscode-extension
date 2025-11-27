@@ -393,7 +393,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                doc.destroy();
+                sharedb.unsubscribe('settings', `project_${project.id}_${userId}`);
             })
         );
         const branchId = doc.data?.branch ?? '';
