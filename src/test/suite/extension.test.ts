@@ -690,4 +690,69 @@ suite('Extension Test Suite', () => {
         const content = await assertResolves(vscode.workspace.fs.readFile(newUri), 'fs.readFile');
         assert.strictEqual(Buffer.from(content).toString(), document);
     });
+
+    test('ignore file support', async () => {
+        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
+        assert.ok(extension);
+        await assertResolves(extension.activate(), 'extension.activate');
+
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri);
+
+        // create .pcignore file
+        const ignoreContent = `ignored_file.js\nignored_folder/\n`;
+        const ignoreUri = vscode.Uri.joinPath(folderUri, '.pcignore');
+        await assertResolves(vscode.workspace.fs.writeFile(ignoreUri, Buffer.from(ignoreContent)), 'fs.writeFile');
+
+        // create ignored file and folder
+        const ignoredFileUri = vscode.Uri.joinPath(folderUri, 'ignored_file.js');
+        const ignoredFolderUri = vscode.Uri.joinPath(folderUri, 'ignored_folder');
+        const ignoredFolderFileUri = vscode.Uri.joinPath(ignoredFolderUri, 'file_in_ignored_folder.js');
+        await assertResolves(
+            vscode.workspace.fs.writeFile(ignoredFileUri, Buffer.from('// IGNORED FILE')),
+            'fs.writeFile'
+        );
+        await assertResolves(vscode.workspace.fs.createDirectory(ignoredFolderUri), 'fs.createDirectory');
+        await assertResolves(
+            vscode.workspace.fs.writeFile(ignoredFolderFileUri, Buffer.from('// IGNORED FOLDER FILE')),
+            'fs.writeFile'
+        );
+
+        // add new asset to project
+        const name = 'regular_file.js';
+        const document = `console.log('regular file');\n`;
+
+        // create created promises
+        const createdPromises = [
+            watchFilePromise(folderUri, name, 'create')
+            // ignored files should not trigger creation watchers
+        ];
+
+        // remote asset creation
+        const res = await assertResolves(
+            rest.assetCreate(project.id, projectSettings.branch, {
+                type: 'script',
+                name: name,
+                preload: true,
+                filename: `${name}.js`,
+                file: new Blob([document], { type: 'text/plain' })
+            }),
+            'rest.assetCreate'
+        );
+
+        // wait for local file creation
+        await assertResolves(Promise.all(createdPromises), 'watcher.create');
+
+        // check created asset
+        const asset = assets.get(res.uniqueId);
+        assert.ok(asset);
+        assert.strictEqual(asset.name, name);
+
+        // check ignored files do not exist as assets
+        const ignoredFileAsset = Array.from(assets.values()).find((a) => a.name === 'ignored_file.js');
+        assert.strictEqual(ignoredFileAsset, undefined);
+        const ignoredFolderFileAsset = Array.from(assets.values()).find((a) => a.name === 'file_in_ignored_folder.js');
+        assert.strictEqual(ignoredFolderFileAsset, undefined);
+    });
 });
