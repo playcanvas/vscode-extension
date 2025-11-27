@@ -198,7 +198,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         const branches = await rest.projectBranches(project_id);
         const main = branches.find((b) => b.permanent);
         if (!main) {
-            vscode.window.showErrorMessage(`Failed to find main branch to switch to`);
+            handleError(new Error(`Failed to find main branch to switch to`));
             return;
         }
 
@@ -216,7 +216,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // check status
         if (status !== 'success') {
-            vscode.window.showErrorMessage(`Failed to restore to checkpoint ${checkpoint_id}`);
+            handleError(new Error(`Failed to restore to checkpoint ${checkpoint_id}`));
             return;
         }
 
@@ -388,7 +388,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // load branch info
         const doc = await sharedb.subscribe('settings', `project_${project.id}_${userId}`);
         if (!doc) {
-            vscode.window.showErrorMessage(`Failed to load project settings for project ${project.id}`);
+            handleError(new Error(`Failed to load project settings for project ${project.id}`));
             return;
         }
         context.subscriptions.push(
