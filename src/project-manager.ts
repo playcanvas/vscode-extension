@@ -695,6 +695,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (!buffer.cmp(buffer.from(file.doc.data), content)) {
             // overwrite entire document content
             // vscode -> shareDB
+            // FIXME: optimize to use ops instead of full replace
             file.doc.submitOp([0, { d: file.doc.data.length }], {
                 source: ShareDb.SOURCE
             });
