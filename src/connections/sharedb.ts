@@ -190,7 +190,7 @@ class ShareDb {
 
     async subscribe(type: string, key: string) {
         const [connection] = await this._active.promise;
-        return new Promise<sharedb.Doc>((resolve) => {
+        return new Promise<sharedb.Doc | undefined>((resolve) => {
             const doc = connection.get(type, key);
             doc.on('load', () => {
                 this._log('doc.load', type, key);
@@ -198,6 +198,7 @@ class ShareDb {
             });
             doc.on('error', (err) => {
                 this._log('doc.error', err);
+                resolve(undefined);
             });
             doc.on('destroy', () => {
                 this._log('doc.destroy', type, key);
@@ -211,11 +212,11 @@ class ShareDb {
 
     async bulkSubscribe(subscriptions: [string, string][]) {
         const [connection] = await this._active.promise;
-        return new Promise<sharedb.Doc[]>((resolve, reject) => {
+        return new Promise<(sharedb.Doc | undefined)[]>((resolve) => {
             connection.startBulk();
             const docs = Promise.all(subscriptions.map(([type, key]) => this.subscribe(type, key)));
             connection.endBulk();
-            docs.then(resolve).catch(reject);
+            docs.then(resolve);
         });
     }
 

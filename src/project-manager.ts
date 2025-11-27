@@ -284,6 +284,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // subscribe to asset document
             const doc1 = await this._sharedb.subscribe('assets', `${uniqueId}`);
+            if (!doc1) {
+                this.error.set(() => new Error(`Failed to subscribe to new asset ${uniqueId}`));
+                return;
+            }
             this._cleanup.push(async () => {
                 await this._sharedb.unsubscribe('assets', `${uniqueId}`);
             });
@@ -318,6 +322,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // subscribe to asset document
             const doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
+            if (!doc2) {
+                this.error.set(() => new Error(`Failed to subscribe to new document ${uniqueId}`));
+                return;
+            }
             this._cleanup.push(async () => {
                 await this._sharedb.unsubscribe('documents', `${uniqueId}`);
             });
@@ -737,6 +745,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             for (let j = 0; j < docs.length; j++) {
                 const doc = docs[j];
                 const uniqueId = batch[j].uniqueId;
+                if (!doc) {
+                    this.error.set(() => new Error(`Failed to subscribe to asset ${uniqueId}`));
+                    loadAssetNext();
+                    continue;
+                }
 
                 // add asset
                 this._addAsset(uniqueId, doc);
@@ -789,7 +802,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             for (let j = 0; j < docs.length; j++) {
                 const doc = docs[j];
                 const asset = batch[j];
+                if (!doc) {
+                    this.error.set(() => new Error(`Failed to subscribe to document ${asset.uniqueId}`));
+                    loadFileNext();
+                    continue;
+                }
 
+                // add file to file system
                 await this._addFile(asset.uniqueId, doc);
                 loadFileNext();
             }
