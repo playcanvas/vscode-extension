@@ -97,9 +97,10 @@ class Auth {
                     // resolve access token
                     resolve(accessToken);
 
-                    // respond to the browser
-                    res.writeHead(200, { 'Content-Type': 'text/plain' });
-                    res.end('You can now close this window and return to VS Code.');
+                    // redirect to vscode
+                    const uri = vscode.Uri.from({ scheme: vscode.env.uriScheme });
+                    res.writeHead(302, { location: uri.toString() });
+                    res.end();
 
                     // close server
                     server.close();
