@@ -98,7 +98,7 @@ class Auth {
                     resolve(accessToken);
 
                     // redirect to vscode
-                    const uri = vscode.Uri.from({ scheme: vscode.env.uriScheme });
+                    const uri = vscode.Uri.from({ scheme: vscode.env.uriScheme, authority: 'playcanvas.playcanvas' });
                     res.writeHead(302, { Location: uri.toString() });
                     res.end();
 
