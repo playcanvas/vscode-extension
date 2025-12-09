@@ -6,16 +6,14 @@ class Mutex<T> {
         const promise = tail.then(() => {
             return fn();
         });
-        this._chains.set(
-            key,
-            promise
-                .catch(() => undefined)
-                .finally(() => {
-                    if (this._chains.get(key) === promise) {
-                        this._chains.delete(key);
-                    }
-                })
-        );
+        const cleanup = promise
+            .catch(() => undefined)
+            .finally(() => {
+                if (this._chains.get(key) === cleanup) {
+                    this._chains.delete(key);
+                }
+            });
+        this._chains.set(key, cleanup);
         return promise;
     }
 
