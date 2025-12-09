@@ -99,7 +99,7 @@ class Auth {
 
                     // redirect to vscode
                     const uri = vscode.Uri.from({ scheme: vscode.env.uriScheme });
-                    res.writeHead(302, { location: uri.toString() });
+                    res.writeHead(302, { Location: uri.toString() });
                     res.end();
 
                     // close server
