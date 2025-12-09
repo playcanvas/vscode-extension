@@ -8,7 +8,13 @@ class Mutex<T> {
         });
         this._chains.set(
             key,
-            promise.catch(() => undefined)
+            promise
+                .catch(() => undefined)
+                .finally(() => {
+                    if (this._chains.get(key) === promise) {
+                        this._chains.delete(key);
+                    }
+                })
         );
         return promise;
     }
