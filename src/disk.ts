@@ -8,6 +8,7 @@ import type { ShareDbTextOp } from './typings/sharedb';
 import * as buffer from './utils/buffer';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
+import { Mutex } from './utils/mutex';
 import { parsePath, sharedb2vscode, relativePath, vscode2sharedb, uriStartsWith } from './utils/utils';
 
 const fileExists = async (uri: vscode.Uri) => {
@@ -49,7 +50,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _debouncer: Set<string> = new Set<string>();
 
-    private _promises = new Map<string, Promise<void>>();
+    private _mutex = new Mutex<void>();
 
     private _ignoring = (_uri: vscode.Uri) => false;
 
@@ -57,21 +58,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         super(debug);
 
         this._events = events;
-    }
-
-    private async _atomically<T>(key: string, fn: () => Promise<T>) {
-        let promise = Promise.resolve();
-        if (this._promises.has(key)) {
-            promise = this._promises.get(key) as Promise<void>;
-        }
-        const res = fn();
-        this._promises.set(
-            key,
-            promise.then(async () => {
-                await res;
-            })
-        );
-        return res;
     }
 
     private _handleIgnoreUpdate(uri: vscode.Uri) {
@@ -124,7 +110,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
-        return this._atomically(`${uri}`, async () => {
+        return this._mutex.atomic(`${uri}`, async () => {
             if (this._ignoring(uri)) {
                 return;
             }
@@ -171,7 +157,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _update(uri: vscode.Uri, op: ShareDbTextOp, content: Uint8Array) {
-        return this._atomically(`${uri}`, async () => {
+        return this._mutex.atomic(`${uri}`, async () => {
             if (this._ignoring(uri)) {
                 return;
             }
@@ -198,7 +184,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _delete(uri: vscode.Uri) {
-        return this._atomically(`${uri}`, async () => {
+        return this._mutex.atomic(`${uri}`, async () => {
             if (this._ignoring(uri)) {
                 return;
             }
@@ -221,7 +207,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _rename(oldUri: vscode.Uri, newUri: vscode.Uri) {
-        return this._atomically(`${oldUri}`, async () => {
+        return this._mutex.atomic(`${oldUri}`, async () => {
             if (this._ignoring(oldUri)) {
                 return;
             }
@@ -627,8 +613,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             unwatchDocument();
             unwatchDisk();
 
-            this._promises.clear();
             this._debouncer.clear();
+            this._mutex.clear();
 
             this._folderUri = undefined;
             this._projectManager = undefined;
