@@ -12,6 +12,10 @@ class Mutex<T> {
         );
         return promise;
     }
+
+    clear() {
+        this._chains.clear();
+    }
 }
 
 export { Mutex };

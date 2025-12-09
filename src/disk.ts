@@ -614,6 +614,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             unwatchDisk();
 
             this._debouncer.clear();
+            this._mutex.clear();
 
             this._folderUri = undefined;
             this._projectManager = undefined;
