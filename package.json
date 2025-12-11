@@ -46,10 +46,6 @@
             {
                 "command": "playcanvas.switchBranch",
                 "title": "PlayCanvas: Switch Branch"
-            },
-            {
-                "command": "playcanvas.openFile",
-                "title": "PlayCanvas: Open File"
             }
         ],
         "typescriptServerPlugins": [

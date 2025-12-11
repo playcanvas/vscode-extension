@@ -132,22 +132,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
     });
     context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
 
-    // FIXME: remove once tested UriHandler
-    context.subscriptions.push(
-        vscode.commands.registerCommand('playcanvas.openFile', async () => {
-            const filePath = await vscode.window.showInputBox({
-                prompt: 'Enter full project file path to open. Defaults to /Blank Project (4)/main.js',
-                ignoreFocusOut: true
-            });
-            const uri = vscode.Uri.from({
-                scheme: vscode.env.uriScheme,
-                authority: 'playcanvas.playcanvas',
-                path: filePath || '/Blank Project (4)/main.js'
-            });
-            vscode.env.openExternal(uri);
-        })
-    );
-
     // collab provider
     const collabProvider = new CollabProvider({
         debug: DEBUG,
