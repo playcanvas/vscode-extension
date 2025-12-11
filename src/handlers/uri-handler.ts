@@ -37,8 +37,8 @@ class UriHandler implements vscode.UriHandler {
         }
 
         // parse uri: /{projectName} ({projectId})/{filePath}
-        const [_blank, projectName, ...rest] = uri.path.split('/');
-        const filePath = rest.join('/');
+        const [_blank, projectName, ...pathParts] = uri.path.split('/');
+        const filePath = pathParts.join('/');
 
         // fetch all user projects
         const projects = await this._rest.userProjects(this._userId, 'profile');
