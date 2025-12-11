@@ -134,7 +134,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // FIXME: remove once tested UriHandler
     context.subscriptions.push(
-        vscode.commands.registerCommand('playcanvas.uriTest', async () => {
+        vscode.commands.registerCommand('playcanvas.openFile', async () => {
             const filePath = await vscode.window.showInputBox({
                 prompt: 'Enter full project file path to open. Defaults to /Blank Project (4)/main.js',
                 ignoreFocusOut: true

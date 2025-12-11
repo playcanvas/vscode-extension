@@ -48,8 +48,8 @@
                 "title": "PlayCanvas: Switch Branch"
             },
             {
-                "command": "playcanvas.uriTest",
-                "title": "PlayCanvas: URI Test"
+                "command": "playcanvas.openFile",
+                "title": "PlayCanvas: Open File"
             }
         ],
         "typescriptServerPlugins": [
