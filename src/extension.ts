@@ -14,7 +14,7 @@ import { CollabProvider } from './providers/collab-provider';
 import type { EventMap } from './typings/event-map';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect } from './utils/signal';
-import { projectToName, uriEquals, uriStartsWith } from './utils/utils';
+import { projectToName, uriStartsWith } from './utils/utils';
 
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
@@ -465,7 +465,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // mount disk
         await disk.link({
             folderUri,
-            projectManager
+            projectManager,
+            openFilePath: await uriHandler.getOpenFilePath(folderUri)
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
@@ -483,13 +484,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 collabProvider.unlink();
             })
         );
-
-        // check if we need to open a file
-        const openFile = await uriHandler.flushOpenFile();
-        if (openFile && uriEquals(vscode.Uri.parse(openFile.folderUriStr), folder.uri) && openFile.filePath) {
-            const fileUri = vscode.Uri.joinPath(folder.uri, openFile.filePath);
-            await vscode.window.showTextDocument(fileUri);
-        }
 
         // store in cache
         cache.set(project.id, { branchId, projectManager });

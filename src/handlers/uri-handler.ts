@@ -3,11 +3,6 @@ import * as vscode from 'vscode';
 import type { Rest } from '../connections/rest';
 import { projectToName, uriStartsWith } from '../utils/utils';
 
-type OpenFileState = {
-    folderUriStr: string;
-    filePath: string;
-};
-
 class UriHandler implements vscode.UriHandler {
     static OPEN_FILE_KEY = 'playcanvas.openFile';
 
@@ -66,8 +61,9 @@ class UriHandler implements vscode.UriHandler {
         ) {
             if (filePath) {
                 // open file
-                const fileUri = vscode.Uri.joinPath(folderUri, filePath);
-                await vscode.commands.executeCommand('vscode.open', fileUri);
+                const openUri = vscode.Uri.joinPath(folderUri, filePath);
+                const openDoc = await vscode.workspace.openTextDocument(openUri);
+                await vscode.window.showTextDocument(openDoc);
             }
             return;
         }
@@ -83,10 +79,23 @@ class UriHandler implements vscode.UriHandler {
         await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
     }
 
-    async flushOpenFile(): Promise<OpenFileState | undefined> {
-        const openFile = this._context.globalState.get<OpenFileState>(UriHandler.OPEN_FILE_KEY);
+    async getOpenFilePath(folderUri: vscode.Uri): Promise<string | undefined> {
+        // retrieve and clear stored open file
+        const openFile = this._context.globalState.get<{
+            folderUriStr: string;
+            filePath: string;
+        }>(UriHandler.OPEN_FILE_KEY);
         await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, undefined);
-        return openFile;
+
+        // check if valid
+        if (!openFile) {
+            return;
+        }
+        if (!uriStartsWith(vscode.Uri.parse(openFile.folderUriStr), folderUri)) {
+            return;
+        }
+
+        return openFile.filePath;
     }
 }
 
