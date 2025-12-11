@@ -52,14 +52,14 @@ class UriHandler implements vscode.UriHandler {
         // build folder uri
         const folderUri = vscode.Uri.joinPath(this._rootUri, projectToName(project));
 
-        // check if current workspace is already the project
+        // check if current workspace already has the project opened
         // TODO: multiple workspaces not supported
         const folders = vscode.workspace.workspaceFolders ?? [];
         if (folders.length > 1) {
             return;
         }
         const folder = folders[0];
-        if (uriStartsWith(folder.uri, this._rootUri) && folder.name === projectToName(project)) {
+        if (folder && uriStartsWith(folder.uri, this._rootUri) && folder.name === projectToName(project)) {
             if (filePath) {
                 // open file
                 const openUri = vscode.Uri.joinPath(folderUri, filePath);
