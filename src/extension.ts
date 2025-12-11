@@ -7,13 +7,14 @@ import { Relay } from './connections/relay';
 import { Rest } from './connections/rest';
 import { ShareDb } from './connections/sharedb';
 import { Disk } from './disk';
+import { UriHandler } from './handlers/uri-handler';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
 import type { EventMap } from './typings/event-map';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect } from './utils/signal';
-import { projectToName, uriStartsWith } from './utils/utils';
+import { projectToName, uriEquals, uriStartsWith } from './utils/utils';
 
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
@@ -121,6 +122,27 @@ export const activate = async (context: vscode.ExtensionContext) => {
         await projectManager.link(projectState);
         await disk.link(diskState);
     };
+
+    // uri handler
+    const uriHandler = new UriHandler({
+        context,
+        rootUri,
+        userId,
+        rest
+    });
+    context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
+
+    // FIXME: remove once tested UriHandler
+    context.subscriptions.push(
+        vscode.commands.registerCommand('playcanvas.uriTest', async () => {
+            const uri = vscode.Uri.from({
+                scheme: vscode.env.uriScheme,
+                authority: 'playcanvas.playcanvas',
+                path: '/Blank Project (4)/main.js'
+            });
+            vscode.env.openExternal(uri);
+        })
+    );
 
     // collab provider
     const collabProvider = new CollabProvider({
@@ -457,6 +479,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 collabProvider.unlink();
             })
         );
+
+        // check if we need to open a file
+        const openFile = await uriHandler.flushOpenFile();
+        if (openFile && uriEquals(vscode.Uri.parse(openFile.folderUriStr), folder.uri) && openFile.filePath) {
+            const fileUri = vscode.Uri.joinPath(folder.uri, openFile.filePath);
+            await vscode.window.showTextDocument(fileUri);
+        }
 
         // store in cache
         cache.set(project.id, { branchId, projectManager });

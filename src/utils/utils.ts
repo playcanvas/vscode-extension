@@ -16,6 +16,10 @@ export const relativePath = (uri: vscode.Uri, folder: vscode.Uri) => {
     return uri.path.substring(folder.path.length + 1);
 };
 
+export const uriEquals = (uri1: vscode.Uri, uri2: vscode.Uri) => {
+    return uri1.scheme === uri2.scheme && uri1.path.toLowerCase() === uri2.path.toLowerCase();
+};
+
 export const uriStartsWith = (uri: vscode.Uri, folder: vscode.Uri) => {
     return uri.scheme === folder.scheme && uri.path.toLowerCase().startsWith(folder.path.toLowerCase());
 };
