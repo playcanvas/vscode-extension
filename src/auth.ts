@@ -117,9 +117,9 @@ class Auth {
         });
     }
 
-    async getAccessToken(cancellable = false) {
+    async getAccessToken(manual = false) {
         let accessToken: string | undefined = undefined;
-        if (!cancellable) {
+        if (!manual) {
             // retrieve stored token
             accessToken = await this._context.secrets.get('playcanvas.accessToken');
 
@@ -130,7 +130,7 @@ class Auth {
             // request token
             accessToken = await this._requestToken();
             if (!accessToken) {
-                if (cancellable) {
+                if (manual) {
                     vscode.window.showInformationMessage('Aborted updating PlayCanvas Access Token');
                     return '';
                 }
