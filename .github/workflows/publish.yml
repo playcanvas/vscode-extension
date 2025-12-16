@@ -28,8 +28,10 @@ jobs:
             - name: Install Dependencies
               run: npm ci
 
-            - name: Install vsce
-              run: npm install -g @vscode/vsce
+            - name: Install vsce and ovsx
+              run: |
+                  npm install -g @vscode/vsce
+                  npm install -g ovsx
 
             - name: Build PlayCanvas VS Code Extension
               run: |
@@ -39,4 +41,11 @@ jobs:
                   vsce publish \
                     -p ${{ secrets.VSCE_TOKEN }} \
                     -i playcanvas*.vsix \
-                    ${{github.event.inputs.prerelease == 'true' && '--pre-release' || ''}}
+                    ${{ github.event.inputs.prerelease == 'true' && '--pre-release' || '' }}
+
+            - name: Publish Open VSX Extension
+              run: |
+                  ovsx publish \
+                    -t ${{ secrets.OVSX_TOKEN }} \
+                    playcanvas*.vsix \
+                    ${{ github.event.inputs.prerelease == 'true' && '--pre-release' || '' }}
