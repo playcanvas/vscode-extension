@@ -7,6 +7,7 @@ import { Relay } from './connections/relay';
 import { Rest } from './connections/rest';
 import { ShareDb } from './connections/sharedb';
 import { Disk } from './disk';
+import { UriHandler } from './handlers/uri-handler';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
@@ -121,6 +122,15 @@ export const activate = async (context: vscode.ExtensionContext) => {
         await projectManager.link(projectState);
         await disk.link(diskState);
     };
+
+    // uri handler
+    const uriHandler = new UriHandler({
+        context,
+        rootUri,
+        userId,
+        rest
+    });
+    context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
 
     // collab provider
     const collabProvider = new CollabProvider({
@@ -439,7 +449,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // mount disk
         await disk.link({
             folderUri,
-            projectManager
+            projectManager,
+            openFilePath: await uriHandler.getOpenFilePath(folderUri)
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
