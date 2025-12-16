@@ -51,7 +51,6 @@ class UriHandler implements vscode.UriHandler {
         // find matching project
         const project = projects.find((p) => projectToName(p) === projectName);
         if (!project) {
-            vscode.window.showWarningMessage(`Project not found: ${projectName}`);
             return;
         }
 
@@ -72,8 +71,6 @@ class UriHandler implements vscode.UriHandler {
                 if (await fileExists(openUri)) {
                     const openDoc = await vscode.workspace.openTextDocument(openUri);
                     await vscode.window.showTextDocument(openDoc);
-                } else {
-                    vscode.window.showWarningMessage(`File not found: ${filePath}`);
                 }
             }
             return;
