@@ -146,6 +146,14 @@ class Auth {
             // store token
             await this._context.secrets.store('playcanvas.accessToken', accessToken);
             vscode.window.showInformationMessage('PlayCanvas Access Token validated');
+
+            if (manual) {
+                // reload window to ensure all components use the new token
+                await vscode.window.showInformationMessage('Token updated, the window will be reloaded.', {
+                    modal: true
+                });
+                vscode.commands.executeCommand('workbench.action.reloadWindow');
+            }
         }
 
         return accessToken;
