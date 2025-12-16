@@ -72,7 +72,7 @@ class UriHandler implements vscode.UriHandler {
                     const openDoc = await vscode.workspace.openTextDocument(openUri);
                     await vscode.window.showTextDocument(openDoc);
                 } else {
-                    vscode.window.showWarningMessage(`file not found: ${filePath}`);
+                    vscode.window.showWarningMessage(`Not found: ${filePath}`);
                 }
             }
             return;
