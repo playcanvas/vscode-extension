@@ -61,6 +61,7 @@ jobs:
               with:
                   name: ${{ github.ref_name }}
                   prerelease: ${{ github.event.inputs.prerelease }}
+                  generate_release_notes: true
                   files: playcanvas*.vsix
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
