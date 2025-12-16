@@ -97,7 +97,7 @@ class UriHandler implements vscode.UriHandler {
         if (!openFile) {
             return;
         }
-        if (vscode.Uri.parse(openFile.folderUriStr).toString() !== folderUri.toString()) {
+        if (openFile.folderUriStr !== folderUri.toString()) {
             return;
         }
 
