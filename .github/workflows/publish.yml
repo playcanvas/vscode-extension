@@ -45,7 +45,7 @@ jobs:
               with:
                   name: ${{ github.ref_name }}
                   prerelease: ${{ github.event.inputs.prerelease }}
-                  files: playcanvas*.vsix 
+                  files: playcanvas*.vsix
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
