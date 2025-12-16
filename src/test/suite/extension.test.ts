@@ -8,6 +8,7 @@ import * as messengerModule from '../../connections/messenger';
 import * as relayModule from '../../connections/relay';
 import * as restModule from '../../connections/rest';
 import * as sharedbModule from '../../connections/sharedb';
+import * as uriHandlerModule from '../../handlers/uri-handler';
 import type { Asset } from '../../typings/models';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
@@ -15,6 +16,7 @@ import { assets, documents, branches, projectSettings, project, user, uniqueId }
 import { MockRelay } from '../mocks/relay';
 import { MockRest } from '../mocks/rest';
 import { MockShareDb } from '../mocks/sharedb';
+import { MockUriHandler } from '../mocks/uri-handler';
 
 const sandbox = sinon.createSandbox();
 
@@ -24,6 +26,7 @@ const messenger = new MockMessenger(sandbox);
 const sharedb = new MockShareDb(sandbox, messenger);
 const relay = new MockRelay(sandbox);
 const rest = new MockRest(sandbox, messenger, sharedb);
+const uriHandler = new MockUriHandler(sandbox, rest);
 
 // stub connection class constructors
 sandbox.stub(authModule, 'Auth').returns(auth);
@@ -31,6 +34,7 @@ sandbox.stub(restModule, 'Rest').returns(rest);
 sandbox.stub(sharedbModule, 'ShareDb').returns(sharedb);
 sandbox.stub(messengerModule, 'Messenger').returns(messenger);
 sandbox.stub(relayModule, 'Relay').returns(relay);
+sandbox.stub(uriHandlerModule, 'UriHandler').returns(uriHandler);
 
 // stub vscode methods
 const quickPickStub = sandbox
@@ -42,6 +46,9 @@ const openFolderStub = sandbox
     .stub(vscode.commands, 'executeCommand')
     .callThrough()
     .withArgs('vscode.openFolder', sandbox.match.any, false);
+
+// spy vscode methods
+const openTextDocumentSpy = sandbox.spy(vscode.workspace, 'openTextDocument');
 
 // FIXME: increase timeout to improve stability in CI environment
 const assertResolves = async <T>(promise: PromiseLike<T>, name: string, timeout = process.env.CI ? 2000 : 1000) => {
@@ -124,6 +131,11 @@ suite('Extension Test Suite', () => {
         });
     }
 
+    teardown(() => {
+        // reset stubs and spies after each test
+        sandbox.resetHistory();
+    });
+
     const assetCreate = async ({ name, content = '', parent }: { name: string; content?: string; parent?: number }) => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -162,7 +174,12 @@ suite('Extension Test Suite', () => {
         return asset;
     };
 
-    test('project load', async () => {
+    // NOTE: file path is set in MockUriHandler instance above
+    test('project load (with file path)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri);
+
         // get extension
         const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
         assert.ok(extension);
@@ -173,10 +190,18 @@ suite('Extension Test Suite', () => {
         // check if extension is active
         assert.ok(extension.isActive);
 
-        // check first subscribe call is for project settings
-        const call = sharedb.subscribe.getCall(0);
-        assert.ok(call);
-        assert.deepStrictEqual(call.args, ['settings', `project_${project.id}_${user.id}`]);
+        // check if sharedb subscribe was called for project settings
+        const call1 = sharedb.subscribe.getCall(0);
+        assert.ok(call1);
+        assert.deepStrictEqual(call1.args, ['settings', `project_${project.id}_${user.id}`]);
+
+        // check if document was opened
+        const asset = assets.get(1);
+        assert.ok(asset);
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const call2 = openTextDocumentSpy.getCall(0);
+        assert.ok(call2);
+        assert.strictEqual(call2.args[0]?.toString(), uri.toString());
     });
 
     test('command playcanvas.openProject', async () => {
@@ -213,6 +238,48 @@ suite('Extension Test Suite', () => {
         assert.ok(other);
         const call = rest.branchCheckout.getCall(0);
         assert.deepStrictEqual(call.args, [other.id]);
+    });
+
+    test('uri open file', async () => {
+        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
+        assert.ok(extension);
+        await assertResolves(extension.activate(), 'extension.activate');
+
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri);
+
+        // get asset and its document content
+        const asset = await assetCreate({ name: 'uri_open_file.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset);
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document);
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // create open document promise
+        const openTextDocument = new Promise<void>((resolve) => {
+            vscode.workspace.onDidOpenTextDocument((doc) => {
+                if (doc.uri.toString() === uri.toString()) {
+                    resolve();
+                }
+            });
+        });
+
+        // open the file via uri
+        const externalUri = vscode.Uri.from({
+            scheme: vscode.env.uriScheme,
+            authority: 'playcanvas.playcanvas',
+            path: `/${project.name} (${project.id})/${asset.name}`
+        });
+        await vscode.env.openExternal(externalUri);
+
+        // check if document was opened
+        await assertResolves(openTextDocument, 'openTextDocument');
+
+        // check if uri handler was called
+        const call = uriHandler.handleUri.getCall(0);
+        assert.strictEqual(call.args[0].toString(), externalUri.toString());
     });
 
     test('file create (remote -> local)', async () => {
