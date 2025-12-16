@@ -30,8 +30,8 @@ jobs:
 
             - name: Install vsce and ovsx
               run: |
-                npm install -g @vscode/vsce
-                npm install -g ovsx
+                  npm install -g @vscode/vsce
+                  npm install -g ovsx
 
             - name: Build PlayCanvas VS Code Extension
               run: |
