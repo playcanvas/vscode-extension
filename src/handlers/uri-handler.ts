@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import type { Rest } from '../connections/rest';
-import { projectToName, uriStartsWith } from '../utils/utils';
+import { fileExists, projectToName, uriStartsWith } from '../utils/utils';
 
 class UriHandler implements vscode.UriHandler {
     static OPEN_FILE_KEY = 'playcanvas.openFile';
@@ -68,8 +68,12 @@ class UriHandler implements vscode.UriHandler {
             if (filePath) {
                 // open file
                 const openUri = vscode.Uri.joinPath(folderUri, filePath);
-                const openDoc = await vscode.workspace.openTextDocument(openUri);
-                await vscode.window.showTextDocument(openDoc);
+                if (await fileExists(openUri)) {
+                    const openDoc = await vscode.workspace.openTextDocument(openUri);
+                    await vscode.window.showTextDocument(openDoc);
+                } else {
+                    vscode.window.showWarningMessage(`file not found: ${filePath}`);
+                }
             }
             return;
         }

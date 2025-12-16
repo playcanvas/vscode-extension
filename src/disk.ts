@@ -9,19 +9,7 @@ import * as buffer from './utils/buffer';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { Mutex } from './utils/mutex';
-import { parsePath, sharedb2vscode, relativePath, vscode2sharedb, uriStartsWith } from './utils/utils';
-
-const fileExists = async (uri: vscode.Uri) => {
-    try {
-        await vscode.workspace.fs.stat(uri);
-    } catch (err) {
-        if (err instanceof vscode.FileSystemError && err.code === 'FileNotFound') {
-            return false;
-        }
-        throw err;
-    }
-    return true;
-};
+import { parsePath, sharedb2vscode, relativePath, vscode2sharedb, uriStartsWith, fileExists } from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
     const result: vscode.Uri[] = [];
@@ -609,8 +597,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // open file if specified
         if (openFilePath) {
             const openUri = vscode.Uri.joinPath(folderUri, openFilePath);
-            const openDoc = await vscode.workspace.openTextDocument(openUri);
-            await vscode.window.showTextDocument(openDoc);
+            if (await fileExists(openUri)) {
+                const openDoc = await vscode.workspace.openTextDocument(openUri);
+                await vscode.window.showTextDocument(openDoc);
+            } else {
+                vscode.window.showWarningMessage(`file not found: ${openFilePath}`);
+            }
         }
 
         // watchers

@@ -12,6 +12,18 @@ export const catchError = async <T>(fn: () => Promise<T>): Promise<[Error, null]
     }
 };
 
+export const fileExists = async (uri: vscode.Uri) => {
+    try {
+        await vscode.workspace.fs.stat(uri);
+    } catch (err) {
+        if (err instanceof vscode.FileSystemError && err.code === 'FileNotFound') {
+            return false;
+        }
+        throw err;
+    }
+    return true;
+};
+
 export const relativePath = (uri: vscode.Uri, folder: vscode.Uri) => {
     return uri.path.substring(folder.path.length + 1);
 };
