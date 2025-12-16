@@ -249,8 +249,9 @@ suite('Extension Test Suite', () => {
 
         // create open document promise
         const openTextDocument = new Promise<void>((resolve) => {
-            vscode.workspace.onDidOpenTextDocument((doc) => {
+            const open = vscode.workspace.onDidOpenTextDocument((doc) => {
                 if (doc.uri.toString() === uri.toString()) {
+                    open.dispose();
                     resolve();
                 }
             });
