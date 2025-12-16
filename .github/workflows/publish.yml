@@ -9,6 +9,9 @@ on:
                 required: false
                 default: false
 
+permissions:
+    contents: write
+
 jobs:
     publish:
         name: Publish
@@ -36,6 +39,16 @@ jobs:
             - name: Build PlayCanvas VS Code Extension
               run: |
                   npm run build ${{ github.event.inputs.prerelease == 'true' && '-- --pre-release' || '' }}
+
+            - name: Create GitHub Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  name: ${{ github.ref_name }}
+                  prerelease: ${{ github.event.inputs.prerelease }}
+                  files: playcanvas*.vsix 
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
             - name: Publish VS Code Extension
               run: |
                   vsce publish \
