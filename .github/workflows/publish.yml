@@ -41,11 +41,11 @@ jobs:
                   vsce publish \
                     -p ${{ secrets.VSCE_TOKEN }} \
                     -i playcanvas*.vsix \
-                    ${{github.event.inputs.prerelease == 'true' && '--pre-release' || ''}}
+                    ${{ github.event.inputs.prerelease == 'true' && '--pre-release' || '' }}
 
             - name: Publish Open VSX Extension
               run: |
                   ovsx publish \
                     -t ${{ secrets.OVSX_TOKEN }} \
                     playcanvas*.vsix \
-                    ${{github.event.inputs.prerelease == 'true' && '--pre-release' || '' }}
+                    ${{ github.event.inputs.prerelease == 'true' && '--pre-release' || '' }}
