@@ -124,6 +124,18 @@ suite('Extension Test Suite', () => {
         }
     });
 
+    setup(async () => {
+        // get extension
+        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
+        assert.ok(extension);
+
+        // activate the extension
+        await assertResolves(extension.activate(), 'extension.activate');
+
+        // check if extension is active
+        assert.ok(extension.isActive);
+    });
+
     // FIXME: increase teardown delay to improve stability in CI environment
     if (process.env.CI) {
         teardown(async () => {
@@ -180,16 +192,6 @@ suite('Extension Test Suite', () => {
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
 
-        // get extension
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-
-        // activate the extension
-        await assertResolves(extension.activate(), 'extension.activate');
-
-        // check if extension is active
-        assert.ok(extension.isActive);
-
         // check if sharedb subscribe was called for project settings
         const call1 = sharedb.subscribe.getCall(0);
         assert.ok(call1);
@@ -205,10 +207,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('command playcanvas.openProject', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // open a project
         await assertResolves(vscode.commands.executeCommand('playcanvas.openProject'), 'playcanvas.openProject');
 
@@ -220,10 +218,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('command playcanvas.switchBranch', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // reset rest branchCheckout spy call history
         rest.branchCheckout.resetHistory();
 
@@ -241,10 +235,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('uri open file', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -283,10 +273,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file create (remote -> local)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -328,10 +314,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file create (local -> remote)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -377,10 +359,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file changes (remote -> local)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -404,10 +382,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file changes (opened local -> remote)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -440,10 +414,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file changes (closed local -> remote)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -474,10 +444,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file changes (local overrides remote)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -542,10 +508,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file delete (remote -> local)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -570,10 +532,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file delete (local -> remote)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -613,10 +571,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file rename (remote -> local)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -658,10 +612,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file rename (local -> remote)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -694,10 +644,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file move (remote -> local)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -742,10 +688,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('file move (local -> remote)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
@@ -792,10 +734,6 @@ suite('Extension Test Suite', () => {
     });
 
     test('.pcignore parsing (file)', async () => {
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
-        assert.ok(extension);
-        await assertResolves(extension.activate(), 'extension.activate');
-
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
