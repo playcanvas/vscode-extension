@@ -91,7 +91,7 @@ class UriHandler implements vscode.UriHandler {
     }
 
     async getOpenFilePath(folderUri: vscode.Uri): Promise<string | undefined> {
-        // retrieve and clear stored open file
+        // retrieve and clear stored open file (always consume)
         const openFile = this._context.globalState.get<{
             folderUriStr: string;
             filePath: string;
