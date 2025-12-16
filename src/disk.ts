@@ -600,8 +600,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (await fileExists(openUri)) {
                 const openDoc = await vscode.workspace.openTextDocument(openUri);
                 await vscode.window.showTextDocument(openDoc);
-            } else {
-                vscode.window.showWarningMessage(`File not found: ${openFilePath}`);
             }
         }
 
