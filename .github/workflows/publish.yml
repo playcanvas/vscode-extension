@@ -46,6 +46,6 @@ jobs:
             - name: Publish Open VSX Extension
               run: |
                   ovsx publish \
-                    -t ${{ secrets.OVSX_TOKEN }} \
+                    -p ${{ secrets.OVSX_TOKEN }} \
                     playcanvas*.vsix \
                     ${{ github.event.inputs.prerelease == 'true' && '--pre-release' || '' }}
