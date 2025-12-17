@@ -226,7 +226,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             file.saved = false;
 
             // emit a change event to update on disk
-            this._events.emit('asset:file:update', path, op as ShareDbTextOp);
+            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(doc.data));
         });
 
         this._events.emit('asset:file:create', path, 'file', buffer.from(doc.data));

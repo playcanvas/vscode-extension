@@ -144,7 +144,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
-    private _update(uri: vscode.Uri, op: ShareDbTextOp) {
+    private _update(uri: vscode.Uri, op: ShareDbTextOp, content: Uint8Array) {
         return this._mutex.atomic(`${uri}`, async () => {
             if (this._ignoring(uri)) {
                 return;
@@ -152,15 +152,23 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // NOTE: do not need to check local echo as ShareDB op event can check source
 
-            // write directly to document if open
-            const open = await vscode.workspace.openTextDocument(uri);
-            const workspaceEdit = new vscode.WorkspaceEdit();
-            workspaceEdit.set(uri, sharedb2vscode(open, [op]));
+            const viewing = this._opened.has(uri.path);
+            if (viewing) {
+                // write directly to document if open
+                const document = await vscode.workspace.openTextDocument(uri);
+                const workspaceEdit = new vscode.WorkspaceEdit();
+                workspaceEdit.set(uri, sharedb2vscode(document, [op]));
 
-            // apply edit
-            await vscode.workspace.applyEdit(workspaceEdit);
+                // apply edit
+                await vscode.workspace.applyEdit(workspaceEdit);
+            } else {
+                this._debouncer.add(`${uri}:change`);
 
-            this._log(`change.remote ${uri}`);
+                // write to file on disk
+                await vscode.workspace.fs.writeFile(uri, content);
+            }
+
+            this._log(`change.remote.${viewing ? 'open' : 'closed'} ${uri}`);
         });
     }
 
@@ -222,6 +230,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            // check if document is open
+            if (!this._opened.has(uri.path)) {
+                return;
+            }
+
             // open document
             const document = await vscode.workspace.openTextDocument(uri);
 
@@ -238,10 +251,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._checkIgnoreUpdated(uri);
             this._create(uri, type, content);
         });
-        const assetFileUpdate = this._events.on('asset:file:update', async (path, op) => {
+        const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri);
-            this._update(uri, op);
+            this._update(uri, op, content);
         });
         const assetFileDelete = this._events.on('asset:file:delete', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
@@ -323,8 +336,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 file.doc.submitOp(op, options);
             });
 
-            // set saved state
-            file.saved = !document.isDirty;
+            // set unsaved
+            file.saved = false;
 
             this._log(`changed file ${document.uri.path}`);
         });
