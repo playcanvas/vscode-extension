@@ -48,7 +48,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._events = events;
     }
 
-    private _handleIgnoreUpdate(uri: vscode.Uri) {
+    private _checkIgnoreUpdated(uri: vscode.Uri) {
         const folderUri = this._folderUri;
         if (!folderUri) {
             return;
@@ -220,24 +220,24 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _watchEvents(folderUri: vscode.Uri) {
         const assetFileCreate = this._events.on('asset:file:create', async (path, type, content) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
-            this._handleIgnoreUpdate(uri);
+            this._checkIgnoreUpdated(uri);
             this._create(uri, type, content);
         });
         const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
-            this._handleIgnoreUpdate(uri);
+            this._checkIgnoreUpdated(uri);
             this._update(uri, op, content);
         });
         const assetFileDelete = this._events.on('asset:file:delete', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
-            this._handleIgnoreUpdate(uri);
+            this._checkIgnoreUpdated(uri);
             this._delete(uri);
         });
         const assetFileRename = this._events.on('asset:file:rename', async (oldPath, newPath) => {
             const oldUri = vscode.Uri.joinPath(folderUri, oldPath);
             const newUri = vscode.Uri.joinPath(folderUri, newPath);
-            this._handleIgnoreUpdate(oldUri);
-            this._handleIgnoreUpdate(newUri);
+            this._checkIgnoreUpdated(oldUri);
+            this._checkIgnoreUpdated(newUri);
             this._rename(oldUri, newUri);
         });
         return () => {
@@ -319,7 +319,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // check if ignore updated
             if (!file.saved) {
-                this._handleIgnoreUpdate(document.uri);
+                this._checkIgnoreUpdated(document.uri);
             }
 
             // write to project
