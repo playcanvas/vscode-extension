@@ -144,7 +144,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
-    private _update(uri: vscode.Uri, op: ShareDbTextOp, content: Uint8Array) {
+    private _update(uri: vscode.Uri, op: ShareDbTextOp) {
         return this._mutex.atomic(`${uri}`, async () => {
             if (this._ignoring(uri)) {
                 return;
@@ -155,24 +155,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // write directly to document if open
             const open = await vscode.workspace.openTextDocument(uri);
             const workspaceEdit = new vscode.WorkspaceEdit();
-            if (!open.isDirty) {
-                // if not dirty can use op to transform content
-                workspaceEdit.set(uri, sharedb2vscode(open, [op]));
-            } else {
-                // if dirty content might be out of sync, so replace whole content
-                workspaceEdit.set(uri, [
-                    new vscode.TextEdit(
-                        new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)),
-                        buffer.toString(content)
-                    )
-                ]);
-            }
+            workspaceEdit.set(uri, sharedb2vscode(open, [op]));
 
             // apply edit
             await vscode.workspace.applyEdit(workspaceEdit);
-
-            // save document
-            await open.save();
 
             this._log(`change.remote ${uri}`);
         });
@@ -224,16 +210,38 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
+    private _save(uri: vscode.Uri) {
+        return this._mutex.atomic(`${uri}`, async () => {
+            if (this._ignoring(uri)) {
+                return;
+            }
+
+            // check if file exists
+            const exists = await fileExists(uri);
+            if (!exists) {
+                return;
+            }
+
+            // open document
+            const document = await vscode.workspace.openTextDocument(uri);
+
+            // save document
+            await document.save();
+
+            this._log(`save.remote ${uri}`);
+        });
+    }
+
     private _watchEvents(folderUri: vscode.Uri) {
         const assetFileCreate = this._events.on('asset:file:create', async (path, type, content) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri);
             this._create(uri, type, content);
         });
-        const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content) => {
+        const assetFileUpdate = this._events.on('asset:file:update', async (path, op) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri);
-            this._update(uri, op, content);
+            this._update(uri, op);
         });
         const assetFileDelete = this._events.on('asset:file:delete', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
@@ -247,11 +255,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._checkIgnoreUpdated(newUri);
             this._rename(oldUri, newUri);
         });
+        const assetFileSave = this._events.on('asset:file:save', async (path) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            this._checkIgnoreUpdated(uri);
+            this._save(uri);
+        });
         return () => {
             this._events.off('asset:file:create', assetFileCreate);
             this._events.off('asset:file:update', assetFileUpdate);
             this._events.off('asset:file:rename', assetFileRename);
             this._events.off('asset:file:delete', assetFileDelete);
+            this._events.off('asset:file:save', assetFileSave);
         };
     }
 

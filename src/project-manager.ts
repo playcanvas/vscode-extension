@@ -231,7 +231,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             file.mtime = Date.now();
 
             // emit a change event to update on disk
-            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(doc.data));
+            this._events.emit('asset:file:update', path, op as ShareDbTextOp);
         });
 
         this._events.emit('asset:file:create', path, 'file', buffer.from(doc.data));
@@ -397,31 +397,49 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     private _watchEvents(projectId: number) {
-        const assetUpdateHandle = this._events.on('asset:update', async (uniqueId, key, before, after) => {
-            // handle rename or move
-            if (key === 'name' || key === 'path') {
-                const from = this._assetPath(uniqueId, { [key]: before });
-                const to = this._assetPath(uniqueId, { [key]: after });
+        const assetUpdateHandle = this._events.on('asset:update', (uniqueId, key, before, after) => {
+            switch (true) {
+                // handle rename or move
+                case key === 'name' || key === 'path': {
+                    const from = this._assetPath(uniqueId, { [key]: before });
+                    const to = this._assetPath(uniqueId, { [key]: after });
 
-                // find all files that need updating
-                const update: [string, VirtualFile][] = [];
-                for (const [path, file] of this._files) {
-                    if (path.startsWith(from)) {
-                        update.push([path, file]);
+                    // find all files that need updating
+                    const update: [string, VirtualFile][] = [];
+                    for (const [path, file] of this._files) {
+                        if (path.startsWith(from)) {
+                            update.push([path, file]);
+                        }
                     }
+
+                    // update all files
+                    for (const [path, file] of update) {
+                        const oldPath = path;
+                        const newPath = path.replace(from, to);
+
+                        // update in files
+                        this._files.delete(oldPath);
+                        this._files.set(newPath, file);
+
+                        // add events for VS Code
+                        this._events.emit('asset:file:rename', oldPath, newPath);
+                    }
+                    break;
                 }
 
-                // update all files
-                for (const [path, file] of update) {
-                    const oldPath = path;
-                    const newPath = path.replace(from, to);
+                // handle remote save
+                case key === 'file': {
+                    const fileFrom = before as { filename: string; size: number; hash: string } | undefined;
+                    const fileTo = after as { filename: string; size: number; hash: string } | undefined;
 
-                    // update in files
-                    this._files.delete(oldPath);
-                    this._files.set(newPath, file);
+                    // skip if no change to file content
+                    if (fileFrom?.hash === fileTo?.hash) {
+                        break;
+                    }
 
                     // add events for VS Code
-                    this._events.emit('asset:file:rename', oldPath, newPath);
+                    this._events.emit('asset:file:save', this._assetPath(uniqueId));
+                    break;
                 }
             }
         });
@@ -702,6 +720,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             file.doc.submitOp([0, buffer.toString(content)], {
                 source: ShareDb.SOURCE
             });
+            this._log('overwritten');
         }
 
         // notify ShareDB to save the document
