@@ -154,20 +154,27 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // write directly to document if open
             const open = await vscode.workspace.openTextDocument(uri);
+            const workspaceEdit = new vscode.WorkspaceEdit();
             if (!open.isDirty) {
-                // apply edits
-                const workspaceEdit = new vscode.WorkspaceEdit();
+                // if not dirty can use op to transform content
                 workspaceEdit.set(uri, sharedb2vscode(open, [op]));
-                await vscode.workspace.applyEdit(workspaceEdit);
-
-                // save document
-                await open.save();
             } else {
-                this._debouncer.add(`${uri}:change`);
-                await vscode.workspace.fs.writeFile(uri, content);
+                // if dirty content might be out of sync, so replace whole content
+                workspaceEdit.set(uri, [
+                    new vscode.TextEdit(
+                        new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)),
+                        buffer.toString(content)
+                    )
+                ]);
             }
 
-            this._log(`change.remote${!open.isDirty ? '.live' : ''} ${uri}`);
+            // apply edit
+            await vscode.workspace.applyEdit(workspaceEdit);
+
+            // save document
+            await open.save();
+
+            this._log(`change.remote ${uri}`);
         });
     }
 
