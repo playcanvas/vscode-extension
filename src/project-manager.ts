@@ -36,6 +36,7 @@ type VirtualFile = {
     | {
           type: 'file';
           doc: Doc;
+          saved: boolean;
       }
 );
 
@@ -207,7 +208,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const file: VirtualFile = {
             type: 'file',
             uniqueId,
-            doc
+            doc,
+            saved: true
         };
         this._files.set(path, file);
 
@@ -219,6 +221,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
 
             const path = this._assetPath(uniqueId);
+
+            // set saved to false
+            file.saved = false;
 
             // emit a change event to update on disk
             this._events.emit('asset:file:update', path, op as ShareDbTextOp);
@@ -247,6 +252,29 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._events.emit('asset:file:create', path, 'folder', new Uint8Array());
 
         this._log(`added folder ${path}`);
+    }
+
+    private _watchSharedb() {
+        const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
+            if (state !== 'success') {
+                return;
+            }
+
+            // find file by uniqueId
+            const path = this._assetPath(uniqueId);
+
+            // check if file exists
+            const file = this._files.get(path);
+            if (!file || file.type !== 'file') {
+                return;
+            }
+
+            // set saved to true
+            file.saved = true;
+        });
+        return () => {
+            this._sharedb.off('doc:save', docSaveHandle);
+        };
     }
 
     private _watchMessenger(branchId: string) {
@@ -690,6 +718,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
+        // check if already saved
+        if (file.saved) {
+            return;
+        }
+
         // check if document content is different from updated content
         if (!buffer.cmp(buffer.from(file.doc.data), content)) {
             // overwrite entire document content
@@ -815,6 +848,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // watchers
         const unwatchEvents = this._watchEvents(projectId);
+        const unwatchSharedb = this._watchSharedb();
         const unwatchMessenger = this._watchMessenger(branchId);
 
         // store state
@@ -824,6 +858,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // register cleanup
         this._cleanup.push(async () => {
             unwatchEvents();
+            unwatchSharedb();
             unwatchMessenger();
 
             this._files.clear();

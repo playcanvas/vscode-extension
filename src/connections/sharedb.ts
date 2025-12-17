@@ -5,6 +5,7 @@ import type { Socket } from 'sharedb/lib/sharedb.js';
 
 import { WEB } from '../config';
 import { Deferred } from '../utils/deferred';
+import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
 
 // register text type
@@ -16,7 +17,11 @@ type Connection = sharedb.Connection & {
     endBulk: () => void;
 };
 
-class ShareDb {
+type EventMap = {
+    'doc:save': ['success' | 'error', number];
+};
+
+class ShareDb extends EventEmitter<EventMap> {
     static readonly SOURCE = 'vscode';
 
     private _debug: boolean;
@@ -40,6 +45,7 @@ class ShareDb {
     error = signal<Error | undefined>(undefined);
 
     constructor({ debug = false, url, origin }: { debug?: boolean; url: string; origin: string }) {
+        super();
         this._debug = debug;
 
         this.url = url;
@@ -149,8 +155,15 @@ class ShareDb {
         const onmessage = socket.onmessage?.bind(socket);
         socket.onmessage = (msg) => {
             // intercept custom messages
-            if (/^(\w+):/.test(msg.data.toString())) {
-                this._log(`${msg.data.toString()}`);
+            const str = msg.data.toString();
+            if (/^(\w+):/.test(str)) {
+                this._log(str);
+
+                // handle doc:save
+                if (str.startsWith('doc:save:')) {
+                    const [, , state, uniqueId] = str.split(':');
+                    this.emit('doc:save', state as 'success' | 'error', parseInt(uniqueId, 10));
+                }
                 return;
             }
 

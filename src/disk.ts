@@ -323,6 +323,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 file.doc.submitOp(op, options);
             });
 
+            // set saved state
+            file.saved = !document.isDirty;
+
             this._log(`changed file ${document.uri.path}`);
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
