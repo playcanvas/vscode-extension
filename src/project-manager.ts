@@ -28,8 +28,6 @@ const EXT_TO_ASSET = new Map<string, { assetType: string; blobType: string }>([
 ]);
 
 type VirtualFile = {
-    ctime: number;
-    mtime: number;
     uniqueId: number;
 } & (
     | {
@@ -38,7 +36,6 @@ type VirtualFile = {
     | {
           type: 'file';
           doc: Doc;
-          saved: boolean;
       }
 );
 
@@ -200,7 +197,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private async _addFile(uniqueId: number, doc: Doc) {
         const path = this._assetPath(uniqueId);
-        const now = Date.now();
 
         // check if file path already exists
         if (this._files.has(path)) {
@@ -210,11 +206,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         const file: VirtualFile = {
             type: 'file',
-            ctime: now,
-            mtime: now,
             uniqueId,
-            doc,
-            saved: true
+            doc
         };
         this._files.set(path, file);
 
@@ -227,9 +220,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             const path = this._assetPath(uniqueId);
 
-            // update modified time
-            file.mtime = Date.now();
-
             // emit a change event to update on disk
             this._events.emit('asset:file:update', path, op as ShareDbTextOp);
         });
@@ -241,7 +231,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private async _addFolder(uniqueId: number) {
         const path = this._assetPath(uniqueId);
-        const now = Date.now();
 
         // check if file path already exists
         if (this._files.has(path)) {
@@ -252,8 +241,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // add folder
         const file: VirtualFile = {
             type: 'folder',
-            ctime: now,
-            mtime: now,
             uniqueId
         };
         this._files.set(path, file);
@@ -703,12 +690,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
-        // check if content needs saving
-        if (file.saved) {
-            return;
-        }
-        file.mtime = Date.now();
-
         // check if document content is different from updated content
         if (!buffer.cmp(buffer.from(file.doc.data), content)) {
             // overwrite entire document content
@@ -725,9 +706,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // notify ShareDB to save the document
         this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
-
-        // mark as saved
-        file.saved = true;
 
         this._log(`wrote file ${path}`);
     }
@@ -749,8 +727,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // add root folder
         this._files.set('', {
             type: 'folder',
-            ctime: Date.now(),
-            mtime: Date.now(),
             uniqueId: 0
         });
 

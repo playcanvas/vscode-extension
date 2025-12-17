@@ -323,9 +323,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 file.doc.submitOp(op, options);
             });
 
-            // mark as unsaved
-            file.saved = false;
-
             this._log(`changed file ${document.uri.path}`);
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
@@ -339,9 +336,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // check if ignore updated
-            if (!file.saved) {
-                this._checkIgnoreUpdated(document.uri);
-            }
+            this._checkIgnoreUpdated(document.uri);
 
             // write to project
             const content = buffer.from(document.getText());
@@ -506,9 +501,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (!file || file.type !== 'file') {
                 return;
             }
-
-            // NOTE: mark as unsaved to allow project manager write
-            file.saved = false;
 
             const content = await vscode.workspace.fs.readFile(uri);
             defer({
