@@ -38,6 +38,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _debouncer: Set<string> = new Set<string>();
 
+    private _locks: Set<string> = new Set<string>();
+
     private _mutex = new Mutex<void>();
 
     private _ignoring = (_uri: vscode.Uri) => false;
@@ -160,7 +162,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 workspaceEdit.set(uri, sharedb2vscode(document, [op]));
 
                 // apply edit
+                this._locks.add(`${uri}`);
                 await vscode.workspace.applyEdit(workspaceEdit);
+                this._locks.delete(`${uri}`);
             } else {
                 this._debouncer.add(`${uri}:change`);
 
@@ -326,6 +330,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            // check if locked (from remote update)
+            if (this._locks.has(`${document.uri}`)) {
+                return;
+            }
+
             // check if content actually changed (avoid echo)
             if (file.doc.data === document.getText()) {
                 return;
@@ -339,7 +348,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // set unsaved
             file.saved = false;
 
-            this._log(`changed file ${document.uri.path}`);
+            this._log(`document.change ${document.uri.path}`);
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;
