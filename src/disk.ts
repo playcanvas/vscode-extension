@@ -352,7 +352,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // check if ignore updated
-            this._checkIgnoreUpdated(document.uri);
+            if (!file.saved) {
+                this._checkIgnoreUpdated(document.uri);
+            }
 
             // write to project
             const content = buffer.from(document.getText());
