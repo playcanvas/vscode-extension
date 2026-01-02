@@ -36,7 +36,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _opened = new Set<string>();
 
-    private _debouncer: Set<string> = new Set<string>();
+    private _echo: Set<string> = new Set<string>();
 
     private _mutex = new Mutex<void>();
 
@@ -127,7 +127,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // create on disk
             if (!exists) {
-                this._debouncer.add(`${uri}:create`);
+                this._echo.add(`${uri}:create`);
             }
             switch (type) {
                 case 'file': {
@@ -163,7 +163,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 // save document
                 await open.save();
             } else {
-                this._debouncer.add(`${uri}:change`);
+                this._echo.add(`${uri}:change`);
                 await vscode.workspace.fs.writeFile(uri, content);
             }
 
@@ -184,7 +184,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // remove from disk
-            this._debouncer.add(`${uri}:delete`);
+            this._echo.add(`${uri}:delete`);
             await vscode.workspace.fs.delete(uri, {
                 recursive: true,
                 useTrash: false
@@ -207,8 +207,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // rename on disk
-            this._debouncer.add(`${oldUri}:delete`);
-            this._debouncer.add(`${newUri}:create`);
+            this._echo.add(`${oldUri}:delete`);
+            this._echo.add(`${newUri}:create`);
             await vscode.workspace.fs.rename(oldUri, newUri, {
                 overwrite: false
             });
@@ -341,7 +341,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             | {
                   action: 'create';
                   uri: vscode.Uri;
-                  type?: 'file' | 'folder';
+                  type: 'file' | 'folder';
                   content?: Uint8Array;
               }
             | {
@@ -353,10 +353,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             | {
                   action: 'delete';
                   uri: vscode.Uri;
-                  type?: 'file' | 'folder';
+                  type: 'file' | 'folder';
               };
         const queue: DeferOp[] = [];
-        const pending = new Set<string>(); // Track in-flight operations synchronously
         let timeout: NodeJS.Timeout | null = null;
 
         // can batch create+delete into rename
@@ -396,21 +395,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 this._log(`rename.local ${op2.uri} -> ${op1.uri}`);
                                 projectManager.rename(path2, path1);
                                 // Clear in-flight for both URIs
-                                pending.delete(`${op1.uri}:${op1.action}`);
-                                pending.delete(`${op2.uri}:${op2.action}`);
                                 i++;
                                 continue;
                             }
                         }
                     }
                     const op = queue[i];
-                    const key = `${op.uri}:${op.action}`;
                     switch (op.action) {
                         case 'create': {
                             const path = relativePath(op.uri, folderUri);
-                            const type = op.type || 'file';
-                            this._log(`create.local ${type} ${op.uri}`);
-                            projectManager.create(path, type, op.content);
+                            this._log(`create.local ${op.type} ${op.uri}`);
+                            projectManager.create(path, op.type, op.content);
                             break;
                         }
                         case 'change': {
@@ -421,12 +416,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         }
                         case 'delete': {
                             const path = relativePath(op.uri, folderUri);
-                            this._log(`delete.local ${op.uri}`);
-                            projectManager.delete(path);
+                            this._log(`delete.local ${op.type} ${op.uri}`);
+                            projectManager.delete(path, op.type);
                             break;
                         }
                     }
-                    pending.delete(key);
                 }
                 queue.length = 0;
                 timeout = null;
@@ -442,8 +436,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const key = `${uri}:create`;
 
             // check local echo
-            if (this._debouncer.has(key)) {
-                this._debouncer.delete(key);
+            if (this._echo.has(key)) {
+                this._echo.delete(key);
                 return;
             }
 
@@ -451,12 +445,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (this._ignoring(uri)) {
                 return;
             }
-
-            // check if already pending (synchronous guard against race conditions)
-            if (pending.has(key)) {
-                return;
-            }
-            pending.add(key);
 
             const stat = await vscode.workspace.fs.stat(uri);
             const type = stat.type === vscode.FileType.Directory ? 'folder' : 'file';
@@ -475,8 +463,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const key = `${uri}:change`;
 
             // check local echo
-            if (this._debouncer.has(key)) {
-                this._debouncer.delete(key);
+            if (this._echo.has(key)) {
+                this._echo.delete(key);
                 return;
             }
 
@@ -516,8 +504,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const key = `${uri}:delete`;
 
             // check local echo
-            if (this._debouncer.has(key)) {
-                this._debouncer.delete(key);
+            if (this._echo.has(key)) {
+                this._echo.delete(key);
                 return;
             }
 
@@ -526,15 +514,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // check if already pending (synchronous guard against race conditions)
-            if (pending.has(key)) {
+            // check if file is in memory
+            const path = relativePath(uri, folderUri);
+            const file = projectManager.files.get(path);
+            if (!file) {
                 return;
             }
-            pending.add(key);
 
             defer({
                 action: 'delete',
-                uri
+                uri,
+                type: file.type
             });
         });
         return () => {
@@ -636,7 +626,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             unwatchDocument();
             unwatchDisk();
 
-            this._debouncer.clear();
+            this._echo.clear();
             this._mutex.clear();
 
             this._folderUri = undefined;
