@@ -356,6 +356,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                   type?: 'file' | 'folder';
               };
         const queue: DeferOp[] = [];
+        const pending = new Set<string>(); // Track in-flight operations synchronously
         let timeout: NodeJS.Timeout | null = null;
 
         // can batch create+delete into rename
@@ -394,12 +395,16 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             if (name1 === name2 || folder1 === folder2) {
                                 this._log(`rename.local ${op2.uri} -> ${op1.uri}`);
                                 projectManager.rename(path2, path1);
+                                // Clear in-flight for both URIs
+                                pending.delete(`${op1.uri}:${op1.action}`);
+                                pending.delete(`${op2.uri}:${op2.action}`);
                                 i++;
                                 continue;
                             }
                         }
                     }
                     const op = queue[i];
+                    const key = `${op.uri}:${op.action}`;
                     switch (op.action) {
                         case 'create': {
                             const path = relativePath(op.uri, folderUri);
@@ -421,6 +426,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             break;
                         }
                     }
+                    pending.delete(key);
                 }
                 queue.length = 0;
                 timeout = null;
@@ -445,6 +451,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (this._ignoring(uri)) {
                 return;
             }
+
+            // check if already pending (synchronous guard against race conditions)
+            if (pending.has(key)) {
+                return;
+            }
+            pending.add(key);
 
             const stat = await vscode.workspace.fs.stat(uri);
             const type = stat.type === vscode.FileType.Directory ? 'folder' : 'file';
@@ -513,6 +525,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (this._ignoring(uri)) {
                 return;
             }
+
+            // check if already pending (synchronous guard against race conditions)
+            if (pending.has(key)) {
+                return;
+            }
+            pending.add(key);
 
             defer({
                 action: 'delete',
