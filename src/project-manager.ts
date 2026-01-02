@@ -586,7 +586,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // check if file exists
         const file = await this._getFile(path, 'file');
         if (!file) {
-            this._warn(`skipping delete of ${path} as it does not exist`);
             return;
         }
 
