@@ -236,6 +236,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(doc.data));
         });
 
+        // emit file created event
         this._events.emit('asset:file:create', path, 'file', buffer.from(doc.data));
 
         this._log(`added file ${path}`);
@@ -259,6 +260,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             uniqueId
         };
         this._files.set(path, file);
+
+        // emit folder created event
         this._events.emit('asset:file:create', path, 'folder', new Uint8Array());
 
         this._log(`added folder ${path}`);
