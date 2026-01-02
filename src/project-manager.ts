@@ -267,6 +267,22 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._log(`added folder ${path}`);
     }
 
+    private async _getFile(path: string, type: 'file' | 'folder') {
+        // check if file already exists
+        const file = this._files.get(path);
+        if (file && file.type === type) {
+            return Promise.resolve(file);
+        }
+
+        // check if already creating
+        const creating = this._creating.get(`${type}:${path}`);
+        if (creating) {
+            return creating;
+        }
+
+        return undefined;
+    }
+
     private _watchMessenger(branchId: string) {
         const assetNewHandle = this._messenger.on('asset.new', async (e) => {
             const asset = e.data.asset;
@@ -460,17 +476,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         };
     }
 
-    waitForFile(path: string, type: 'file' | 'folder') {
+    async waitForFile(path: string, type: 'file' | 'folder') {
         // check if file already exists
-        const file = this._files.get(path);
-        if (file && file.type === type) {
-            return Promise.resolve(file);
-        }
-
-        // check if already creating
-        const creating = this._creating.get(`${type}:${path}`);
-        if (creating) {
-            return creating;
+        const file = await this._getFile(path, type);
+        if (file) {
+            return file;
         }
 
         // creation promise
@@ -498,6 +508,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             throw new Error('project not loaded');
         }
 
+        // check if file already exists
+        if (await this._getFile(path, type)) {
+            this._warn(`skipping create of ${type} ${path} as it already exists`);
+            return;
+        }
+
         const [parentPath, name] = parsePath(path);
 
         // validate name
@@ -505,15 +521,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             throw new Error(`missing name for ${path}`);
         }
 
-        // create rest promise first to use in load promise
-        const rest = new Deferred<Asset>();
-
         // validate parent
         let parent: number | undefined = undefined;
         if (parentPath !== '') {
             const file = await this.waitForFile(parentPath, 'folder');
             parent = file.uniqueId;
         }
+
+        // create rest promise first to use in load promise
+        const rest = new Deferred<Asset>();
 
         // wait for messenger to notify of asset load
         const created = new Promise<void>((resolve) => {
@@ -568,9 +584,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async delete(path: string) {
         // check if file exists
-        const file = this._files.get(path);
+        const file = await this._getFile(path, 'file');
         if (!file) {
-            throw new Error(`file not found ${path}`);
+            this._warn(`skipping delete of ${path} as it does not exist`);
+            return;
         }
 
         // notify ShareDB to delete asset
