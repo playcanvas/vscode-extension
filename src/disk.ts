@@ -310,6 +310,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(document.uri, folderUri);
             this._opened.delete(document.uri.path);
             this._events.emit('asset:doc:close', path);
+
+            // TODO: figure out whether to sync S3 file to disk instead of another unsaved state
         });
 
         const onchange = vscode.workspace.onDidChangeTextDocument((e) => {
