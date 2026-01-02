@@ -93,7 +93,7 @@ class CollabProvider
 
             // wait for file to be available
             const path = relativePath(uri, folderUri);
-            projectManager.waitForFile(path).then((file) => {
+            projectManager.waitForFile(path, 'file').then((file) => {
                 // set room
                 this._room = `document-${file.uniqueId}`;
                 this.refresh();

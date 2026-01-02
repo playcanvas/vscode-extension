@@ -61,6 +61,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _files: Map<string, VirtualFile> = new Map<string, VirtualFile>();
 
+    private _creating: Map<string, Promise<VirtualFile>> = new Map<string, Promise<VirtualFile>>();
+
     private _idToUniqueId: Map<number, number> = new Map<number, number>();
 
     error = signal<Error | undefined>(undefined);
@@ -431,7 +433,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         const docOpenHandle = this._events.on('asset:doc:open', (path: string) => {
             // wait for file to be available
-            this.waitForFile(path).then((file) => {
+            this.waitForFile(path, 'file').then((file) => {
                 // join relay room
                 this._relay.join(`document-${file.uniqueId}`, projectId);
                 this._cleanup.push(async () => {
@@ -458,15 +460,21 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         };
     }
 
-    waitForFile(path: string, type: 'file' | 'folder' = 'file') {
+    waitForFile(path: string, type: 'file' | 'folder') {
         // check if file already exists
         const file = this._files.get(path);
         if (file && file.type === type) {
             return Promise.resolve(file);
         }
 
-        // wait for asset to be created
-        return new Promise<VirtualFile>((resolve) => {
+        // check if already creating
+        const creating = this._creating.get(`${type}:${path}`);
+        if (creating) {
+            return creating;
+        }
+
+        // creation promise
+        const promise = new Promise<VirtualFile>((resolve) => {
             const oncreate = (uniqueId: number) => {
                 const assetPath = this._assetPath(uniqueId);
                 if (assetPath === path) {
@@ -480,6 +488,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             };
             this._events.on('asset:create', oncreate);
         });
+        this._creating.set(`${type}:${path}`, promise);
+
+        return promise;
     }
 
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
