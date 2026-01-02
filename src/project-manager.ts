@@ -357,28 +357,38 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // emit asset created event
             this._events.emit('asset:create', uniqueId);
         });
-        const assetDeleteHandle = this._messenger.on('assets.delete', async (e) => {
+        const assetDeleteHandle = this._messenger.on('assets.delete', async ({ data: { assets } }) => {
+            // filter assets to only include valid ones
+            const valid: [number, string, Asset][] = assets.reduce(
+                (paths, raw) => {
+                    // check for valid number
+                    const uniqueId = parseInt(raw, 10);
+                    if (isNaN(uniqueId)) {
+                        return paths;
+                    }
+
+                    // check stored asset
+                    const asset = this._assets.get(uniqueId);
+                    if (!asset) {
+                        return paths;
+                    }
+
+                    // check if asset is a supported type
+                    if (!FILE_TYPES.includes(asset.type)) {
+                        return paths;
+                    }
+
+                    // get path
+                    const path = this._assetPath(uniqueId);
+                    paths.push([uniqueId, path, asset]);
+                    return paths;
+                },
+                [] as [number, string, Asset][]
+            );
+
+            // prepare subscriptions
             const subscriptions: [string, string][] = [];
-            for (const raw of e.data.assets) {
-                // check for valid number
-                const uniqueId = parseInt(raw, 10);
-                if (isNaN(uniqueId)) {
-                    continue;
-                }
-
-                // check stored asset
-                const asset = this._assets.get(uniqueId);
-                if (!asset) {
-                    continue;
-                }
-
-                // check if asset is a supported type
-                if (!FILE_TYPES.includes(asset.type)) {
-                    continue;
-                }
-
-                // remove from file system
-                const path = this._assetPath(uniqueId);
+            for (const [uniqueId, path, asset] of valid) {
                 const file = this._files.get(path);
                 if (file?.uniqueId === uniqueId) {
                     this._files.delete(path);
