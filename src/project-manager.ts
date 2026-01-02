@@ -63,8 +63,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _idToUniqueId: Map<number, number> = new Map<number, number>();
 
-    private _creating: Map<string, Promise<Asset>> = new Map<string, Promise<Asset>>();
-
     error = signal<Error | undefined>(undefined);
 
     constructor({
@@ -461,19 +459,22 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     waitForFile(path: string, type: 'file' | 'folder' = 'file') {
+        // check if file already exists
         const file = this._files.get(path);
         if (file && file.type === type) {
             return Promise.resolve(file);
         }
+
+        // wait for asset to be created
         return new Promise<VirtualFile>((resolve) => {
             const oncreate = (uniqueId: number) => {
                 const assetPath = this._assetPath(uniqueId);
                 if (assetPath === path) {
-                    this._events.off('asset:create', oncreate);
                     const file = this._files.get(path);
                     if (!file || file.type !== type) {
                         return;
                     }
+                    this._events.off('asset:create', oncreate);
                     resolve(file);
                 }
             };
@@ -493,35 +494,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             throw new Error(`missing name for ${path}`);
         }
 
-        // check if already creating
-        if (this._creating.has(path)) {
-            return;
-        }
-
         // create rest promise first to use in load promise
         const rest = new Deferred<Asset>();
-
-        // store creating promise
-        this._creating.set(path, rest.promise);
 
         // validate parent
         let parent: number | undefined = undefined;
         if (parentPath !== '') {
-            const file = this._files.get(parentPath);
-            if (file) {
-                // check if parent is a folder
-                if (file.type !== 'folder') {
-                    throw new Error(`parent folder ${parentPath} is not a folder`);
-                }
-                parent = file.uniqueId;
-            } else {
-                // wait for parent to be created
-                const parentCreating = this._creating.get(parentPath);
-                if (!parentCreating) {
-                    throw new Error(`parent folder ${parentPath} not found for ${path}`);
-                }
-                parent = (await parentCreating).uniqueId;
-            }
+            const file = await this.waitForFile(parentPath, 'folder');
+            parent = file.uniqueId;
         }
 
         // wait for messenger to notify of asset load
