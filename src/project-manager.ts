@@ -508,17 +508,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             throw new Error('project not loaded');
         }
 
-        // check if file already exists
-        if (await this._getFile(path, type)) {
-            this._warn(`skipping create of ${type} ${path} as it already exists`);
-            return;
-        }
-
         const [parentPath, name] = parsePath(path);
 
         // validate name
         if (!name) {
             throw new Error(`missing name for ${path}`);
+        }
+
+        // check if file already exists
+        if (await this._getFile(path, type)) {
+            this._warn(`skipping create of ${type} ${path} as it already exists`);
+            return;
         }
 
         // validate parent
