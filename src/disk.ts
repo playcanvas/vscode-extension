@@ -394,7 +394,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             if (name1 === name2 || folder1 === folder2) {
                                 this._log(`rename.local ${op2.uri} -> ${op1.uri}`);
                                 projectManager.rename(path2, path1);
-                                // Clear in-flight for both URIs
                                 i++;
                                 continue;
                             }
