@@ -61,6 +61,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _files: Map<string, VirtualFile> = new Map<string, VirtualFile>();
 
+    private _creating: Map<string, Promise<VirtualFile>> = new Map<string, Promise<VirtualFile>>();
+
     private _idToUniqueId: Map<number, number> = new Map<number, number>();
 
     error = signal<Error | undefined>(undefined);
@@ -234,6 +236,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(doc.data));
         });
 
+        // emit file created event
         this._events.emit('asset:file:create', path, 'file', buffer.from(doc.data));
 
         this._log(`added file ${path}`);
@@ -257,9 +260,27 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             uniqueId
         };
         this._files.set(path, file);
+
+        // emit folder created event
         this._events.emit('asset:file:create', path, 'folder', new Uint8Array());
 
         this._log(`added folder ${path}`);
+    }
+
+    private async _getFile(path: string, type: 'file' | 'folder') {
+        // check if file already exists
+        const file = this._files.get(path);
+        if (file && file.type === type) {
+            return Promise.resolve(file);
+        }
+
+        // check if already creating
+        const creating = this._creating.get(`${type}:${path}`);
+        if (creating) {
+            return creating;
+        }
+
+        return undefined;
     }
 
     private _watchMessenger(branchId: string) {
@@ -336,28 +357,38 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // emit asset created event
             this._events.emit('asset:create', uniqueId);
         });
-        const assetDeleteHandle = this._messenger.on('assets.delete', async (e) => {
+        const assetDeleteHandle = this._messenger.on('assets.delete', async ({ data: { assets } }) => {
+            // filter assets to only include valid ones
+            const valid: [number, string, Asset][] = assets.reduce(
+                (paths, raw) => {
+                    // check for valid number
+                    const uniqueId = parseInt(raw, 10);
+                    if (isNaN(uniqueId)) {
+                        return paths;
+                    }
+
+                    // check stored asset
+                    const asset = this._assets.get(uniqueId);
+                    if (!asset) {
+                        return paths;
+                    }
+
+                    // check if asset is a supported type
+                    if (!FILE_TYPES.includes(asset.type)) {
+                        return paths;
+                    }
+
+                    // get path
+                    const path = this._assetPath(uniqueId);
+                    paths.push([uniqueId, path, asset]);
+                    return paths;
+                },
+                [] as [number, string, Asset][]
+            );
+
+            // prepare subscriptions
             const subscriptions: [string, string][] = [];
-            for (const raw of e.data.assets) {
-                // check for valid number
-                const uniqueId = parseInt(raw, 10);
-                if (isNaN(uniqueId)) {
-                    continue;
-                }
-
-                // check stored asset
-                const asset = this._assets.get(uniqueId);
-                if (!asset) {
-                    continue;
-                }
-
-                // check if asset is a supported type
-                if (!FILE_TYPES.includes(asset.type)) {
-                    continue;
-                }
-
-                // remove from file system
-                const path = this._assetPath(uniqueId);
+            for (const [uniqueId, path, asset] of valid) {
                 const file = this._files.get(path);
                 if (file?.uniqueId === uniqueId) {
                     this._files.delete(path);
@@ -428,7 +459,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         const docOpenHandle = this._events.on('asset:doc:open', (path: string) => {
             // wait for file to be available
-            this.waitForFile(path).then((file) => {
+            this.waitForFile(path, 'file').then((file) => {
                 // join relay room
                 this._relay.join(`document-${file.uniqueId}`, projectId);
                 this._cleanup.push(async () => {
@@ -455,25 +486,33 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         };
     }
 
-    waitForFile(path: string, type: 'file' | 'folder' = 'file') {
-        const file = this._files.get(path);
-        if (file && file.type === type) {
-            return Promise.resolve(file);
+    async waitForFile(path: string, type: 'file' | 'folder') {
+        // check if file already exists
+        const file = await this._getFile(path, type);
+        if (file) {
+            return file;
         }
-        return new Promise<VirtualFile>((resolve) => {
+
+        // creation promise
+        const promise = new Promise<VirtualFile>((resolve) => {
             const oncreate = (uniqueId: number) => {
                 const assetPath = this._assetPath(uniqueId);
                 if (assetPath === path) {
-                    this._events.off('asset:create', oncreate);
                     const file = this._files.get(path);
                     if (!file || file.type !== type) {
                         return;
                     }
+                    this._events.off('asset:create', oncreate);
                     resolve(file);
                 }
             };
             this._events.on('asset:create', oncreate);
+        }).finally(() => {
+            this._creating.delete(`${type}:${path}`);
         });
+        this._creating.set(`${type}:${path}`, promise);
+
+        return promise;
     }
 
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
@@ -488,13 +527,16 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             throw new Error(`missing name for ${path}`);
         }
 
+        // check if file already exists
+        if (await this._getFile(path, type)) {
+            this._warn(`skipping create of ${type} ${path} as it already exists`);
+            return;
+        }
+
         // validate parent
         let parent: number | undefined = undefined;
         if (parentPath !== '') {
-            const file = this._files.get(parentPath);
-            if (!file || file.type !== 'folder') {
-                throw new Error(`missing parent folder ${parentPath}`);
-            }
+            const file = await this.waitForFile(parentPath, 'folder');
             parent = file.uniqueId;
         }
 
@@ -552,11 +594,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         await created;
     }
 
-    async delete(path: string) {
+    async delete(path: string, type: 'file' | 'folder') {
         // check if file exists
-        const file = this._files.get(path);
+        const file = await this._getFile(path, type);
         if (!file) {
-            throw new Error(`file not found ${path}`);
+            this._warn(`skipping delete of ${path} as it does not exist`);
+            return;
         }
 
         // notify ShareDB to delete asset
@@ -831,6 +874,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchEvents();
             unwatchMessenger();
 
+            this._creating.clear();
             this._files.clear();
             this._assets.clear();
 
