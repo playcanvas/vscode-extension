@@ -507,6 +507,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 }
             };
             this._events.on('asset:create', oncreate);
+        }).finally(() => {
+            this._creating.delete(`${type}:${path}`);
         });
         this._creating.set(`${type}:${path}`, promise);
 
@@ -872,6 +874,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchEvents();
             unwatchMessenger();
 
+            this._creating.clear();
             this._files.clear();
             this._assets.clear();
 
