@@ -544,7 +544,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // validate parent
         let parent: number | undefined = undefined;
         if (parentPath !== '') {
-            const file = await this.waitForFile(parentPath, 'folder');
+            const file = this._files.get(parentPath);
+            if (!file || file.type !== 'folder') {
+                throw new Error(`parent folder not found ${parentPath}`);
+            }
             parent = file.uniqueId;
         }
 
