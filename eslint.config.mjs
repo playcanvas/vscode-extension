@@ -1,6 +1,4 @@
 import eslint from '@eslint/js';
-import typescriptEslint from '@typescript-eslint/eslint-plugin';
-import tsParser from '@typescript-eslint/parser';
 import { defineConfig } from 'eslint/config';
 import pluginImport from 'eslint-plugin-import';
 import * as pluginPackageJson from 'eslint-plugin-package-json';
@@ -45,10 +43,10 @@ const baseConfig = {
 const tsFilesConfig = {
     files: ['**/*.{js,mjs,ts}'],
     plugins: {
-        '@typescript-eslint': typescriptEslint
+        '@typescript-eslint': tseslint.plugin
     },
     languageOptions: {
-        parser: tsParser,
+        parser: tseslint.parser,
         ecmaVersion: 2022,
         sourceType: 'module',
         globals: globals.node
