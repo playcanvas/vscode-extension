@@ -61,8 +61,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _files: Map<string, VirtualFile> = new Map<string, VirtualFile>();
 
-    private _creating: Map<string, Promise<VirtualFile>> = new Map<string, Promise<VirtualFile>>();
-
     private _idToUniqueId: Map<number, number> = new Map<number, number>();
 
     error = signal<Error | undefined>(undefined);
@@ -265,26 +263,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._events.emit('asset:file:create', path, 'folder', new Uint8Array());
 
         this._log(`added folder ${path}`);
-    }
-
-    private _existsFile(path: string, type: 'file' | 'folder') {
-        return this._files.get(path)?.type === type || this._creating.has(`${type}:${path}`);
-    }
-
-    private async _getFile(path: string, type: 'file' | 'folder') {
-        // check if file already exists
-        const file = this._files.get(path);
-        if (file && file.type === type) {
-            return Promise.resolve(file);
-        }
-
-        // check if already creating
-        const creating = this._creating.get(`${type}:${path}`);
-        if (creating) {
-            return creating;
-        }
-
-        return undefined;
     }
 
     private _watchMessenger(branchId: string) {
@@ -492,8 +470,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async waitForFile(path: string, type: 'file' | 'folder', timeout = 1000) {
         // check if file already exists
-        const file = await this._getFile(path, type);
-        if (file) {
+        const file = this._files.get(path);
+        if (file && file.type === type) {
             return file;
         }
 
@@ -532,14 +510,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // check if file already exists
-        if (this._existsFile(path, type)) {
+        if (this._files.get(path)?.type === type) {
             this._warn(`skipping create of ${type} ${path} as it already exists`);
             return;
         }
-
-        // set creating promise here
-        const deferred = new Deferred<VirtualFile>();
-        this._creating.set(`${type}:${path}`, deferred.promise);
 
         // validate parent
         let parent: number | undefined = undefined;
@@ -603,20 +577,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // wait for asset to be created
         await created;
-
-        // resolve creating promise
-        const file = this._files.get(path);
-        if (!file || file.type !== type) {
-            throw new Error(`file not found ${path}`);
-        }
-        deferred.resolve(file);
-        this._creating.delete(`${type}:${path}`);
     }
 
     async delete(path: string, type: 'file' | 'folder') {
         // check if file exists
-        const file = await this._getFile(path, type);
-        if (!file) {
+        const file = this._files.get(path);
+        if (!file || file.type !== type) {
             this._warn(`skipping delete of ${path} as it does not exist`);
             return;
         }
@@ -893,7 +859,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchEvents();
             unwatchMessenger();
 
-            this._creating.clear();
             this._files.clear();
             this._assets.clear();
 
