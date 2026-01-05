@@ -36,18 +36,18 @@ const readDirRecursive = async (uri: vscode.Uri) => {
 const fileType = async (uri: vscode.Uri) => {
     const [error, stat] = await catchError(() => vscode.workspace.fs.stat(uri) as Promise<vscode.FileStat>);
     if (error) {
-        return 'file';
+        return undefined;
     }
     return stat.type === vscode.FileType.Directory ? 'folder' : 'file';
 };
 
-const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder'>) => {
+const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder' | undefined>) => {
     if ((await type) === 'folder') {
-        return new Uint8Array();
+        return undefined;
     }
     const [error, content] = await catchError(() => vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
     if (error) {
-        return new Uint8Array();
+        return undefined;
     }
     return content;
 };
@@ -368,19 +368,19 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             | {
                   action: 'create';
                   uri: vscode.Uri;
-                  type: Promise<'file' | 'folder'>;
-                  content: Promise<Uint8Array>;
+                  type: Promise<'file' | 'folder' | undefined>;
+                  content: Promise<Uint8Array | undefined>;
               }
             | {
                   action: 'change';
                   uri: vscode.Uri;
-                  type: Promise<'file'>;
-                  content: Promise<Uint8Array>;
+                  type: Promise<'file' | undefined>;
+                  content: Promise<Uint8Array | undefined>;
               }
             | {
                   action: 'delete';
                   uri: vscode.Uri;
-                  type: Promise<'file' | 'folder'>;
+                  type: Promise<'file' | 'folder' | undefined>;
               };
         const queue: DeferOp[] = [];
         let timeout: NodeJS.Timeout | null = null;
@@ -467,6 +467,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 schedule([path], async () => {
                                     const type = await op.type;
                                     const content = await op.content;
+                                    if (!type) {
+                                        this._warn(`skipping create of ${op.uri} as type not found`);
+                                        return;
+                                    }
                                     this._log(`create.local ${type} ${op.uri}`);
                                     return projectManager.create(path, type, content);
                                 });
@@ -476,8 +480,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 const path = relativePath(op.uri, folderUri);
                                 schedule([path], async () => {
                                     const content = await op.content;
+                                    if (!content) {
+                                        this._warn(`skipping change of ${op.uri} as content not found`);
+                                        return;
+                                    }
                                     this._log(`change.local ${op.uri}`);
-                                    return Promise.resolve(projectManager.writeFile(path, content));
+                                    return projectManager.writeFile(path, content);
                                 });
                                 break;
                             }
@@ -485,6 +493,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 const path = relativePath(op.uri, folderUri);
                                 schedule([path], async () => {
                                     const type = await op.type;
+                                    if (!type) {
+                                        this._warn(`skipping delete of ${op.uri} as type not found`);
+                                        return;
+                                    }
                                     this._log(`delete.local ${type} ${op.uri}`);
                                     return projectManager.delete(path, type);
                                 });
