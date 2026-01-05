@@ -267,6 +267,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._log(`added folder ${path}`);
     }
 
+    private _existsFile(path: string, type: 'file' | 'folder') {
+        return this._files.get(path)?.type === type || this._creating.has(`${type}:${path}`);
+    }
+
     private async _getFile(path: string, type: 'file' | 'folder') {
         // check if file already exists
         const file = this._files.get(path);
@@ -486,7 +490,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         };
     }
 
-    async waitForFile(path: string, type: 'file' | 'folder') {
+    async waitForFile(path: string, type: 'file' | 'folder', timeout = 1000) {
         // check if file already exists
         const file = await this._getFile(path, type);
         if (file) {
@@ -494,7 +498,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // creation promise
-        const promise = new Promise<VirtualFile>((resolve) => {
+        return new Promise<VirtualFile>((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                this._events.off('asset:create', oncreate);
+                reject(new Error(`timed out waiting for ${type} ${path}`));
+            }, timeout);
             const oncreate = (uniqueId: number) => {
                 const assetPath = this._assetPath(uniqueId);
                 if (assetPath === path) {
@@ -502,17 +510,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     if (!file || file.type !== type) {
                         return;
                     }
+                    clearTimeout(timeoutId);
                     this._events.off('asset:create', oncreate);
                     resolve(file);
                 }
             };
             this._events.on('asset:create', oncreate);
-        }).finally(() => {
-            this._creating.delete(`${type}:${path}`);
         });
-        this._creating.set(`${type}:${path}`, promise);
-
-        return promise;
     }
 
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
@@ -528,18 +532,19 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // check if file already exists
-        if (await this._getFile(path, type)) {
+        if (this._existsFile(path, type)) {
             this._warn(`skipping create of ${type} ${path} as it already exists`);
             return;
         }
 
+        // set creating promise here
+        const deferred = new Deferred<VirtualFile>();
+        this._creating.set(`${type}:${path}`, deferred.promise);
+
         // validate parent
         let parent: number | undefined = undefined;
         if (parentPath !== '') {
-            const file = await this._getFile(parentPath, 'folder');
-            if (!file) {
-                throw new Error(`parent folder not found ${parentPath}`);
-            }
+            const file = await this.waitForFile(parentPath, 'folder');
             parent = file.uniqueId;
         }
 
@@ -557,20 +562,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             };
             this._events.on('asset:create', oncreate);
         });
-
-        // creation promise - chains off the created promise
-        const promise = created
-            .then(() => {
-                const file = this._files.get(path);
-                if (!file || file.type !== type) {
-                    throw new Error(`file not found ${path}`);
-                }
-                return file;
-            })
-            .finally(() => {
-                this._creating.delete(`${type}:${path}`);
-            });
-        this._creating.set(`${type}:${path}`, promise);
 
         // create asset
         let asset: {
@@ -609,6 +600,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // wait for asset to be created
         await created;
+
+        // resolve creating promise
+        const file = this._files.get(path);
+        if (!file || file.type !== type) {
+            throw new Error(`file not found ${path}`);
+        }
+        deferred.resolve(file);
+        this._creating.delete(`${type}:${path}`);
     }
 
     async delete(path: string, type: 'file' | 'folder') {
