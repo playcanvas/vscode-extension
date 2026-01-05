@@ -41,7 +41,10 @@ const fileType = async (uri: vscode.Uri) => {
     return stat.type === vscode.FileType.Directory ? 'folder' : 'file';
 };
 
-const fileContent = async (uri: vscode.Uri) => {
+const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder'>) => {
+    if ((await type) === 'folder') {
+        return new Uint8Array();
+    }
     const [error, content] = await catchError(() => vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
     if (error) {
         return new Uint8Array();
@@ -517,11 +520,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            const type = fileType(uri);
             defer({
                 action: 'create',
                 uri,
-                type: fileType(uri),
-                content: fileContent(uri)
+                type,
+                content: fileContent(uri, type)
             });
         });
         watcher.onDidChange((uri) => {
@@ -557,11 +561,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // NOTE: mark as unsaved to allow project manager write
             file.saved = false;
 
+            const type = Promise.resolve('file' as const);
             defer({
                 action: 'change',
                 uri,
-                type: Promise.resolve('file' as const),
-                content: fileContent(uri)
+                type,
+                content: fileContent(uri, type)
             });
         });
         watcher.onDidDelete((uri) => {
