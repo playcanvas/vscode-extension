@@ -443,7 +443,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         // schedule promise
                         const chain = wait.then(fn).finally(() => {
                             // cleanup
-                            deps.forEach((path) => processing.delete(path));
+                            deps.forEach((path) => {
+                                if (processing.get(path) === chain) {
+                                    processing.delete(path);
+                                }
+                            });
                         });
 
                         // add to processing
