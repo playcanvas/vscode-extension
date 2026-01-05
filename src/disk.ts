@@ -396,6 +396,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return null;
         };
 
+        // check if one path is a dependency of the other
+        const dependency = (path1: string, path2: string) => {
+            if (path1 === path2) {
+                return true;
+            }
+            if (path1.startsWith(`${path2}/`)) {
+                return true;
+            }
+            if (path2.startsWith(`${path1}/`)) {
+                return true;
+            }
+            return false;
+        };
+
         // defer operation to queue
         const defer = (op: DeferOp) => {
             queue.push(op);
@@ -419,7 +433,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         // wait for all dependencies to resolve
                         const wait = Promise.all(
                             Array.from(processing.entries()).reduce((rest, [path, promise]) => {
-                                if (deps.some((p) => p.startsWith(path) || path.startsWith(p))) {
+                                if (deps.some((p) => dependency(p, path))) {
                                     rest.push(promise);
                                 }
                                 return rest;
