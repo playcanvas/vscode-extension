@@ -477,7 +477,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 schedule([path], async () => {
                                     const content = await op.content;
                                     this._log(`change.local ${op.uri}`);
-                                    return projectManager.writeFile(path, content);
+                                    return Promise.resolve(projectManager.writeFile(path, content));
                                 });
                                 break;
                             }
