@@ -536,7 +536,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // validate parent
         let parent: number | undefined = undefined;
         if (parentPath !== '') {
-            const file = await this.waitForFile(parentPath, 'folder');
+            const file = await this._getFile(parentPath, 'folder');
+            if (!file) {
+                throw new Error(`parent folder not found ${parentPath}`);
+            }
             parent = file.uniqueId;
         }
 
@@ -554,6 +557,20 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             };
             this._events.on('asset:create', oncreate);
         });
+
+        // creation promise - chains off the created promise
+        const promise = created
+            .then(() => {
+                const file = this._files.get(path);
+                if (!file || file.type !== type) {
+                    throw new Error(`file not found ${path}`);
+                }
+                return file;
+            })
+            .finally(() => {
+                this._creating.delete(`${type}:${path}`);
+            });
+        this._creating.set(`${type}:${path}`, promise);
 
         // create asset
         let asset: {
