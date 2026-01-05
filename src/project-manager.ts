@@ -578,17 +578,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
-        // notify ShareDB to delete asset
-        this._sharedb.sendRaw(
-            `fs${JSON.stringify({
-                op: 'delete',
-                ids: [file.uniqueId]
-            })}`
-        );
-
-        // wait for messenger to notify of asset delete
+        // create delete promise listening on asset:delete event
         const fileUniqueId = file.uniqueId;
-        await new Promise<void>((resolve) => {
+        const delete_ = new Promise<void>((resolve) => {
             const ondelete = (uniqueId: number) => {
                 if (uniqueId === fileUniqueId) {
                     this._events.off('asset:delete', ondelete);
@@ -597,6 +589,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             };
             this._events.on('asset:delete', ondelete);
         });
+
+        // notify ShareDB to delete asset
+        this._sharedb.sendRaw(
+            `fs${JSON.stringify({
+                op: 'delete',
+                ids: [file.uniqueId]
+            })}`
+        );
+
+        // wait for delete promise to resolve
+        await delete_;
 
         this._log(`deleted ${path}`);
     }
