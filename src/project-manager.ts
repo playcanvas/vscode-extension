@@ -488,7 +488,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         });
     }
 
-    async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
+    async create(path: string, type: 'folder' | 'file', content: Uint8Array) {
         if (!this._projectId || !this._branchId) {
             throw new Error('project not loaded');
         }
@@ -553,7 +553,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 assetType: 'text',
                 blobType: 'text/plain'
             };
-            const src = content?.length ? buffer.toString(content) : '\n';
+            const src = content.length ? buffer.toString(content) : '\n';
             ext = EXT_TO_ASSET.has(ext) ? ext : 'txt';
             asset = {
                 type: assetType,
