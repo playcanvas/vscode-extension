@@ -368,7 +368,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
             return null;
         };
-
+        
         // defer operation to queue
         const defer = (op: DeferOp) => {
             queue.push(op);
@@ -383,6 +383,31 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 while (queue.length > 0) {
                     // snapshot queue
                     const batch = queue.splice(0);
+
+                    // processing promises
+                    const processing = new Map<string, Promise<void>>();
+
+                    // schedule promise
+                    const schedule = (deps: string[], fn: () => Promise<void>) => {
+                        // wait for all dependencies to resolve
+                        const wait = Promise.all(Array.from(processing.entries()).reduce((rest, [path, promise]) => {
+                            if (deps.some((p) => p.startsWith(path) || path.startsWith(p))) {
+                                rest.push(promise);
+                            }
+                            return rest;
+                        }, [] as Promise<void>[])); 
+
+                        // schedule promise
+                        const chain = wait.then(fn).finally(() => {
+                            // cleanup
+                            deps.forEach((path) => processing.delete(path));
+                        });
+
+                        // add to processing
+                        deps.forEach((path) => processing.set(path, chain));
+
+                        return chain;
+                    }
     
                     // process batch
                     for (let i = 0; i < batch.length; i++) {
@@ -398,7 +423,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 const [folder2, name2] = parsePath(path2);
                                 if (name1 === name2 || folder1 === folder2) {
                                     this._log(`rename.local ${op2.uri} -> ${op1.uri}`);
-                                    await projectManager.rename(path2, path1);
+                                    schedule([path1, path2], () => projectManager.rename(path2, path1));
                                     i++;
                                     continue;
                                 }
@@ -409,23 +434,26 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             case 'create': {
                                 const path = relativePath(op.uri, folderUri);
                                 this._log(`create.local ${op.type} ${op.uri}`);
-                                await projectManager.create(path, op.type, op.content);
+                                schedule([path], () => projectManager.create(path, op.type, op.content));
                                 break;
                             }
                             case 'change': {
                                 const path = relativePath(op.uri, folderUri);
                                 this._log(`change.local ${op.uri}`);
-                                projectManager.writeFile(path, op.content);
+                                schedule([path], () => Promise.resolve(projectManager.writeFile(path, op.content)));
                                 break;
                             }
                             case 'delete': {
                                 const path = relativePath(op.uri, folderUri);
                                 this._log(`delete.local ${op.type} ${op.uri}`);
-                                await projectManager.delete(path, op.type);
+                                schedule([path], () => projectManager.delete(path, op.type));
                                 break;
                             }
                         }
                     }
+
+                    // wait for all processing promises to resolve
+                    await Promise.all(Array.from(processing.values()));
                 }
     
                 timeout = null;
