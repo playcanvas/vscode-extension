@@ -14,6 +14,10 @@ abstract class Linker<T> {
         console.log(`[${this.constructor.name}]`, ...args);
     }
 
+    protected _warn(...args: unknown[]) {
+        console.warn(`[${this.constructor.name}]`, ...args);
+    }
+
     abstract link(params: T): Promise<void>;
 
     async unlink() {

@@ -93,10 +93,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return this._files;
     }
 
-    private _warn(...args: unknown[]) {
-        console.warn(`[${this.constructor.name}]`, ...args);
-    }
-
     private _assetPath(uniqueId: number, override: { path?: number[]; name?: string } = {}): string {
         const asset = this._assets.get(uniqueId);
         if (!asset) {

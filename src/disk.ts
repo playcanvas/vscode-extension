@@ -524,6 +524,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(uri, folderUri);
             const file = projectManager.files.get(path);
             if (!file) {
+                this._warn(`skipping delete of ${path} as it is not in memory`);
                 return;
             }
 
