@@ -357,6 +357,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
               };
         const queue: DeferOp[] = [];
         let timeout: NodeJS.Timeout | null = null;
+        let scheduled = false;
 
         // can batch create+delete into rename
         const potentialRename = (op1: DeferOp, op2: DeferOp) => {
@@ -369,20 +370,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return null;
         };
 
-        // defer file system operations to combine related operations
-        const defer = (op: DeferOp) => {
-            queue.push(op);
-            if (timeout) {
-                clearTimeout(timeout);
-            }
-            timeout = setTimeout(() => {
-                if (!queue.length) {
-                    timeout = null;
-                    return;
-                }
-                for (let i = 0; i < queue.length; i++) {
-                    if (i + 1 < queue.length) {
-                        const rename = potentialRename(queue[i], queue[i + 1]);
+        const processQueue = async () => {
+            while (queue.length > 0) {
+                // snapshot queue
+                const batch = queue.splice(0);
+
+                // process batch
+                for (let i = 0; i < batch.length; i++) {
+                    if (i + 1 < batch.length) {
+                        const rename = potentialRename(batch[i], batch[i + 1]);
                         if (rename) {
                             const [op1, op2] = rename;
 
@@ -393,18 +389,18 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             const [folder2, name2] = parsePath(path2);
                             if (name1 === name2 || folder1 === folder2) {
                                 this._log(`rename.local ${op2.uri} -> ${op1.uri}`);
-                                projectManager.rename(path2, path1);
+                                await projectManager.rename(path2, path1);
                                 i++;
                                 continue;
                             }
                         }
                     }
-                    const op = queue[i];
+                    const op = batch[i];
                     switch (op.action) {
                         case 'create': {
                             const path = relativePath(op.uri, folderUri);
                             this._log(`create.local ${op.type} ${op.uri}`);
-                            projectManager.create(path, op.type, op.content);
+                            await projectManager.create(path, op.type, op.content);
                             break;
                         }
                         case 'change': {
@@ -416,14 +412,25 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         case 'delete': {
                             const path = relativePath(op.uri, folderUri);
                             this._log(`delete.local ${op.type} ${op.uri}`);
-                            projectManager.delete(path, op.type);
+                            await projectManager.delete(path, op.type);
                             break;
                         }
                     }
                 }
-                queue.length = 0;
-                timeout = null;
-            }, 10);
+            }
+
+            scheduled = false;
+        };
+
+        const defer = (op: DeferOp) => {
+            queue.push(op);
+
+            if (!scheduled) {
+                scheduled = true;
+
+                // defer processing to allow for rename batching
+                timeout = setTimeout(processQueue, 10);
+            }
         };
 
         // file system watcher
