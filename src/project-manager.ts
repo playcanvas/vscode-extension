@@ -511,7 +511,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (parentPath !== '') {
             const file = this._files.get(parentPath);
             if (!file || file.type !== 'folder') {
-                throw new Error(`parent folder not found ${parentPath}`);
+                throw new Error(`missing parent folder ${parentPath} of ${path}`);
             }
             parent = file.uniqueId;
         }
