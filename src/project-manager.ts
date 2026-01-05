@@ -641,9 +641,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 throw new Error(`file not found ${oldPath}`);
             }
 
-            // rename asset
-            const renamed = this._rest.assetRename(this._projectId, this._branchId, file.uniqueId, newName);
-
             // file update
             const updated = new Promise<void>((resolve) => {
                 const onupdate = (uniqueId: number, key: string) => {
@@ -654,6 +651,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 };
                 this._events.on('asset:update', onupdate);
             });
+
+            // rename asset
+            const renamed = this._rest.assetRename(this._projectId, this._branchId, file.uniqueId, newName);
 
             // wait for rename and file update to complete
             await Promise.all([renamed, updated]);
@@ -674,15 +674,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             throw new Error(`destination folder not found ${newParent}`);
         }
 
-        // move asset
-        this._sharedb.sendRaw(
-            `fs${JSON.stringify({
-                op: 'move',
-                ids: [srcFile.uniqueId],
-                to: destFile.uniqueId
-            })}`
-        );
-
         // file updated
         const updated = new Promise<void>((resolve) => {
             const onupdate = (uniqueId: number, key: string) => {
@@ -693,6 +684,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             };
             this._events.on('asset:update', onupdate);
         });
+
+        // move asset
+        this._sharedb.sendRaw(
+            `fs${JSON.stringify({
+                op: 'move',
+                ids: [srcFile.uniqueId],
+                to: destFile.uniqueId
+            })}`
+        );
 
         // wait for file update to complete
         await updated;
