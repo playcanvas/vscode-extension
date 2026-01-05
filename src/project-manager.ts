@@ -468,7 +468,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         };
     }
 
-    async waitForFile(path: string, type: 'file' | 'folder', timeout = 1000) {
+    async waitForFile(path: string, type: 'file' | 'folder') {
         // check if file already exists
         const file = this._files.get(path);
         if (file && file.type === type) {
@@ -476,11 +476,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // creation promise
-        return new Promise<VirtualFile>((resolve, reject) => {
-            const timeoutId = setTimeout(() => {
-                this._events.off('asset:create', oncreate);
-                reject(new Error(`timed out waiting for ${type} ${path}`));
-            }, timeout);
+        return new Promise<VirtualFile>((resolve) => {
             const oncreate = (uniqueId: number) => {
                 const assetPath = this._assetPath(uniqueId);
                 if (assetPath === path) {
@@ -488,7 +484,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     if (!file || file.type !== type) {
                         return;
                     }
-                    clearTimeout(timeoutId);
                     this._events.off('asset:create', oncreate);
                     resolve(file);
                 }
