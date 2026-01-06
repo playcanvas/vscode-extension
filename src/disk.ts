@@ -396,8 +396,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return null;
         };
 
-        // check if one path is a dependency of the other
-        const dependency = (path1: string, path2: string) => {
+        // check if one path is related to the other (i.e. one is a parent of the other)
+        const related = (path1: string, path2: string) => {
             if (path1 === path2) {
                 return true;
             }
@@ -433,7 +433,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         // wait for all dependencies to resolve
                         const wait = Promise.all(
                             Array.from(processing.entries()).reduce((rest, [path, promise]) => {
-                                if (deps.some((p) => dependency(p, path))) {
+                                if (deps.some((p) => related(p, path))) {
                                     rest.push(promise);
                                 }
                                 return rest;
