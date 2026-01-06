@@ -42,7 +42,7 @@ const fileType = async (uri: vscode.Uri) => {
 };
 
 const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder' | undefined>) => {
-    if ((await type) === 'folder') {
+    if ((await type) !== 'file') {
         return undefined;
     }
     const [error, content] = await catchError(() => vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
