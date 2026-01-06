@@ -469,7 +469,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 const [folder1, name1] = parsePath(path1);
                                 const [folder2, name2] = parsePath(path2);
                                 if (name1 === name2 || folder1 === folder2) {
-                                    schedule([path1, path2], () => {
+                                    schedule([path1, path2], async () => {
+                                        const type1 = await op1.type;
+                                        if (!type1) {
+                                            this._warn(`skipping rename of ${op1.uri} as type not found`);
+                                            return;
+                                        }
+                                        const type2 = await op2.type;
+                                        if (!type2) {
+                                            this._warn(`skipping rename of ${op2.uri} as type not found`);
+                                            return;
+                                        }
                                         this._log(`rename.local ${op2.uri} -> ${op1.uri}`);
                                         return projectManager.rename(path2, path1);
                                     });
