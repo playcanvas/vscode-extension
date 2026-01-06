@@ -441,14 +441,16 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         );
 
                         // schedule promise
-                        const chain = wait.then(fn).finally(() => {
-                            // cleanup
-                            deps.forEach((path) => {
-                                if (processing.get(path) === chain) {
-                                    processing.delete(path);
-                                }
+                        const chain = wait
+                            .then(() => fn().catch((error) => this._warn(`schedule error: ${error}`)))
+                            .finally(() => {
+                                // cleanup
+                                deps.forEach((path) => {
+                                    if (processing.get(path) === chain) {
+                                        processing.delete(path);
+                                    }
+                                });
                             });
-                        });
 
                         // add to processing
                         deps.forEach((path) => processing.set(path, chain));
