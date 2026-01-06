@@ -65,6 +65,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _echo: Set<string> = new Set<string>();
 
+    private _locks: Set<string> = new Set<string>();
+
     private _mutex = new Mutex<void>();
 
     private _ignoring = (_uri: vscode.Uri) => false;
@@ -182,10 +184,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // write directly to document if open
             const open = await vscode.workspace.openTextDocument(uri);
             if (!open.isDirty) {
-                // apply edits
+                // apply edit
                 const workspaceEdit = new vscode.WorkspaceEdit();
                 workspaceEdit.set(uri, sharedb2vscode(open, [op]));
+                this._locks.add(`${uri}`);
                 await vscode.workspace.applyEdit(workspaceEdit);
+                this._locks.delete(`${uri}`);
 
                 // save document
                 await open.save();
@@ -316,6 +320,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(document.uri, folderUri);
             const file = projectManager.files.get(path);
             if (!file || file.type !== 'file') {
+                return;
+            }
+
+            // check if locked (from remote update)
+            if (this._locks.has(`${document.uri}`)) {
                 return;
             }
 
