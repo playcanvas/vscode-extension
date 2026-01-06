@@ -9,7 +9,15 @@ import * as buffer from './utils/buffer';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { Mutex } from './utils/mutex';
-import { parsePath, sharedb2vscode, relativePath, vscode2sharedb, uriStartsWith, fileExists } from './utils/utils';
+import {
+    parsePath,
+    sharedb2vscode,
+    relativePath,
+    vscode2sharedb,
+    uriStartsWith,
+    fileExists,
+    catchError
+} from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
     const result: vscode.Uri[] = [];
@@ -23,6 +31,25 @@ const readDirRecursive = async (uri: vscode.Uri) => {
         }
     }
     return result;
+};
+
+const fileType = async (uri: vscode.Uri) => {
+    const [error, stat] = await catchError(() => vscode.workspace.fs.stat(uri) as Promise<vscode.FileStat>);
+    if (error) {
+        return undefined;
+    }
+    return stat.type === vscode.FileType.Directory ? 'folder' : 'file';
+};
+
+const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder' | undefined>) => {
+    if ((await type) !== 'file') {
+        return undefined;
+    }
+    const [error, content] = await catchError(() => vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
+    if (error) {
+        return undefined;
+    }
+    return content;
 };
 
 class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManager }> {
@@ -341,23 +368,22 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             | {
                   action: 'create';
                   uri: vscode.Uri;
-                  type: 'file' | 'folder';
-                  content?: Uint8Array;
+                  type: Promise<'file' | 'folder' | undefined>;
+                  content: Promise<Uint8Array | undefined>;
               }
             | {
                   action: 'change';
                   uri: vscode.Uri;
-                  type: 'file';
-                  content: Uint8Array;
+                  type: Promise<'file' | undefined>;
+                  content: Promise<Uint8Array | undefined>;
               }
             | {
                   action: 'delete';
                   uri: vscode.Uri;
-                  type: 'file' | 'folder';
+                  type: Promise<'file' | 'folder' | undefined>;
               };
         const queue: DeferOp[] = [];
         let timeout: NodeJS.Timeout | null = null;
-        let scheduled = false;
 
         // can batch create+delete into rename
         const potentialRename = (op1: DeferOp, op2: DeferOp) => {
@@ -370,72 +396,156 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return null;
         };
 
-        const processQueue = async () => {
-            while (queue.length > 0) {
-                // snapshot queue
-                const batch = queue.splice(0);
-
-                // process batch
-                for (let i = 0; i < batch.length; i++) {
-                    if (i + 1 < batch.length) {
-                        const rename = potentialRename(batch[i], batch[i + 1]);
-                        if (rename) {
-                            const [op1, op2] = rename;
-
-                            // batch create/delete of same file into rename
-                            const path1 = relativePath(op1.uri, folderUri);
-                            const path2 = relativePath(op2.uri, folderUri);
-                            const [folder1, name1] = parsePath(path1);
-                            const [folder2, name2] = parsePath(path2);
-                            if (name1 === name2 || folder1 === folder2) {
-                                this._log(`rename.local ${op2.uri} -> ${op1.uri}`);
-                                await projectManager.rename(path2, path1);
-                                i++;
-                                continue;
-                            }
-                        }
-                    }
-                    const op = batch[i];
-                    switch (op.action) {
-                        case 'create': {
-                            const path = relativePath(op.uri, folderUri);
-                            this._log(`create.local ${op.type} ${op.uri}`);
-                            await projectManager.create(path, op.type, op.content);
-                            break;
-                        }
-                        case 'change': {
-                            const path = relativePath(op.uri, folderUri);
-                            this._log(`change.local ${op.uri}`);
-                            projectManager.writeFile(path, op.content);
-                            break;
-                        }
-                        case 'delete': {
-                            const path = relativePath(op.uri, folderUri);
-                            this._log(`delete.local ${op.type} ${op.uri}`);
-                            await projectManager.delete(path, op.type);
-                            break;
-                        }
-                    }
-                }
+        // check if one path is related to the other (i.e. one is a parent of the other)
+        const related = (path1: string, path2: string) => {
+            if (path1 === path2) {
+                return true;
             }
-
-            scheduled = false;
+            if (path1.startsWith(`${path2}/`)) {
+                return true;
+            }
+            if (path2.startsWith(`${path1}/`)) {
+                return true;
+            }
+            return false;
         };
 
+        // defer operation to queue
         const defer = (op: DeferOp) => {
             queue.push(op);
 
-            if (!scheduled) {
-                scheduled = true;
-
-                // defer processing to allow for rename batching
-                timeout = setTimeout(processQueue, 10);
+            // if already scheduled, do nothing
+            if (timeout) {
+                return;
             }
+
+            // schedule processing with delay to allow for rename batching
+            timeout = setTimeout(async () => {
+                while (queue.length > 0) {
+                    // snapshot queue
+                    const batch = queue.splice(0);
+
+                    // processing promises
+                    const processing = new Map<string, Promise<void>>();
+
+                    // schedule promise
+                    const schedule = (deps: string[], fn: () => Promise<void>) => {
+                        // wait for all dependencies to resolve
+                        const wait = Promise.all(
+                            Array.from(processing.entries()).reduce((rest, [path, promise]) => {
+                                if (deps.some((p) => related(p, path))) {
+                                    rest.push(promise);
+                                }
+                                return rest;
+                            }, [] as Promise<void>[])
+                        );
+
+                        // schedule promise
+                        const chain = wait
+                            .then(() => fn().catch((error) => this._warn(`schedule error: ${error}`)))
+                            .finally(() => {
+                                // cleanup
+                                deps.forEach((path) => {
+                                    if (processing.get(path) === chain) {
+                                        processing.delete(path);
+                                    }
+                                });
+                            });
+
+                        // add to processing
+                        deps.forEach((path) => processing.set(path, chain));
+
+                        return chain;
+                    };
+
+                    // process batch
+                    for (let i = 0; i < batch.length; i++) {
+                        if (i + 1 < batch.length) {
+                            const rename = potentialRename(batch[i], batch[i + 1]);
+                            if (rename) {
+                                const [op1, op2] = rename;
+
+                                // batch create/delete of same file into rename
+                                const path1 = relativePath(op1.uri, folderUri);
+                                const path2 = relativePath(op2.uri, folderUri);
+                                const [folder1, name1] = parsePath(path1);
+                                const [folder2, name2] = parsePath(path2);
+                                if (name1 === name2 || folder1 === folder2) {
+                                    schedule([path1, path2], async () => {
+                                        const type1 = await op1.type;
+                                        if (!type1) {
+                                            this._warn(`skipping rename of ${op1.uri} as type not found`);
+                                            return;
+                                        }
+                                        const type2 = await op2.type;
+                                        if (!type2) {
+                                            this._warn(`skipping rename of ${op2.uri} as type not found`);
+                                            return;
+                                        }
+                                        this._log(`rename.local ${op2.uri} -> ${op1.uri}`);
+                                        return projectManager.rename(path2, path1);
+                                    });
+                                    i++;
+                                    continue;
+                                }
+                            }
+                        }
+                        const op = batch[i];
+                        switch (op.action) {
+                            case 'create': {
+                                const path = relativePath(op.uri, folderUri);
+                                schedule([path], async () => {
+                                    const type = await op.type;
+                                    const content = await op.content;
+                                    if (!type) {
+                                        this._warn(`skipping create of ${op.uri} as type not found`);
+                                        return;
+                                    }
+                                    this._log(`create.local ${type} ${op.uri}`);
+                                    return projectManager.create(path, type, content);
+                                });
+                                break;
+                            }
+                            case 'change': {
+                                const path = relativePath(op.uri, folderUri);
+                                schedule([path], async () => {
+                                    const content = await op.content;
+                                    if (!content) {
+                                        this._warn(`skipping change of ${op.uri} as content not found`);
+                                        return;
+                                    }
+                                    this._log(`change.local ${op.uri}`);
+                                    return projectManager.writeFile(path, content);
+                                });
+                                break;
+                            }
+                            case 'delete': {
+                                const path = relativePath(op.uri, folderUri);
+                                schedule([path], async () => {
+                                    const type = await op.type;
+                                    if (!type) {
+                                        this._warn(`skipping delete of ${op.uri} as type not found`);
+                                        return;
+                                    }
+                                    this._log(`delete.local ${type} ${op.uri}`);
+                                    return projectManager.delete(path, type);
+                                });
+                                break;
+                            }
+                        }
+                    }
+
+                    // wait for all processing promises to resolve
+                    await Promise.all(Array.from(processing.values()));
+                }
+
+                timeout = null;
+            }, 10);
         };
 
         // file system watcher
         const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folderUri, '**'));
-        watcher.onDidCreate(async (uri) => {
+        watcher.onDidCreate((uri) => {
             if (folderUri.scheme !== uri.scheme) {
                 return;
             }
@@ -452,17 +562,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            const stat = await vscode.workspace.fs.stat(uri);
-            const type = stat.type === vscode.FileType.Directory ? 'folder' : 'file';
-            const content = type === 'file' ? await vscode.workspace.fs.readFile(uri) : undefined;
+            const type = fileType(uri);
             defer({
                 action: 'create',
                 uri,
                 type,
-                content
+                content: fileContent(uri, type)
             });
         });
-        watcher.onDidChange(async (uri) => {
+        watcher.onDidChange((uri) => {
             if (folderUri.scheme !== uri.scheme) {
                 return;
             }
@@ -495,15 +603,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // NOTE: mark as unsaved to allow project manager write
             file.saved = false;
 
-            const content = await vscode.workspace.fs.readFile(uri);
+            const type = Promise.resolve('file' as const);
             defer({
                 action: 'change',
                 uri,
-                type: 'file',
-                content
+                type,
+                content: fileContent(uri, type)
             });
         });
-        watcher.onDidDelete(async (uri) => {
+        watcher.onDidDelete((uri) => {
             if (folderUri.scheme !== uri.scheme) {
                 return;
             }
@@ -531,7 +639,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             defer({
                 action: 'delete',
                 uri,
-                type: file.type
+                type: Promise.resolve(file.type)
             });
         });
         return () => {
