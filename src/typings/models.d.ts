@@ -3,6 +3,7 @@ export type Asset = {
     item_id: string;
     file?: {
         filename: string;
+        hash: string;
     };
     name: string;
     path: number[];

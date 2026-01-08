@@ -11,9 +11,9 @@ export const simpleNotification = (message: string) => {
                 cancellable: false
             },
             () => {
-                return new Promise<void>((end) => {
-                    resolve(end);
-                });
+                const deferred = new Deferred<void>();
+                resolve(deferred.resolve);
+                return deferred.promise;
             }
         );
     });

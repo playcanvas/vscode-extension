@@ -3,6 +3,7 @@ import type sinon from 'sinon';
 import { Rest } from '../../connections/rest';
 import type { Asset, Branch, Project, User } from '../../typings/models';
 import { signal } from '../../utils/signal';
+import { hash } from '../../utils/utils';
 
 import type { MockMessenger } from './messenger';
 import { user, project, assets, branches, documents, accessToken, uniqueId } from './models';
@@ -70,12 +71,17 @@ class MockRest extends Rest {
             ) => {
                 // add new asset to assets map
                 const id = uniqueId.next().value;
+                const document = data.file ? await data.file.text() : '';
                 const asset: Asset = {
                     uniqueId: id,
                     item_id: `${id}`,
-                    file: {
-                        filename: data.filename || data.name
-                    },
+                    file:
+                        data.type === 'folder'
+                            ? undefined
+                            : {
+                                  filename: data.filename || data.name,
+                                  hash: hash(document)
+                              },
                     type: data.type,
                     path: data.parent ? [data.parent] : [],
                     name: data.name
@@ -83,7 +89,6 @@ class MockRest extends Rest {
                 assets.set(id, asset);
 
                 // add document to documents map
-                const document = data.file ? await data.file.text() : '';
                 documents.set(asset.uniqueId, document);
 
                 // call messenger assetCreated signal

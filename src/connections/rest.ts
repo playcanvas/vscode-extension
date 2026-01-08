@@ -112,6 +112,15 @@ class Rest {
         return this._request<Asset>('PUT', `assets/${assetId}`, form);
     }
 
+    async assetFile(assetId: number, branchId: string, filename: string) {
+        return this._request<ArrayBuffer>(
+            'GET',
+            `assets/${assetId}/file/${filename}?branchId=${branchId}`,
+            undefined,
+            'buffer'
+        );
+    }
+
     async branchCheckout(branchId: string) {
         return this._request<Branch>('POST', `branches/${branchId}/checkout`);
     }
