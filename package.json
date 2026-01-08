@@ -32,7 +32,7 @@
     "contributes": {
         "configuration": {
             "type": "object",
-            "title": "PlayCanvas Extension",
+            "title": "PlayCanvas",
             "properties": {
                 "playcanvas.rootDir": {
                     "type": "string",
