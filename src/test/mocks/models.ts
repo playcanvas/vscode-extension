@@ -1,4 +1,5 @@
 import type { Asset, Branch, Project, User } from '../../typings/models';
+import { hash } from '../../utils/utils';
 
 export const accessToken = 'test-access-token';
 
@@ -43,13 +44,16 @@ export const projectSettings = {
     branch: branches.get('main')!.id
 };
 
+export const documents = new Map<number, string>([[1, `console.log('Hello, World!');`]]);
+
 export const assets = new Map<number, Asset>(
     [
         {
             uniqueId: 1,
             item_id: '1',
             file: {
-                filename: 'file.js.js'
+                filename: 'file.js.js',
+                hash: hash(documents.get(1)!)
             },
             name: 'file.js',
             path: [],
@@ -58,17 +62,12 @@ export const assets = new Map<number, Asset>(
         {
             uniqueId: 2,
             item_id: '2',
-            file: {
-                filename: 'folder'
-            },
             name: 'folder',
             path: [],
             type: 'folder'
         }
     ].map((asset) => [asset.uniqueId, asset])
 );
-
-export const documents = new Map<number, string>([[1, `console.log('Hello, World!');`]]);
 
 export const uniqueId = (function* () {
     let id = assets.size + 1;
