@@ -13,7 +13,7 @@ import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
-import { parsePath } from './utils/utils';
+import { hash, parsePath } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -28,8 +28,6 @@ const EXT_TO_ASSET = new Map<string, { assetType: string; blobType: string }>([
 ]);
 
 type VirtualFile = {
-    ctime: number;
-    mtime: number;
     uniqueId: number;
 } & (
     | {
@@ -38,7 +36,7 @@ type VirtualFile = {
     | {
           type: 'file';
           doc: Doc;
-          saved: boolean;
+          dirty: boolean; // true if hash(doc.data) != asset.file.hash
       }
 );
 
@@ -196,7 +194,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private async _addFile(uniqueId: number, doc: Doc) {
         const path = this._assetPath(uniqueId);
-        const now = Date.now();
 
         // check if file path already exists
         if (this._files.has(path)) {
@@ -204,13 +201,20 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
+        // compute dirty state by comparing hash of doc content vs S3 hash
+        const asset = this._assets.get(uniqueId);
+        if (!asset?.file) {
+            throw new Error(`missing file data for asset ${uniqueId}`);
+        }
+        const docHash = hash(doc.data);
+        const s3Hash = asset.file.hash;
+        const dirty = docHash !== s3Hash;
+
         const file: VirtualFile = {
             type: 'file',
-            ctime: now,
-            mtime: now,
             uniqueId,
             doc,
-            saved: true
+            dirty
         };
         this._files.set(path, file);
 
@@ -223,22 +227,21 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             const path = this._assetPath(uniqueId);
 
-            // update modified time
-            file.mtime = Date.now();
+            // mark as dirty (ops received that aren't saved yet)
+            file.dirty = true;
 
-            // emit a change event to update on disk
+            // emit a change event to update editor and disk
             this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(doc.data));
         });
 
-        // emit file created event
+        // emit file created event with ShareDB content for disk
         this._events.emit('asset:file:create', path, 'file', buffer.from(doc.data));
 
-        this._log(`added file ${path}`);
+        this._log(`added file ${path} (${dirty ? 'dirty' : 'clean'})`);
     }
 
     private async _addFolder(uniqueId: number) {
         const path = this._assetPath(uniqueId);
-        const now = Date.now();
 
         // check if file path already exists
         if (this._files.has(path)) {
@@ -249,8 +252,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // add folder
         const file: VirtualFile = {
             type: 'folder',
-            ctime: now,
-            mtime: now,
             uniqueId
         };
         this._files.set(path, file);
@@ -259,6 +260,30 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._events.emit('asset:file:create', path, 'folder', new Uint8Array());
 
         this._log(`added folder ${path}`);
+    }
+
+    private _watchSharedb() {
+        const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
+            if (state !== 'success') {
+                this._warn(`failed to save document ${uniqueId}: ${state}`);
+                return;
+            }
+
+            // find file by uniqueId
+            const path = this._assetPath(uniqueId);
+
+            // check if file exists
+            const file = this._files.get(path);
+            if (!file || file.type !== 'file') {
+                return;
+            }
+
+            // mark as clean (sharedb content now synced with S3)
+            file.dirty = false;
+        });
+        return () => {
+            this._sharedb.off('doc:save', docSaveHandle);
+        };
     }
 
     private _watchMessenger(branchId: string) {
@@ -407,30 +432,60 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _watchEvents(projectId: number) {
         const assetUpdateHandle = this._events.on('asset:update', async (uniqueId, key, before, after) => {
-            // handle rename or move
-            if (key === 'name' || key === 'path') {
-                const from = this._assetPath(uniqueId, { [key]: before });
-                const to = this._assetPath(uniqueId, { [key]: after });
+            switch (true) {
+                // handle rename or move
+                case key === 'name' || key === 'path': {
+                    const from = this._assetPath(uniqueId, { [key]: before });
+                    const to = this._assetPath(uniqueId, { [key]: after });
 
-                // find all files that need updating
-                const update: [string, VirtualFile][] = [];
-                for (const [path, file] of this._files) {
-                    if (path.startsWith(from)) {
-                        update.push([path, file]);
+                    // find all files that need updating
+                    const update: [string, VirtualFile][] = [];
+                    for (const [path, file] of this._files) {
+                        if (path.startsWith(from)) {
+                            update.push([path, file]);
+                        }
                     }
+
+                    // update all files
+                    for (const [path, file] of update) {
+                        const oldPath = path;
+                        const newPath = path.replace(from, to);
+
+                        // update in files
+                        this._files.delete(oldPath);
+                        this._files.set(newPath, file);
+
+                        // add events for VS Code
+                        this._events.emit('asset:file:rename', oldPath, newPath);
+                    }
+                    break;
                 }
 
-                // update all files
-                for (const [path, file] of update) {
-                    const oldPath = path;
-                    const newPath = path.replace(from, to);
+                // handle remote save
+                case key === 'file': {
+                    const fileFrom = before as Asset['file'] | undefined;
+                    const fileTo = after as Asset['file'] | undefined;
 
-                    // update in files
-                    this._files.delete(oldPath);
-                    this._files.set(newPath, file);
+                    // skip if no change to file content
+                    if (fileFrom?.hash === fileTo?.hash) {
+                        break;
+                    }
 
-                    // add events for VS Code
-                    this._events.emit('asset:file:rename', oldPath, newPath);
+                    // find file by uniqueId
+                    const path = this._assetPath(uniqueId);
+
+                    // check if file exists
+                    const file = this._files.get(path);
+                    if (!file || file.type !== 'file') {
+                        return;
+                    }
+
+                    // mark as clean (sharedb content now synced with S3)
+                    file.dirty = false;
+
+                    // add events for VS Code to clear dirty indicator
+                    this._events.emit('asset:file:save', this._assetPath(uniqueId));
+                    break;
                 }
             }
         });
@@ -700,21 +755,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._log(`moved ${oldPath} to ${newPath}`);
     }
 
-    writeFile(path: string, content: Uint8Array) {
+    save(path: string, content?: Uint8Array) {
         // check if file is in memory
         const file = this._files.get(path);
         if (!file || file.type !== 'file') {
             return;
         }
 
-        // check if content needs saving
-        if (file.saved) {
-            return;
-        }
-        file.mtime = Date.now();
-
-        // check if document content is different from updated content
-        if (!buffer.cmp(buffer.from(file.doc.data), content)) {
+        // check if content is provided
+        if (content) {
             // overwrite entire document content
             // vscode -> shareDB
             // FIXME: optimize to use ops instead of full replace
@@ -724,13 +773,18 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             file.doc.submitOp([0, buffer.toString(content)], {
                 source: ShareDb.SOURCE
             });
+
+            // mark as dirty (ops submitted that aren't saved yet)
+            file.dirty = true;
+        }
+
+        // check if already saved (no pending changes)
+        if (!file.dirty) {
+            return;
         }
 
         // notify ShareDB to save the document
         this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
-
-        // mark as saved
-        file.saved = true;
 
         this._log(`wrote file ${path}`);
     }
@@ -752,8 +806,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // add root folder
         this._files.set('', {
             type: 'folder',
-            ctime: Date.now(),
-            mtime: Date.now(),
             uniqueId: 0
         });
 
@@ -827,21 +879,22 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             });
             for (let j = 0; j < docs.length; j++) {
                 const doc = docs[j];
-                const asset = batch[j];
+                const { uniqueId } = batch[j];
                 if (!doc) {
-                    this.error.set(() => new Error(`Failed to subscribe to document ${asset.uniqueId}`));
+                    this.error.set(() => new Error(`Failed to subscribe to document ${uniqueId}`));
                     loadFileNext();
                     continue;
                 }
 
                 // add file to file system
-                await this._addFile(asset.uniqueId, doc);
+                await this._addFile(uniqueId, doc);
                 loadFileNext();
             }
         }
 
         // watchers
         const unwatchEvents = this._watchEvents(projectId);
+        const unwatchSharedb = this._watchSharedb();
         const unwatchMessenger = this._watchMessenger(branchId);
 
         // store state
@@ -851,10 +904,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // register cleanup
         this._cleanup.push(async () => {
             unwatchEvents();
+            unwatchSharedb();
             unwatchMessenger();
 
             this._files.clear();
             this._assets.clear();
+            this._idToUniqueId.clear();
 
             this._projectId = undefined;
             this._branchId = undefined;
