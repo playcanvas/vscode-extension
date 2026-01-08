@@ -203,8 +203,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // compute dirty state by comparing hash of doc content vs S3 hash
         const asset = this._assets.get(uniqueId);
+        if (!asset?.file) {
+            this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
+            return;
+        }
         const docHash = hash(doc.data);
-        const s3Hash = asset?.file?.hash;
+        const s3Hash = asset.file.hash;
         const dirty = docHash !== s3Hash;
 
         const file: VirtualFile = {
