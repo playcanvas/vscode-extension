@@ -30,6 +30,17 @@
         "watch:web": "rollup -c -w"
     },
     "contributes": {
+        "configuration": {
+            "type": "object",
+            "title": "PlayCanvas",
+            "properties": {
+                "playcanvas.rootDir": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Specify the root directory for PlayCanvas projects (non-web extension only). Leave empty to use the default directory."
+                }
+            }
+        },
         "commands": [
             {
                 "command": "playcanvas.login",

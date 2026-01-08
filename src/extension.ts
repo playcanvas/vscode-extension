@@ -21,11 +21,32 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    // load config
+    const config = vscode.workspace.getConfiguration('playcanvas');
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(async (e) => {
+            if (!e.affectsConfiguration('playcanvas')) {
+                return;
+            }
+
+            const confirmation = 'Reload Now';
+            const selection = await vscode.window.showInformationMessage(
+                'PlayCanvas configuration changed. Please reload the window to apply changes.',
+                confirmation
+            );
+            if (selection !== confirmation) {
+                return;
+            }
+            vscode.commands.executeCommand('workbench.action.reloadWindow');
+        })
+    );
+
     // root uri
     // FIXME: need to use file schema - plugin not loading types correctly with vscode-data:///
+    // ! This cannot be tested as ROOT_FOLDER overrides it in tests
     const rootUri = ROOT_FOLDER
         ? vscode.Uri.parse(`${ROOT_FOLDER}/${ENV}`)
-        : vscode.Uri.parse(`${context.globalStorageUri.path}/${ENV}`);
+        : vscode.Uri.parse(config.get<string>('rootDir') || `${context.globalStorageUri.path}/${ENV}`);
 
     // auth
     const auth = new Auth(context);
