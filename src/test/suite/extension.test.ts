@@ -636,22 +636,82 @@ suite('Extension Test Suite', () => {
         assert.ok(folderABIndex !== -1, 'Folder AB should be created');
     });
 
-    test('file changes (remote -> local)', async () => {
+    test('file changes (opened remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri);
 
         // get asset and its document content
-        const asset = await assetCreate({ name: 'change_remote_local.js', content: '// SAMPLE CONTENT' });
+        const asset = await assetCreate({ name: 'change_opened_remote_local.js', content: '// SAMPLE CONTENT' });
         assert.ok(asset);
         const document = documents.get(asset.uniqueId);
         assert.ok(document);
 
-        // make remote change
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // open text document
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+
+        // create update promise
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [[0, '// REMOTE COMMENT\n']]);
+
+        // create change promise
+        const changed = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString()) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+
+        // create change watcher
         const watcher = watchFilePromise(folderUri, asset.name, 'change');
+
+        // make remote change
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
         assert.ok(doc);
         doc.submitOp([0, '// REMOTE COMMENT\n'], { source: 'remote' });
+        const newDocument = `// REMOTE COMMENT\n${document}`;
+
+        // check if remote update was detected
+        await assertResolves(updated, 'sharedb.op');
+
+        // check text document was updated
+        await assertResolves(changed, 'vscode.onDidChangeTextDocument');
+        assert.strictEqual(tdoc.getText(), newDocument);
+
+        // check if local file was changed
+        await assertResolves(watcher, 'watcher.change');
+        const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
+        assert.strictEqual(Buffer.from(content).toString(), newDocument);
+    });
+
+    test('file changes (closed remote -> local)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri);
+
+        // get asset and its document content
+        const asset = await assetCreate({ name: 'change_closed_remote_local.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset);
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document);
+
+        // create update promise
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [[0, '// REMOTE COMMENT\n']]);
+
+        // create change watcher
+        const watcher = watchFilePromise(folderUri, asset.name, 'change');
+
+        // make remote change
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc);
+        doc.submitOp([0, '// REMOTE COMMENT\n'], { source: 'remote' });
+
+        // check if remote update was detected
+        await assertResolves(updated, 'sharedb.op');
 
         // check if local file was changed
         const uri = await assertResolves(watcher, 'watcher.change');
@@ -673,18 +733,58 @@ suite('Extension Test Suite', () => {
         // get file uri
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
 
+        // open document
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+
         // create update promise
         const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
             [0, '// LOCAL TEST COMMENT\n'] // insert at start
         ]);
 
-        // open document
-        await vscode.workspace.openTextDocument(uri);
+        // create change watcher
+        const watcher = watchFilePromise(folderUri, asset.name, 'change');
 
         // make local change by editing the document
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, new vscode.Position(0, 0), '// LOCAL TEST COMMENT\n');
         await vscode.workspace.applyEdit(edit);
+        const newDocument = `// LOCAL TEST COMMENT\n${document}`;
+
+        // check if remote update was detected
+        await assertResolves(updated, 'sharedb.op');
+        assert.strictEqual(tdoc.getText(), newDocument);
+
+        // wait for local change to be detected (debounced disk sync)
+        await assertResolves(watcher, 'watcher.change');
+        const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
+        assert.strictEqual(Buffer.from(content).toString(), newDocument);
+    });
+
+    test('file changes (closed local -> remote)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri);
+
+        // create asset
+        const asset = await assetCreate({ name: 'change_closed_local_remote.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset);
+
+        // get document content
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document);
+
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // create update promise
+        const newContent = `// CLOSED LOCAL TEST COMMENT\n${document}`;
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
+            [0, { d: document.length }], // delete existing content
+            [0, newContent] // add new content
+        ]);
+
+        // make local change by writing to the file directly
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(newContent));
 
         // wait for remote update to be detected
         await assertResolves(updated, 'sharedb.op');
@@ -781,36 +881,6 @@ suite('Extension Test Suite', () => {
 
         // wait for local file to be saved
         await assertResolves(saved, 'vscode.onDidSaveTextDocument');
-    });
-
-    test('file changes (closed local -> remote)', async () => {
-        // get folder uri
-        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
-
-        // create asset
-        const asset = await assetCreate({ name: 'change_closed_local_remote.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
-
-        // get document content
-        const document = documents.get(asset.uniqueId);
-        assert.ok(document);
-
-        // get file uri
-        const uri = vscode.Uri.joinPath(folderUri, asset.name);
-
-        // create update promise
-        const newContent = `// CLOSED LOCAL TEST COMMENT\n${document}`;
-        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [0, { d: document.length }], // delete existing content
-            [0, newContent] // add new content
-        ]);
-
-        // make local change by writing to the file directly
-        await vscode.workspace.fs.writeFile(uri, Buffer.from(newContent));
-
-        // wait for remote update to be detected
-        await assertResolves(updated, 'sharedb.op');
     });
 
     test('file delete (remote -> local)', async () => {
