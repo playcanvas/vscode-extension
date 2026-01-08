@@ -1,3 +1,8 @@
+import packageJson from '../package.json';
+
+export const EXT_NAME = packageJson.name;
+export const EXT_PUBLISHER = packageJson.publisher.toLowerCase();
+
 export const DEBUG = process.env.NODE_ENV === 'development';
 export const ENV = process.env.ENV || 'prod';
 export const PORT = parseInt(process.env.PORT || '61000', 10);
@@ -14,9 +19,12 @@ export const RELAY_URL = process.env.RELAY_URL || 'wss://relay.playcanvas.com/re
 
 if (DEBUG) {
     console.table({
+        EXT_NAME,
+        EXT_PUBLISHER,
+        DEBUG,
         ENV,
         WEB,
-        DEBUG,
+        ROOT_FOLDER,
         API_URL,
         HOME_URL,
         LOGIN_URL,

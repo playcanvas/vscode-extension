@@ -4,6 +4,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 
 import * as authModule from '../../auth';
+import { EXT_NAME, EXT_PUBLISHER } from '../../config';
 import * as messengerModule from '../../connections/messenger';
 import * as relayModule from '../../connections/relay';
 import * as restModule from '../../connections/rest';
@@ -127,7 +128,7 @@ suite('Extension Test Suite', () => {
 
     setup(async () => {
         // get extension
-        const extension = vscode.extensions.getExtension('playcanvas.playcanvas');
+        const extension = vscode.extensions.getExtension(`${EXT_PUBLISHER}.${EXT_NAME}`);
         assert.ok(extension);
 
         // activate the extension
@@ -207,9 +208,9 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(call2.args[0]?.toString(), uri.toString());
     });
 
-    test('command playcanvas.openProject', async () => {
+    test(`command ${EXT_NAME}.openProject`, async () => {
         // open a project
-        await assertResolves(vscode.commands.executeCommand('playcanvas.openProject'), 'playcanvas.openProject');
+        await assertResolves(vscode.commands.executeCommand(`${EXT_NAME}.openProject`), `${EXT_NAME}.openProject`);
 
         // check if quick pick was shown
         assert.ok(quickPickStub.called);
@@ -218,12 +219,12 @@ suite('Extension Test Suite', () => {
         assert.ok(openFolderStub.called);
     });
 
-    test('command playcanvas.switchBranch', async () => {
+    test(`command ${EXT_NAME}.switchBranch`, async () => {
         // reset rest branchCheckout spy call history
         rest.branchCheckout.resetHistory();
 
         // switch branch
-        await assertResolves(vscode.commands.executeCommand('playcanvas.switchBranch'), 'playcanvas.switchBranch');
+        await assertResolves(vscode.commands.executeCommand(`${EXT_NAME}.switchBranch`), `${EXT_NAME}.switchBranch`);
 
         // check if quick pick was shown
         assert.ok(quickPickStub.called);
@@ -261,7 +262,7 @@ suite('Extension Test Suite', () => {
         // open the file via uri
         const externalUri = vscode.Uri.from({
             scheme: vscode.env.uriScheme,
-            authority: 'playcanvas.playcanvas',
+            authority: `${EXT_PUBLISHER}.${EXT_NAME}`,
             path: `/${project.name} (${project.id})/${asset.name}`
         });
         await vscode.env.openExternal(externalUri);

@@ -2,7 +2,7 @@ import http from 'http';
 
 import * as vscode from 'vscode';
 
-import { API_URL, COOKIE_NAME, DEBUG, HOME_URL, LOGIN_URL, PORT, WEB } from './config';
+import { API_URL, COOKIE_NAME, DEBUG, EXT_NAME, EXT_PUBLISHER, HOME_URL, LOGIN_URL, PORT, WEB } from './config';
 import { Rest } from './connections/rest';
 import { catchError } from './utils/utils';
 
@@ -98,7 +98,10 @@ class Auth {
                     resolve(accessToken);
 
                     // redirect to vscode
-                    const uri = vscode.Uri.from({ scheme: vscode.env.uriScheme, authority: 'playcanvas.playcanvas' });
+                    const uri = vscode.Uri.from({
+                        scheme: vscode.env.uriScheme,
+                        authority: `${EXT_PUBLISHER}.${EXT_NAME}`
+                    });
                     res.writeHead(302, { Location: uri.toString() });
                     res.end();
 
@@ -121,7 +124,7 @@ class Auth {
         let accessToken: string | undefined = undefined;
         if (!manual) {
             // retrieve stored token
-            accessToken = await this._context.secrets.get('playcanvas.accessToken');
+            accessToken = await this._context.secrets.get(`${EXT_NAME}.accessToken`);
 
             // validate token
             accessToken = await this._validateAccessToken(accessToken);
@@ -144,7 +147,7 @@ class Auth {
             }
 
             // store token
-            await this._context.secrets.store('playcanvas.accessToken', accessToken);
+            await this._context.secrets.store(`${EXT_NAME}.accessToken`, accessToken);
             vscode.window.showInformationMessage('PlayCanvas Access Token validated');
 
             if (manual) {
@@ -166,7 +169,7 @@ class Auth {
                 modal: true
             }
         );
-        await this._context.secrets.delete('playcanvas.accessToken');
+        await this._context.secrets.delete(`${EXT_NAME}.accessToken`);
         vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
 }
