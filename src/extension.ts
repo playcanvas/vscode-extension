@@ -28,7 +28,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // FIXME: need to use file schema - plugin not loading types correctly with vscode-data:///
     const rootUri = ROOT_FOLDER
         ? vscode.Uri.parse(`${ROOT_FOLDER}/${ENV}`)
-        : vscode.Uri.parse(config.get<string>('rootDir', `${context.globalStorageUri.path}/${ENV}`));
+        : vscode.Uri.parse(config.get<string>('rootDir') || `${context.globalStorageUri.path}/${ENV}`);
 
     // auth
     const auth = new Auth(context);
