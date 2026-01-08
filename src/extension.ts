@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { Auth } from './auth';
-import { API_URL, DEBUG, ENV, HOME_URL, MESSENGER_URL, REALTIME_URL, RELAY_URL, ROOT_FOLDER } from './config';
+import { API_URL, DEBUG, ENV, NAME, HOME_URL, MESSENGER_URL, REALTIME_URL, RELAY_URL, ROOT_FOLDER } from './config';
 import { Messenger } from './connections/messenger';
 import { Relay } from './connections/relay';
 import { Rest } from './connections/rest';
@@ -22,10 +22,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     // load config
-    const config = vscode.workspace.getConfiguration('playcanvas');
+    const config = vscode.workspace.getConfiguration(NAME);
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(async (e) => {
-            if (!e.affectsConfiguration('playcanvas')) {
+            if (!e.affectsConfiguration(NAME)) {
                 return;
             }
 
@@ -50,9 +50,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // auth
     const auth = new Auth(context);
-    context.subscriptions.push(
-        vscode.commands.registerCommand('playcanvas.login', async () => auth.getAccessToken(true))
-    );
+    context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.login`, async () => auth.getAccessToken(true)));
     const accessToken = await auth.getAccessToken();
 
     // error handler
@@ -186,7 +184,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // branch status bar item
     const branchStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10001);
     context.subscriptions.push(branchStatusBarItem);
-    branchStatusBarItem.command = 'playcanvas.switchBranch';
+    branchStatusBarItem.command = `${NAME}.switchBranch`;
     branchStatusBarItem.text = `$(git-branch) no branch`;
     branchStatusBarItem.tooltip = 'Switch Branch';
     branchStatusBarItem.show();
@@ -281,7 +279,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // open project
     context.subscriptions.push(
-        vscode.commands.registerCommand('playcanvas.openProject', async () => {
+        vscode.commands.registerCommand(`${NAME}.openProject`, async () => {
             // fetch all user projects
             const projects = await rest.userProjects(userId, 'profile');
 
@@ -304,7 +302,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // reload project
     context.subscriptions.push(
-        vscode.commands.registerCommand('playcanvas.reloadProject', async () => {
+        vscode.commands.registerCommand(`${NAME}.reloadProject`, async () => {
             // check if we have an active editor
             if (!state.projectId) {
                 return;
@@ -327,7 +325,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // switch branch
     context.subscriptions.push(
-        vscode.commands.registerCommand('playcanvas.switchBranch', async () => {
+        vscode.commands.registerCommand(`${NAME}.switchBranch`, async () => {
             // check if we have an active project
             if (!state.projectId) {
                 return;

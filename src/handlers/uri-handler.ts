@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 
+import { NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
 import { fileExists, projectToName } from '../utils/utils';
 
 class UriHandler implements vscode.UriHandler {
-    static OPEN_FILE_KEY = 'playcanvas.openFile';
+    static OPEN_FILE_KEY = `${NAME}.openFile`;
 
     private _context: vscode.ExtensionContext;
 
@@ -32,7 +33,7 @@ class UriHandler implements vscode.UriHandler {
     }
 
     async handleUri(uri: vscode.Uri) {
-        if (uri.authority !== 'playcanvas.playcanvas') {
+        if (uri.authority !== `${PUBLISHER}.${NAME}`) {
             return;
         }
 
