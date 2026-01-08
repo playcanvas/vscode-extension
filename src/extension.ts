@@ -43,6 +43,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // root uri
     // FIXME: need to use file schema - plugin not loading types correctly with vscode-data:///
+    // ! This cannot be tested as ROOT_FOLDER overrides it in tests
     const rootUri = ROOT_FOLDER
         ? vscode.Uri.parse(`${ROOT_FOLDER}/${ENV}`)
         : vscode.Uri.parse(config.get<string>('rootDir') || `${context.globalStorageUri.path}/${ENV}`);
