@@ -10,6 +10,7 @@ import * as restModule from '../../connections/rest';
 import * as sharedbModule from '../../connections/sharedb';
 import * as uriHandlerModule from '../../handlers/uri-handler';
 import type { Asset } from '../../typings/models';
+import { hash } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
 import { assets, documents, branches, projectSettings, project, user, uniqueId } from '../mocks/models';
@@ -286,7 +287,8 @@ suite('Extension Test Suite', () => {
             uniqueId: id,
             item_id: `${id}`,
             file: {
-                filename: `${name}.js`
+                filename: `${name}.js`,
+                hash: hash(document)
             },
             path: [],
             name: name,
@@ -676,17 +678,109 @@ suite('Extension Test Suite', () => {
             [0, '// LOCAL TEST COMMENT\n'] // insert at start
         ]);
 
+        // open document
+        await vscode.workspace.openTextDocument(uri);
+
         // make local change by editing the document
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, new vscode.Position(0, 0), '// LOCAL TEST COMMENT\n');
         await vscode.workspace.applyEdit(edit);
 
-        // save document to trigger remote update
-        const tdoc = await vscode.workspace.openTextDocument(uri);
-        await tdoc.save();
-
         // wait for remote update to be detected
         await assertResolves(updated, 'sharedb.op');
+    });
+
+    test('file save (local -> remote)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri);
+
+        // get asset and its document content
+        const asset = await assetCreate({ name: 'save_local_remote.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset);
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document);
+
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // open document
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+
+        // make local change by editing the document
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL TEST COMMENT\n');
+        await vscode.workspace.applyEdit(edit);
+
+        // reset sharedb ops spy call history
+        sharedb.sendRaw.resetHistory();
+
+        // save the document
+        await tdoc.save();
+
+        // check if sharedb sendRaw was called for document update
+        const call = sharedb.sendRaw.getCall(0);
+        assert.deepStrictEqual(call.args, [`doc:save:${asset.uniqueId}`]);
+    });
+
+    test('file save (remote -> local)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri);
+
+        // get asset and its document content
+        const asset = await assetCreate({ name: 'save_remote_local.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset);
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document);
+
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // open document
+        await vscode.workspace.openTextDocument(uri);
+
+        // make local change by editing the document
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL TEST COMMENT\n');
+        await vscode.workspace.applyEdit(edit);
+
+        // create save promise
+        const saved = new Promise<void>((resolve) => {
+            vscode.workspace.onDidSaveTextDocument((document) => {
+                if (document.uri.path === uri.path) {
+                    resolve();
+                }
+            });
+        });
+
+        // make remote save
+        assert.ok(asset.file);
+        const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
+        assert.ok(doc);
+        const newContent = `// LOCAL TEST COMMENT\n${document}`;
+        const newHash = hash(newContent);
+        doc.submitOp(
+            [
+                {
+                    p: ['file'],
+                    od: {
+                        filename: asset.file.filename,
+                        hash: asset.file.hash
+                    },
+                    oi: {
+                        filename: asset.file.filename,
+                        hash: newHash
+                    }
+                }
+            ],
+            { source: 'remote' }
+        );
+        asset.file.hash = newHash;
+        documents.set(asset.uniqueId, newContent);
+
+        // wait for local file to be saved
+        await assertResolves(saved, 'vscode.onDidSaveTextDocument');
     });
 
     test('file changes (closed local -> remote)', async () => {
@@ -717,70 +811,6 @@ suite('Extension Test Suite', () => {
 
         // wait for remote update to be detected
         await assertResolves(updated, 'sharedb.op');
-    });
-
-    test('file changes (local overrides remote)', async () => {
-        // get folder uri
-        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
-
-        // create asset
-        const asset = await assetCreate({
-            name: 'override_local_remote.js',
-            content: '// 123456'
-        });
-        const insert = '789';
-        assert.ok(asset);
-
-        // get document content
-        const document = documents.get(asset.uniqueId);
-        assert.ok(document);
-
-        // get file uri
-        const uri = vscode.Uri.joinPath(folderUri, asset.name);
-
-        // create update promise
-        const insertIndex = document.length;
-        const updated1 = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [insertIndex, insert] // insert at end
-        ]);
-
-        // make local change by editing the document
-        const edit = new vscode.WorkspaceEdit();
-        edit.insert(uri, new vscode.Position(0, insertIndex), insert);
-        await vscode.workspace.applyEdit(edit);
-
-        // open document
-        await vscode.workspace.openTextDocument(uri);
-
-        // wait for remote update to be detected
-        await assertResolves(updated1, 'sharedb.op');
-
-        // make remote change to remove extra characters
-        const deleteCount = 3;
-        const watcher = watchFilePromise(folderUri, asset.name, 'change');
-        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
-        assert.ok(doc);
-        doc.submitOp([insertIndex - deleteCount, { d: insert.length + deleteCount }], { source: 'remote' });
-        const documentRemote = document.slice(0, document.length - deleteCount);
-
-        // check if local file was changed
-        const changedUri = await assertResolves(watcher, 'watcher.change');
-        const content = await assertResolves(vscode.workspace.fs.readFile(changedUri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), documentRemote);
-
-        // create update promise for override
-        const updated2 = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [0, { d: documentRemote.length }], // delete remote change
-            [0, `${document}${insert}`] // add local changes
-        ]);
-
-        // save the document to trigger override
-        const tdoc = await vscode.workspace.openTextDocument(uri);
-        await tdoc.save();
-
-        // check if remote override detected
-        await assertResolves(updated2, 'sharedb.op');
     });
 
     test('file delete (remote -> local)', async () => {
