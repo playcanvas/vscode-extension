@@ -847,8 +847,9 @@ suite('Extension Test Suite', () => {
 
         // create save promise
         const saved = new Promise<void>((resolve) => {
-            vscode.workspace.onDidSaveTextDocument((document) => {
-                if (document.uri.path === uri.path) {
+            const disposable = vscode.workspace.onDidSaveTextDocument((document) => {
+                if (document.uri.toString() === uri.toString()) {
+                    disposable.dispose();
                     resolve();
                 }
             });
