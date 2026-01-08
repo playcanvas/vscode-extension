@@ -12,6 +12,7 @@ import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
 import type { EventMap } from './typings/event-map';
+import type { Project } from './typings/models';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect } from './utils/signal';
 import { projectToName, uriStartsWith } from './utils/utils';
@@ -348,18 +349,27 @@ export const activate = async (context: vscode.ExtensionContext) => {
     );
 
     // load project
-    // TODO: multiple workspaces not supported
-    const folders = vscode.workspace.workspaceFolders ?? [];
-    if (folders.length > 1) {
-        return;
-    }
     const projects = await rest.userProjects(userId, 'profile');
-    for (const folder of folders) {
-        // ensure folder is in home directory
-        if (!uriStartsWith(folder.uri, rootUri)) {
-            continue;
-        }
+    const valid: [vscode.WorkspaceFolder, Project][] = (vscode.workspace.workspaceFolders ?? []).reduce(
+        (list, f) => {
+            // ensure folder is in home directory
+            if (!uriStartsWith(f.uri, rootUri)) {
+                return list;
+            }
 
+            // ensure folder matches a user project
+            const project = projects.find((p) => projectToName(p) === f.name);
+            if (!project) {
+                return list;
+            }
+
+            list.push([f, project]);
+            return list;
+        },
+        [] as [vscode.WorkspaceFolder, Project][]
+    );
+
+    for (const [folder, project] of valid) {
         // ensure folder directory exists
         await vscode.workspace.fs.createDirectory(folder.uri);
 
@@ -387,12 +397,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
                     relay.disconnect();
                 })
             );
-        }
-
-        // find project
-        const project = projects.find((p) => projectToName(p) === folder.name);
-        if (!project) {
-            continue;
         }
 
         // load branch info
@@ -479,5 +483,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // update active project
         state.projectId = project.id;
+
+        // TODO: multiple projects per workspace not supported
+        if (valid.length > 1) {
+            break;
+        }
     }
 };
