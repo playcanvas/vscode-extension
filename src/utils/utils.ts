@@ -1,8 +1,14 @@
+import crypto from 'crypto';
+
 import * as vscode from 'vscode';
 
 import { ShareDb } from '../connections/sharedb';
 import type { Project } from '../typings/models';
 import type { ShareDbTextOp } from '../typings/sharedb';
+
+export const hash = (data: string | Uint8Array) => {
+    return crypto.createHash('md5').update(data).digest('hex');
+};
 
 export const catchError = async <T>(fn: () => Promise<T>): Promise<[Error, null] | [null, T]> => {
     try {
