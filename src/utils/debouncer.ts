@@ -4,7 +4,7 @@ class Debouncer<T> {
     constructor(private readonly _delay: number) {}
 
     debounce(key: string, fn: () => Promise<T>): Promise<T> {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             if (this._timeouts.get(key)) {
                 clearTimeout(this._timeouts.get(key));
             }
@@ -13,6 +13,7 @@ class Debouncer<T> {
                 setTimeout(() => {
                     fn()
                         .then(resolve)
+                        .catch(reject)
                         .finally(() => {
                             this._timeouts.delete(key);
                         });
