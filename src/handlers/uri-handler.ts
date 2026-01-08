@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 
-import { EXT_NAME, EXT_PUBLISHER } from '../config';
+import { NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
 import { fileExists, projectToName } from '../utils/utils';
 
 class UriHandler implements vscode.UriHandler {
-    static OPEN_FILE_KEY = `${EXT_NAME}.openFile`;
+    static OPEN_FILE_KEY = `${NAME}.openFile`;
 
     private _context: vscode.ExtensionContext;
 
@@ -33,7 +33,7 @@ class UriHandler implements vscode.UriHandler {
     }
 
     async handleUri(uri: vscode.Uri) {
-        if (uri.authority !== `${EXT_PUBLISHER}.${EXT_NAME}`) {
+        if (uri.authority !== `${PUBLISHER}.${NAME}`) {
             return;
         }
 

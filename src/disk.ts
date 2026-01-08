@@ -1,7 +1,7 @@
 import ignore from 'ignore';
 import * as vscode from 'vscode';
 
-import { EXT_NAME } from './config';
+import { NAME } from './config';
 import { simpleNotification } from './notification';
 import type { ProjectManager } from './project-manager';
 import type { EventMap } from './typings/event-map';
@@ -99,7 +99,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             )
             .then(async (res) => {
                 if (res === 'Reload') {
-                    await vscode.commands.executeCommand(`${EXT_NAME}.reloadProject`);
+                    await vscode.commands.executeCommand(`${NAME}.reloadProject`);
                 }
             });
     }
