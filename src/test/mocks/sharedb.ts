@@ -245,6 +245,9 @@ class MockDoc extends Doc {
                         break;
                     }
                 }
+
+                // write back to documents map
+                documents.set(parseInt(key, 10), this.data as string);
             }
 
             events.emit('op', op as unknown[], options?.source || '');
