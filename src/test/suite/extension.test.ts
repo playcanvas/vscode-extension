@@ -102,12 +102,12 @@ const watchFilePromise = (folderUri: vscode.Uri, file: string, action: 'create' 
 const assertOpsPromise = (key: string, expected: unknown[]) => {
     return new Promise<void>((resolve) => {
         const doc = sharedb.subscriptions.get(key);
-        assert.ok(doc);
+        assert.ok(doc, `sharedb subscription for ${key} should exist`);
         const ops = expected.slice();
         const onop = (args: unknown) => {
             const op = args as unknown[];
             const expectedOp = ops.shift();
-            assert.deepStrictEqual(expectedOp, op);
+            assert.deepStrictEqual(expectedOp, op, `op should match expected for ${key}`);
             if (ops.length === 0) {
                 doc.off('op', onop);
                 resolve();
@@ -129,13 +129,13 @@ suite('Extension Test Suite', () => {
     setup(async () => {
         // get extension
         const extension = vscode.extensions.getExtension(`${PUBLISHER}.${NAME}`);
-        assert.ok(extension);
+        assert.ok(extension, 'extension should be found');
 
         // activate the extension
         await assertResolves(extension.activate(), 'extension.activate');
 
         // check if extension is active
-        assert.ok(extension.isActive);
+        assert.ok(extension.isActive, 'extension should be active');
     });
 
     // FIXME: increase teardown delay to improve stability in CI environment
@@ -153,13 +153,13 @@ suite('Extension Test Suite', () => {
     const assetCreate = async ({ name, content = '', parent }: { name: string; content?: string; parent?: number }) => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // watch for file creation
         let uri: vscode.Uri;
         if (parent) {
             const parentAsset = assets.get(parent);
-            assert.ok(parentAsset);
+            assert.ok(parentAsset, `parent asset ${parent} should exist`);
             uri = vscode.Uri.joinPath(folderUri, parentAsset.name);
         } else {
             uri = folderUri;
@@ -184,7 +184,7 @@ suite('Extension Test Suite', () => {
 
         // get created asset
         const asset = assets.get(res.uniqueId);
-        assert.ok(asset);
+        assert.ok(asset, `asset ${res.uniqueId} should exist`);
         return asset;
     };
 
@@ -192,20 +192,24 @@ suite('Extension Test Suite', () => {
     test('project load (with file path)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // check if sharedb subscribe was called for project settings
         const call1 = sharedb.subscribe.getCall(0);
-        assert.ok(call1);
-        assert.deepStrictEqual(call1.args, ['settings', `project_${project.id}_${user.id}`]);
+        assert.ok(call1, 'sharedb.subscribe should have been called');
+        assert.deepStrictEqual(
+            call1.args,
+            ['settings', `project_${project.id}_${user.id}`],
+            'subscribe args should match'
+        );
 
         // check if document was opened
         const asset = assets.get(1);
-        assert.ok(asset);
+        assert.ok(asset, 'asset 1 should exist');
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
         const call2 = openTextDocumentSpy.getCall(0);
-        assert.ok(call2);
-        assert.strictEqual(call2.args[0]?.toString(), uri.toString());
+        assert.ok(call2, 'openTextDocument should have been called');
+        assert.strictEqual(call2.args[0]?.toString(), uri.toString(), 'opened document uri should match');
     });
 
     test(`command ${NAME}.openProject`, async () => {
@@ -213,10 +217,10 @@ suite('Extension Test Suite', () => {
         await assertResolves(vscode.commands.executeCommand(`${NAME}.openProject`), `${NAME}.openProject`);
 
         // check if quick pick was shown
-        assert.ok(quickPickStub.called);
+        assert.ok(quickPickStub.called, 'quick pick should have been shown');
 
         // check if open folder was called
-        assert.ok(openFolderStub.called);
+        assert.ok(openFolderStub.called, 'open folder should have been called');
     });
 
     test(`command ${NAME}.switchBranch`, async () => {
@@ -227,25 +231,25 @@ suite('Extension Test Suite', () => {
         await assertResolves(vscode.commands.executeCommand(`${NAME}.switchBranch`), `${NAME}.switchBranch`);
 
         // check if quick pick was shown
-        assert.ok(quickPickStub.called);
+        assert.ok(quickPickStub.called, 'quick pick should have been shown');
 
         // check if branch checkout was called
         const other = branches.get('other');
-        assert.ok(other);
+        assert.ok(other, 'other branch should exist');
         const call = rest.branchCheckout.getCall(0);
-        assert.deepStrictEqual(call.args, [other.id]);
+        assert.deepStrictEqual(call.args, [other.id], 'branchCheckout args should match');
     });
 
     test('uri open file', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // get asset and its document content
         const asset = await assetCreate({ name: 'uri_open_file.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
+        assert.ok(asset, 'asset should be created');
         const document = documents.get(asset.uniqueId);
-        assert.ok(document);
+        assert.ok(document, 'document should exist');
 
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
 
@@ -272,13 +276,13 @@ suite('Extension Test Suite', () => {
 
         // check if uri handler was called
         const call = uriHandler.handleUri.getCall(0);
-        assert.strictEqual(call.args[0].toString(), externalUri.toString());
+        assert.strictEqual(call.args[0].toString(), externalUri.toString(), 'uri handler args should match');
     });
 
     test('file create (remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // add new asset to project
         const id = uniqueId.next().value;
@@ -314,13 +318,13 @@ suite('Extension Test Suite', () => {
         // check if local file was created
         const uri = await assertResolves(watcher, 'watcher.create');
         const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), document);
+        assert.strictEqual(Buffer.from(content).toString(), document, 'file content should match');
     });
 
     test('file create (local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // create new local file
         const name = 'create_local_remote.js';
@@ -348,24 +352,28 @@ suite('Extension Test Suite', () => {
 
         // check if rest assetCreate was called with correct parameters
         const call = rest.assetCreate.getCall(0);
-        assert.deepStrictEqual(call.args, [
-            project.id,
-            projectSettings.branch,
-            {
-                type: 'script',
-                name: name,
-                parent: undefined,
-                preload: true,
-                filename: `${name}.js`,
-                file: new Blob([document], { type: 'text/plain' })
-            }
-        ]);
+        assert.deepStrictEqual(
+            call.args,
+            [
+                project.id,
+                projectSettings.branch,
+                {
+                    type: 'script',
+                    name: name,
+                    parent: undefined,
+                    preload: true,
+                    filename: `${name}.js`,
+                    file: new Blob([document], { type: 'text/plain' })
+                }
+            ],
+            'assetCreate args should match'
+        );
     });
 
     test('file create (fast create local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // create many local files
         const files = [
@@ -403,28 +411,32 @@ suite('Extension Test Suite', () => {
 
         // check if rest assetCreate was called with correct parameters
         const calls = rest.assetCreate.getCalls();
-        assert.strictEqual(calls.length, files.length);
+        assert.strictEqual(calls.length, files.length, 'assetCreate should be called for each file');
         for (let i = 0; i < files.length; i++) {
             const call = calls[i];
-            assert.deepStrictEqual(call.args, [
-                project.id,
-                projectSettings.branch,
-                {
-                    type: 'script',
-                    name: files[i].name,
-                    parent: undefined,
-                    preload: true,
-                    filename: `${files[i].name}.js`,
-                    file: new Blob([files[i].content], { type: 'text/plain' })
-                }
-            ]);
+            assert.deepStrictEqual(
+                call.args,
+                [
+                    project.id,
+                    projectSettings.branch,
+                    {
+                        type: 'script',
+                        name: files[i].name,
+                        parent: undefined,
+                        preload: true,
+                        filename: `${files[i].name}.js`,
+                        file: new Blob([files[i].content], { type: 'text/plain' })
+                    }
+                ],
+                `assetCreate args should match for file ${i}`
+            );
         }
     });
 
     test('folder create (nested structure local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // define nested structure: parent folder, subfolder, and file
         const parentName = 'test_nested';
@@ -486,7 +498,7 @@ suite('Extension Test Suite', () => {
     test('folder create (siblings in parallel local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // define sibling structure: parent with two child folders, each containing a file
         const parentName = 'test_siblings';
@@ -548,29 +560,29 @@ suite('Extension Test Suite', () => {
 
         assert.ok(
             parentIndex < siblingAIndex,
-            `Parent should be created before sibling A. Order: ${creationOrder.join(' -> ')}`
+            `parent should be created before sibling A. Order: ${creationOrder.join(' -> ')}`
         );
         assert.ok(
             parentIndex < siblingBIndex,
-            `Parent should be created before sibling B. Order: ${creationOrder.join(' -> ')}`
+            `parent should be created before sibling B. Order: ${creationOrder.join(' -> ')}`
         );
         assert.ok(
             siblingAIndex < fileAIndex,
-            `Sibling A should be created before its file. Order: ${creationOrder.join(' -> ')}`
+            `sibling A should be created before its file. Order: ${creationOrder.join(' -> ')}`
         );
         assert.ok(
             siblingBIndex < fileBIndex,
-            `Sibling B should be created before its file. Order: ${creationOrder.join(' -> ')}`
+            `sibling B should be created before its file. Order: ${creationOrder.join(' -> ')}`
         );
 
         // verify all 5 assets were created
-        assert.strictEqual(creationOrder.length, 5);
+        assert.strictEqual(creationOrder.length, 5, 'all 5 assets should be created');
     });
 
     test('folder create (similar names independent local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // define similar named folders: A and AB (AB should NOT depend on A)
         const parentName = 'test_similar';
@@ -622,31 +634,31 @@ suite('Extension Test Suite', () => {
 
         assert.ok(
             parentIndex < folderAIndex,
-            `Parent should be created before A. Order: ${creationOrder.join(' -> ')}`
+            `parent should be created before A. Order: ${creationOrder.join(' -> ')}`
         );
         assert.ok(
             parentIndex < folderABIndex,
-            `Parent should be created before AB. Order: ${creationOrder.join(' -> ')}`
+            `parent should be created before AB. Order: ${creationOrder.join(' -> ')}`
         );
 
         // verify all 3 assets were created (proves neither blocked the other indefinitely)
-        assert.strictEqual(creationOrder.length, 3);
+        assert.strictEqual(creationOrder.length, 3, 'all 3 assets should be created');
 
         // verify A and AB are both in the order (they can be in any order relative to each other)
-        assert.ok(folderAIndex !== -1, 'Folder A should be created');
-        assert.ok(folderABIndex !== -1, 'Folder AB should be created');
+        assert.ok(folderAIndex !== -1, 'folder A should be created');
+        assert.ok(folderABIndex !== -1, 'folder AB should be created');
     });
 
     test('file changes (opened remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // get asset and its document content
         const asset = await assetCreate({ name: 'change_opened_remote_local.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
+        assert.ok(asset, 'asset should be created');
         const document = documents.get(asset.uniqueId);
-        assert.ok(document);
+        assert.ok(document, 'document should exist');
 
         // get file uri
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
@@ -672,7 +684,7 @@ suite('Extension Test Suite', () => {
 
         // make remote change
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
-        assert.ok(doc);
+        assert.ok(doc, 'sharedb document should exist');
         doc.submitOp([0, '// REMOTE COMMENT\n'], { source: 'remote' });
         const newDocument = `// REMOTE COMMENT\n${document}`;
 
@@ -681,24 +693,24 @@ suite('Extension Test Suite', () => {
 
         // check text document was updated
         await assertResolves(changed, 'vscode.onDidChangeTextDocument');
-        assert.strictEqual(tdoc.getText(), newDocument);
+        assert.strictEqual(tdoc.getText(), newDocument, 'text document content should match');
 
         // check if local file was changed
         await assertResolves(watcher, 'watcher.change');
         const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), newDocument);
+        assert.strictEqual(Buffer.from(content).toString(), newDocument, 'file content should match');
     });
 
     test('file changes (closed remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // get asset and its document content
         const asset = await assetCreate({ name: 'change_closed_remote_local.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
+        assert.ok(asset, 'asset should be created');
         const document = documents.get(asset.uniqueId);
-        assert.ok(document);
+        assert.ok(document, 'document should exist');
 
         // create update promise
         const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [[0, '// REMOTE COMMENT\n']]);
@@ -708,7 +720,7 @@ suite('Extension Test Suite', () => {
 
         // make remote change
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
-        assert.ok(doc);
+        assert.ok(doc, 'sharedb document should exist');
         doc.submitOp([0, '// REMOTE COMMENT\n'], { source: 'remote' });
 
         // check if remote update was detected
@@ -717,19 +729,23 @@ suite('Extension Test Suite', () => {
         // check if local file was changed
         const uri = await assertResolves(watcher, 'watcher.change');
         const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), `// REMOTE COMMENT\n${document}`);
+        assert.strictEqual(
+            Buffer.from(content).toString(),
+            `// REMOTE COMMENT\n${document}`,
+            'file content should match'
+        );
     });
 
     test('file changes (opened local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // get asset and its document content
         const asset = await assetCreate({ name: 'change_opened_local_remote.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
+        assert.ok(asset, 'asset should be created');
         const document = documents.get(asset.uniqueId);
-        assert.ok(document);
+        assert.ok(document, 'document should exist');
 
         // get file uri
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
@@ -753,26 +769,26 @@ suite('Extension Test Suite', () => {
 
         // check if remote update was detected
         await assertResolves(updated, 'sharedb.op');
-        assert.strictEqual(tdoc.getText(), newDocument);
+        assert.strictEqual(tdoc.getText(), newDocument, 'text document content should match');
 
         // wait for local change to be detected (debounced disk sync)
         await assertResolves(watcher, 'watcher.change');
         const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), newDocument);
+        assert.strictEqual(Buffer.from(content).toString(), newDocument, 'file content should match');
     });
 
     test('file changes (closed local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // create asset
         const asset = await assetCreate({ name: 'change_closed_local_remote.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
+        assert.ok(asset, 'asset should be created');
 
         // get document content
         const document = documents.get(asset.uniqueId);
-        assert.ok(document);
+        assert.ok(document, 'document should exist');
 
         // get file uri
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
@@ -794,13 +810,13 @@ suite('Extension Test Suite', () => {
     test('file save (local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // get asset and its document content
         const asset = await assetCreate({ name: 'save_local_remote.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
+        assert.ok(asset, 'asset should be created');
         const document = documents.get(asset.uniqueId);
-        assert.ok(document);
+        assert.ok(document, 'document should exist');
 
         // get file uri
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
@@ -821,19 +837,19 @@ suite('Extension Test Suite', () => {
 
         // check if sharedb sendRaw was called for document update
         const call = sharedb.sendRaw.getCall(0);
-        assert.deepStrictEqual(call.args, [`doc:save:${asset.uniqueId}`]);
+        assert.deepStrictEqual(call.args, [`doc:save:${asset.uniqueId}`], 'sendRaw args should match');
     });
 
     test('file save (remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // get asset and its document content
         const asset = await assetCreate({ name: 'save_remote_local.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
+        assert.ok(asset, 'asset should be created');
         const document = documents.get(asset.uniqueId);
-        assert.ok(document);
+        assert.ok(document, 'document should exist');
 
         // get file uri
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
@@ -857,9 +873,9 @@ suite('Extension Test Suite', () => {
         });
 
         // make remote save
-        assert.ok(asset.file);
+        assert.ok(asset.file, 'asset.file should exist');
         const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
-        assert.ok(doc);
+        assert.ok(doc, 'sharedb asset document should exist');
         const newContent = `// LOCAL TEST COMMENT\n${document}`;
         const newHash = hash(newContent);
         doc.submitOp(
@@ -888,11 +904,11 @@ suite('Extension Test Suite', () => {
     test('file delete (remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // create asset
         const asset = await assetCreate({ name: 'delete_remote_local.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
+        assert.ok(asset, 'asset should be created');
 
         // watch for file deletion
         const watcher = watchFilePromise(folderUri, asset.name, 'delete');
@@ -906,17 +922,17 @@ suite('Extension Test Suite', () => {
 
         // check if local file was deleted
         const uri = await assertResolves(watcher, 'watcher.delete');
-        assert.ok(uri);
+        assert.ok(uri, 'deleted uri should exist');
     });
 
     test('file delete (local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // create asset
         const asset = await assetCreate({ name: 'delete_local_remote.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset);
+        assert.ok(asset, 'asset should be created');
 
         // create delete promise
         const delete_ = new Promise<void>((resolve) => {
@@ -940,18 +956,22 @@ suite('Extension Test Suite', () => {
 
         // check if sharedb sendRaw was called for asset deletion
         const call = sharedb.sendRaw.getCall(0);
-        assert.deepStrictEqual(call.args, [
-            `fs${JSON.stringify({
-                op: 'delete',
-                ids: [asset.uniqueId]
-            })}`
-        ]);
+        assert.deepStrictEqual(
+            call.args,
+            [
+                `fs${JSON.stringify({
+                    op: 'delete',
+                    ids: [asset.uniqueId]
+                })}`
+            ],
+            'sendRaw delete args should match'
+        );
     });
 
     test('file rename (remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // create new asset
         const oldName = 'rename_remote_local.js';
@@ -965,7 +985,7 @@ suite('Extension Test Suite', () => {
 
         // make remote name change
         const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
-        assert.ok(doc);
+        assert.ok(doc, 'sharedb asset document should exist');
         doc.submitOp(
             [
                 {
@@ -979,20 +999,20 @@ suite('Extension Test Suite', () => {
 
         // check if local file was renamed
         const deletedUri = await assertResolves(deleteWatcher, 'watcher.delete');
-        assert.ok(deletedUri);
+        assert.ok(deletedUri, 'deleted uri should exist');
         const createdUri = await assertResolves(createWatcher, 'watcher.create');
-        assert.ok(createdUri);
+        assert.ok(createdUri, 'created uri should exist');
 
         // check new file content
         const content = await assertResolves(vscode.workspace.fs.readFile(createdUri), 'fs.readFile');
-        assert.ok(document);
-        assert.strictEqual(Buffer.from(content).toString(), document);
+        assert.ok(document, 'document should exist');
+        assert.strictEqual(Buffer.from(content).toString(), document, 'file content should match');
     });
 
     test('file rename (local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // create new asset
         const oldName = 'rename_local_remote.js';
@@ -1018,17 +1038,21 @@ suite('Extension Test Suite', () => {
 
         // check if asset rename was called
         const call = rest.assetRename.getCall(0);
-        assert.deepStrictEqual(call.args, [project.id, projectSettings.branch, asset.uniqueId, newName]);
+        assert.deepStrictEqual(
+            call.args,
+            [project.id, projectSettings.branch, asset.uniqueId, newName],
+            'assetRename args should match'
+        );
     });
 
     test('file move (remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // get folder asset
         const folderAsset = Array.from(assets.values()).find((a) => a.type === 'folder');
-        assert.ok(folderAsset);
+        assert.ok(folderAsset, 'folder asset should exist');
         const folderAssetId = parseInt(folderAsset.item_id, 10);
 
         // create new file
@@ -1042,7 +1066,7 @@ suite('Extension Test Suite', () => {
 
         // make remote name change
         const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
-        assert.ok(doc);
+        assert.ok(doc, 'sharedb asset document should exist');
         doc.submitOp(
             [
                 {
@@ -1056,23 +1080,23 @@ suite('Extension Test Suite', () => {
 
         // check if local file was moved
         const deletedUri = await assertResolves(deleteWatcher, 'watcher.delete');
-        assert.ok(deletedUri);
+        assert.ok(deletedUri, 'deleted uri should exist');
         const createdUri = await assertResolves(createWatcher, 'watcher.create');
-        assert.ok(createdUri);
+        assert.ok(createdUri, 'created uri should exist');
 
         // check new file content
         const content = await assertResolves(vscode.workspace.fs.readFile(createdUri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), document);
+        assert.strictEqual(Buffer.from(content).toString(), document, 'file content should match');
     });
 
     test('file move (local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // get asset and folder
         const folderAsset = Array.from(assets.values()).find((a) => a.type === 'folder');
-        assert.ok(folderAsset);
+        assert.ok(folderAsset, 'folder asset should exist');
         const folderAssetId = parseInt(folderAsset.item_id, 10);
 
         // create new file
@@ -1098,23 +1122,27 @@ suite('Extension Test Suite', () => {
 
         // check if sharedb fs move was called
         const call = sharedb.sendRaw.getCall(0);
-        assert.deepStrictEqual(call.args, [
-            `fs${JSON.stringify({
-                op: 'move',
-                ids: [asset.uniqueId],
-                to: 0
-            })}`
-        ]);
+        assert.deepStrictEqual(
+            call.args,
+            [
+                `fs${JSON.stringify({
+                    op: 'move',
+                    ids: [asset.uniqueId],
+                    to: 0
+                })}`
+            ],
+            'sendRaw move args should match'
+        );
 
         // check content of renamed file
         const content = await assertResolves(vscode.workspace.fs.readFile(newUri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), document);
+        assert.strictEqual(Buffer.from(content).toString(), document, 'file content should match');
     });
 
     test('.pcignore parsing (file)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri);
+        assert.ok(folderUri, 'workspace folder should exist');
 
         // create .pcignore file
         const ignoreContent = `ignored*.js\n`;
@@ -1132,6 +1160,6 @@ suite('Extension Test Suite', () => {
 
         // check ignored file and folder do not exist as assets
         const ignoredFileAsset = Array.from(assets.values()).find((a) => a.name === 'ignored_file.js');
-        assert.strictEqual(ignoredFileAsset, undefined);
+        assert.strictEqual(ignoredFileAsset, undefined, 'ignored file should not exist as asset');
     });
 });
