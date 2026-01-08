@@ -23,6 +23,23 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // load config
     const config = vscode.workspace.getConfiguration('playcanvas');
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration(async (e) => {
+            if (!e.affectsConfiguration('playcanvas')) {
+                return;
+            }
+
+            const confirmation = 'Reload Now';
+            const selection = await vscode.window.showInformationMessage(
+                'PlayCanvas configuration changed. Please reload the window to apply changes.',
+                confirmation
+            );
+            if (selection !== confirmation) {
+                return;
+            }
+            vscode.commands.executeCommand('workbench.action.reloadWindow');
+        })
+    );
 
     // root uri
     // FIXME: need to use file schema - plugin not loading types correctly with vscode-data:///
