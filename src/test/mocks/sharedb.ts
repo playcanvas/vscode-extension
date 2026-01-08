@@ -294,7 +294,7 @@ class MockShareDb extends ShareDb {
         });
         this.sendRaw = sandbox.spy(async (data: Parameters<WebSocket['send']>[0]) => {
             // check for fs operations
-            if (data.toString().startsWith('fs')) {
+            if (`${data}`.startsWith('fs')) {
                 const raw = data.toString().slice(2);
                 const json = JSON.parse(raw) as
                     | { op: 'delete'; ids: number[] }
@@ -340,8 +340,16 @@ class MockShareDb extends ShareDb {
                     }
                     return;
                 }
+
+                return;
             }
 
+            if (`${data}`.startsWith('doc:save')) {
+                const raw = data.toString().slice(8);
+                const id = parseInt(raw, 10);
+                this.emit('doc:save', 'success', id);
+                return;
+            }
             return;
         });
     }
