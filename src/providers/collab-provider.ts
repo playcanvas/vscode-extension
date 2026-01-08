@@ -4,6 +4,7 @@ import type { Relay } from '../connections/relay';
 import type { Rest } from '../connections/rest';
 import type { ProjectManager } from '../project-manager';
 import type { EventMap } from '../typings/event-map';
+import * as buffer from '../utils/buffer';
 import type { EventEmitter } from '../utils/event-emitter';
 import { Linker } from '../utils/linker';
 import { relativePath, uriStartsWith } from '../utils/utils';
@@ -137,7 +138,7 @@ class CollabProvider
                 if (!item) {
                     const user = await this._rest.user(id);
                     const buf = await this._rest.userThumb(user.id);
-                    const base64 = Buffer.from(buf).toString('base64');
+                    const base64 = buffer.toBase64(new Uint8Array(buf));
                     const iconUri = vscode.Uri.parse(`data:image/png;base64,${base64}`);
                     item = new CollabItem(user.username, iconUri);
                     this._items.set(id, item);

@@ -11,6 +11,7 @@ import * as restModule from '../../connections/rest';
 import * as sharedbModule from '../../connections/sharedb';
 import * as uriHandlerModule from '../../handlers/uri-handler';
 import type { Asset } from '../../typings/models';
+import * as buffer from '../../utils/buffer';
 import { hash } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
@@ -318,7 +319,7 @@ suite('Extension Test Suite', () => {
         // check if local file was created
         const uri = await assertResolves(watcher, 'watcher.create');
         const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), document, 'file content should match');
+        assert.strictEqual(buffer.toString(content), document, 'file content should match');
     });
 
     test('file create (local -> remote)', async () => {
@@ -345,7 +346,7 @@ suite('Extension Test Suite', () => {
 
         // write the file to disk
         const uri = vscode.Uri.joinPath(folderUri, name);
-        await assertResolves(vscode.workspace.fs.writeFile(uri, Buffer.from(document)), 'fs.writeFile');
+        await assertResolves(vscode.workspace.fs.writeFile(uri, buffer.from(document)), 'fs.writeFile');
 
         // wait for remote creation to be detected
         await assertResolves(created, 'asset.new');
@@ -402,7 +403,7 @@ suite('Extension Test Suite', () => {
         // write the files to disk
         const writes = files.map((file) => {
             const uri = vscode.Uri.joinPath(folderUri, file.name);
-            return assertResolves(vscode.workspace.fs.writeFile(uri, Buffer.from(file.content)), 'fs.writeFile');
+            return assertResolves(vscode.workspace.fs.writeFile(uri, buffer.from(file.content)), 'fs.writeFile');
         });
         await Promise.all(writes);
 
@@ -475,7 +476,7 @@ suite('Extension Test Suite', () => {
         // create all at once (simulating fast file system operations)
         await vscode.workspace.fs.createDirectory(parentUri);
         await vscode.workspace.fs.createDirectory(subfolderUri);
-        await vscode.workspace.fs.writeFile(fileUri, Buffer.from(fileContent));
+        await vscode.workspace.fs.writeFile(fileUri, buffer.from(fileContent));
 
         // wait for all remote creations
         await assertResolves(created, 'asset.new');
@@ -544,8 +545,8 @@ suite('Extension Test Suite', () => {
         ]);
 
         await Promise.all([
-            vscode.workspace.fs.writeFile(vscode.Uri.joinPath(siblingAUri, fileA), Buffer.from(fileContent)),
-            vscode.workspace.fs.writeFile(vscode.Uri.joinPath(siblingBUri, fileB), Buffer.from(fileContent))
+            vscode.workspace.fs.writeFile(vscode.Uri.joinPath(siblingAUri, fileA), buffer.from(fileContent)),
+            vscode.workspace.fs.writeFile(vscode.Uri.joinPath(siblingBUri, fileB), buffer.from(fileContent))
         ]);
 
         // wait for all remote creations
@@ -698,7 +699,7 @@ suite('Extension Test Suite', () => {
         // check if local file was changed
         await assertResolves(watcher, 'watcher.change');
         const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), newDocument, 'file content should match');
+        assert.strictEqual(buffer.toString(content), newDocument, 'file content should match');
     });
 
     test('file changes (closed remote -> local)', async () => {
@@ -729,11 +730,7 @@ suite('Extension Test Suite', () => {
         // check if local file was changed
         const uri = await assertResolves(watcher, 'watcher.change');
         const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(
-            Buffer.from(content).toString(),
-            `// REMOTE COMMENT\n${document}`,
-            'file content should match'
-        );
+        assert.strictEqual(buffer.toString(content), `// REMOTE COMMENT\n${document}`, 'file content should match');
     });
 
     test('file changes (opened local -> remote)', async () => {
@@ -774,7 +771,7 @@ suite('Extension Test Suite', () => {
         // wait for local change to be detected (debounced disk sync)
         await assertResolves(watcher, 'watcher.change');
         const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), newDocument, 'file content should match');
+        assert.strictEqual(buffer.toString(content), newDocument, 'file content should match');
     });
 
     test('file changes (closed local -> remote)', async () => {
@@ -801,7 +798,7 @@ suite('Extension Test Suite', () => {
         ]);
 
         // make local change by writing to the file directly
-        await vscode.workspace.fs.writeFile(uri, Buffer.from(newContent));
+        await vscode.workspace.fs.writeFile(uri, buffer.from(newContent));
 
         // wait for remote update to be detected
         await assertResolves(updated, 'sharedb.op');
@@ -1006,7 +1003,7 @@ suite('Extension Test Suite', () => {
         // check new file content
         const content = await assertResolves(vscode.workspace.fs.readFile(createdUri), 'fs.readFile');
         assert.ok(document, 'document should exist');
-        assert.strictEqual(Buffer.from(content).toString(), document, 'file content should match');
+        assert.strictEqual(buffer.toString(content), document, 'file content should match');
     });
 
     test('file rename (local -> remote)', async () => {
@@ -1086,7 +1083,7 @@ suite('Extension Test Suite', () => {
 
         // check new file content
         const content = await assertResolves(vscode.workspace.fs.readFile(createdUri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), document, 'file content should match');
+        assert.strictEqual(buffer.toString(content), document, 'file content should match');
     });
 
     test('file move (local -> remote)', async () => {
@@ -1136,7 +1133,7 @@ suite('Extension Test Suite', () => {
 
         // check content of renamed file
         const content = await assertResolves(vscode.workspace.fs.readFile(newUri), 'fs.readFile');
-        assert.strictEqual(Buffer.from(content).toString(), document, 'file content should match');
+        assert.strictEqual(buffer.toString(content), document, 'file content should match');
     });
 
     test('.pcignore parsing (file)', async () => {
@@ -1147,13 +1144,13 @@ suite('Extension Test Suite', () => {
         // create .pcignore file
         const ignoreContent = `ignored*.js\n`;
         const ignoreUri = vscode.Uri.joinPath(folderUri, '.pcignore');
-        await assertResolves(vscode.workspace.fs.writeFile(ignoreUri, Buffer.from(ignoreContent)), 'fs.writeFile');
+        await assertResolves(vscode.workspace.fs.writeFile(ignoreUri, buffer.from(ignoreContent)), 'fs.writeFile');
 
         // create file to be ignored
         const watcher = watchFilePromise(folderUri, 'ignored_file.js', 'create');
         const ignoredFileUri = vscode.Uri.joinPath(folderUri, 'ignored_file.js');
         await assertResolves(
-            vscode.workspace.fs.writeFile(ignoredFileUri, Buffer.from('// IGNORED FILE')),
+            vscode.workspace.fs.writeFile(ignoredFileUri, buffer.from('// IGNORED FILE')),
             'fs.writeFile'
         );
         await assertResolves(watcher, 'watcher.create');
