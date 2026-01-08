@@ -50,9 +50,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // auth
     const auth = new Auth(context);
-    context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.login`, async () => auth.getAccessToken(true))
-    );
+    context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.login`, async () => auth.getAccessToken(true)));
     const accessToken = await auth.getAccessToken();
 
     // error handler
