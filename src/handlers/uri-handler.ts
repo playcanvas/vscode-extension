@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import type { Rest } from '../connections/rest';
-import { fileExists, projectToName, uriStartsWith } from '../utils/utils';
+import { fileExists, projectToName } from '../utils/utils';
 
 class UriHandler implements vscode.UriHandler {
     static OPEN_FILE_KEY = 'playcanvas.openFile';
@@ -59,7 +59,7 @@ class UriHandler implements vscode.UriHandler {
 
         // check if current workspace already has the project opened
         const folders = vscode.workspace.workspaceFolders ?? [];
-        const folder = folders.find((f) => uriStartsWith(f.uri, folderUri) && f.name === projectToName(project));
+        const folder = folders.find((f) => f.uri.toString() === folderUri.toString());
         if (folder) {
             if (filePath) {
                 // open file
