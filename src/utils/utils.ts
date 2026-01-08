@@ -66,7 +66,7 @@ export const vscode2sharedb = (changes: readonly vscode.TextDocumentContentChang
 };
 
 // derived from custom ot-text
-export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[]) => {
+export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[], warn: (message: string) => void) => {
     const edits: vscode.TextEdit[] = [];
 
     const add = (cleanOp: [number, string | { d: number }]) => {
@@ -105,7 +105,8 @@ export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[]) =
                 break;
             }
             default: {
-                throw new Error(`Invalid ShareDB text op: ${JSON.stringify(op)}`);
+                warn(`invalid ShareDB text op: ${JSON.stringify(op)}`);
+                break;
             }
         }
     }
