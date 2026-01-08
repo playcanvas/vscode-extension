@@ -484,7 +484,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // update active project
         state.projectId = project.id;
 
-        // TODO: multiple workspaces not supported
+        // TODO: multiple projects per workspace not supported
         if (valid.length > 1) {
             break;
         }
