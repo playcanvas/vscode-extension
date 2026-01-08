@@ -28,6 +28,13 @@ class Debouncer<T> {
             this._timeouts.delete(key);
         }
     }
+
+    clear() {
+        for (const [, timeout] of this._timeouts) {
+            clearTimeout(timeout);
+        }
+        this._timeouts.clear();
+    }
 }
 
 export { Debouncer };
