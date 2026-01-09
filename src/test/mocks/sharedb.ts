@@ -348,7 +348,7 @@ class MockShareDb extends ShareDb {
             }
 
             if (`${data}`.startsWith('doc:save')) {
-                const raw = data.toString().slice(8);
+                const raw = data.toString().slice(9);
                 const id = parseInt(raw, 10);
                 this.emit('doc:save', 'success', id);
                 return;

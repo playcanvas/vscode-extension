@@ -13,7 +13,7 @@ import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
-import { hash, parsePath } from './utils/utils';
+import { hash, parsePath, guard } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -94,7 +94,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _assetPath(uniqueId: number, override: { path?: number[]; name?: string } = {}): string {
         const asset = this._assets.get(uniqueId);
         if (!asset) {
-            throw new Error(`missing child asset ${uniqueId}`);
+            throw this.error.set(() => new Error(`missing child asset ${uniqueId}`));
         }
 
         const path = override.path ?? asset.path;
@@ -106,11 +106,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         while (parent) {
             const uniqueId = this._idToUniqueId.get(parent);
             if (!uniqueId) {
-                throw new Error(`missing parent asset id mapping for ${parent}`);
+                throw this.error.set(() => new Error(`missing parent asset id mapping for ${parent}`));
             }
             const asset = this._assets.get(uniqueId);
             if (!asset) {
-                throw new Error(`missing parent asset ${uniqueId}`);
+                throw this.error.set(() => new Error(`missing parent asset ${uniqueId}`));
             }
             segments.unshift(asset.name);
 
@@ -126,7 +126,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         //     .map((id: number) => {
         //         const asset = this._assets.get(id);
         //         if (!asset) {
-        //             throw new Error(`missing asset ${id}`);
+        //             throw this.error.set(() => new Error(`missing asset ${id}`));
         //         }
         //         return `${asset.name}/`;
         //     })
@@ -135,7 +135,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _addAsset(uniqueId: number, doc: Doc) {
         if (this._assets.has(uniqueId)) {
-            throw new Error('asset already added');
+            throw this.error.set(() => new Error('asset already added'));
         }
 
         const snapshot = structuredClone(doc.data);
@@ -204,7 +204,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // compute dirty state by comparing hash of doc content vs S3 hash
         const asset = this._assets.get(uniqueId);
         if (!asset?.file) {
-            throw new Error(`missing file data for asset ${uniqueId}`);
+            throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
         }
         const docHash = hash(doc.data);
         const s3Hash = asset.file.hash;
@@ -309,7 +309,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // subscribe to asset document
             const doc1 = await this._sharedb.subscribe('assets', `${uniqueId}`);
             if (!doc1) {
-                this.error.set(() => new Error(`Failed to subscribe to new asset ${uniqueId}`));
+                this.error.set(() => new Error(`failed to subscribe to new asset ${uniqueId}`));
                 return;
             }
             this._cleanup.push(async () => {
@@ -347,7 +347,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // subscribe to asset document
             const doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
             if (!doc2) {
-                this.error.set(() => new Error(`Failed to subscribe to new document ${uniqueId}`));
+                this.error.set(() => new Error(`failed to subscribe to new document ${uniqueId}`));
                 return;
             }
             this._cleanup.push(async () => {
@@ -545,14 +545,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
         if (!this._projectId || !this._branchId) {
-            throw new Error('project not loaded');
+            throw this.error.set(() => new Error('project not loaded'));
         }
 
         const [parentPath, name] = parsePath(path);
 
         // validate name
         if (!name) {
-            throw new Error(`missing name for ${path}`);
+            throw this.error.set(() => new Error(`missing name for ${path}`));
         }
 
         // check if file already exists
@@ -566,7 +566,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (parentPath !== '') {
             const file = this._files.get(parentPath);
             if (!file || file.type !== 'folder') {
-                throw new Error(`missing parent folder ${parentPath} of ${path}`);
+                throw this.error.set(() => new Error(`missing parent folder ${parentPath} of ${path}`));
             }
             parent = file.uniqueId;
         }
@@ -587,7 +587,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         });
 
         // create asset
-        let asset: {
+        let data: {
             type: string;
             name: string;
             parent?: number;
@@ -596,7 +596,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             file?: Blob;
         };
         if (type === 'folder') {
-            asset = {
+            data = {
                 type: 'folder',
                 name,
                 parent,
@@ -610,7 +610,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             };
             const src = content?.length ? buffer.toString(content) : '\n';
             ext = EXT_TO_ASSET.has(ext) ? ext : 'txt';
-            asset = {
+            data = {
                 type: assetType,
                 name,
                 parent,
@@ -619,7 +619,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 file: new Blob([src], { type: blobType })
             };
         }
-        this._rest.assetCreate(this._projectId, this._branchId, asset).then(rest.resolve).catch(rest.reject);
+
+        // create asset
+        const asset = await guard(this._rest.assetCreate(this._projectId, this._branchId, data), this.error);
+
+        // resolve rest promise
+        rest.resolve(asset);
 
         // wait for asset to be created
         await created;
@@ -661,7 +666,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async rename(oldPath: string, newPath: string) {
         if (!this._projectId || !this._branchId) {
-            throw new Error('project not loaded');
+            throw this.error.set(() => new Error('project not loaded'));
         }
 
         // skip if paths are identical
@@ -671,17 +676,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // check if moving root
         if (oldPath === '') {
-            throw new Error('cannot move root folder');
+            throw this.error.set(() => new Error('cannot move root folder'));
         }
 
         // check if src file exists
         if (!this._files.has(oldPath)) {
-            throw new Error(`file not found ${oldPath}`);
+            throw this.error.set(() => new Error(`file not found ${oldPath}`));
         }
 
         // check if dest file already exists
         if (this._files.has(newPath)) {
-            throw new Error(`file already exists ${newPath}`);
+            throw this.error.set(() => new Error(`file already exists ${newPath}`));
         }
 
         // parse old file path
@@ -693,7 +698,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // find file to rename
             const file = this._files.get(oldPath);
             if (!file) {
-                throw new Error(`file not found ${oldPath}`);
+                throw this.error.set(() => new Error(`file not found ${oldPath}`));
             }
 
             // file update
@@ -708,7 +713,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             });
 
             // rename asset
-            const renamed = this._rest.assetRename(this._projectId, this._branchId, file.uniqueId, newName);
+            const renamed = guard(
+                this._rest.assetRename(this._projectId, this._branchId, file.uniqueId, newName),
+                this.error
+            );
 
             // wait for rename and file update to complete
             await Promise.all([renamed, updated]);
@@ -720,13 +728,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // find src file
         const srcFile = this._files.get(oldPath);
         if (!srcFile) {
-            throw new Error(`file not found ${oldPath}`);
+            throw this.error.set(() => new Error(`file not found ${oldPath}`));
         }
 
         // find dest folder
         const destFile = this._files.get(newParent);
         if (!destFile || destFile.type !== 'folder') {
-            throw new Error(`destination folder not found ${newParent}`);
+            throw this.error.set(() => new Error(`destination folder not found ${newParent}`));
         }
 
         // file updated
@@ -791,16 +799,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
         if (this._projectId || this._branchId) {
-            throw new Error('project already linked');
+            throw this.error.set(() => new Error('project already linked'));
         }
 
         // fetch project asset metadata
-        const assets = await this._rest.projectAssets(projectId, branchId, 'codeeditor');
+        const assets = await guard(this._rest.projectAssets(projectId, branchId, 'codeeditor'), this.error);
 
         // validate token scope by checking for uniqueId presence
         if (!Array.isArray(assets) || (assets.length > 0 && !('uniqueId' in assets[0]))) {
-            this.error.set(() => new Error('Invalid access token scope.'));
-            return;
+            throw this.error.set(() => new Error('invalid access token scope'));
         }
 
         // add root folder
@@ -824,7 +831,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 const doc = docs[j];
                 const uniqueId = batch[j].uniqueId;
                 if (!doc) {
-                    this.error.set(() => new Error(`Failed to subscribe to asset ${uniqueId}`));
+                    this.error.set(() => new Error(`failed to subscribe to asset ${uniqueId}`));
                     loadAssetNext();
                     continue;
                 }
@@ -881,7 +888,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 const doc = docs[j];
                 const { uniqueId } = batch[j];
                 if (!doc) {
-                    this.error.set(() => new Error(`Failed to subscribe to document ${uniqueId}`));
+                    this.error.set(() => new Error(`failed to subscribe to document ${uniqueId}`));
                     loadFileNext();
                     continue;
                 }
@@ -920,7 +927,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async unlink() {
         if (!this._projectId || !this._branchId) {
-            throw new Error('project not linked');
+            throw this.error.set(() => new Error('project not linked'));
         }
         const projectId = this._projectId;
         const branchId = this._branchId;

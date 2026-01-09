@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 
 import { API_URL, COOKIE_NAME, DEBUG, NAME, PUBLISHER, HOME_URL, LOGIN_URL, PORT, WEB } from './config';
 import { Rest } from './connections/rest';
-import { catchError } from './utils/utils';
+import { tryCatch } from './utils/utils';
 
 class Auth {
     private _context: vscode.ExtensionContext;
@@ -23,10 +23,9 @@ class Auth {
             origin: HOME_URL,
             accessToken
         });
-        const [error] = await catchError(() => rest.id());
+        const [error] = await tryCatch(rest.id());
         if (error && /HTTP 4\d{2}/.test(error.message)) {
             await vscode.window.showErrorMessage('Invalid PlayCanvas Access Token', { modal: true });
-            return;
         }
         return accessToken;
     }

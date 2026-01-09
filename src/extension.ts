@@ -82,7 +82,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
         origin: HOME_URL,
         accessToken
     });
-    effect(() => handleError(rest.error.get()));
 
     // realtime connection
     const sharedb = new ShareDb({
@@ -130,6 +129,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         debug: DEBUG,
         events
     });
+    effect(() => handleError(disk.error.get()));
 
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
         const diskState = await disk.unlink();
@@ -150,15 +150,16 @@ export const activate = async (context: vscode.ExtensionContext) => {
         userId,
         rest
     });
+    effect(() => handleError(uriHandler.error.get()));
     context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
 
     // collab provider
     const collabProvider = new CollabProvider({
         debug: DEBUG,
-        events,
         relay,
         rest
     });
+    effect(() => handleError(collabProvider.error.get()));
     context.subscriptions.push(vscode.window.registerTreeDataProvider('collab-view', collabProvider));
 
     // connection status bar item

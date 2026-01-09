@@ -3,11 +3,10 @@ import * as vscode from 'vscode';
 import type { Relay } from '../connections/relay';
 import type { Rest } from '../connections/rest';
 import type { ProjectManager } from '../project-manager';
-import type { EventMap } from '../typings/event-map';
 import * as buffer from '../utils/buffer';
-import type { EventEmitter } from '../utils/event-emitter';
 import { Linker } from '../utils/linker';
-import { relativePath, uriStartsWith } from '../utils/utils';
+import { signal } from '../utils/signal';
+import { relativePath, uriStartsWith, guard } from '../utils/utils';
 
 class CollabItem extends vscode.TreeItem {
     readonly username: string;
@@ -23,8 +22,6 @@ class CollabProvider
     extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManager }>
     implements vscode.TreeDataProvider<CollabItem>
 {
-    private _events: EventEmitter<EventMap>;
-
     private _rest: Rest;
 
     private _rooms = new Map<string, Set<number>>();
@@ -42,20 +39,11 @@ class CollabProvider
     >();
     readonly onDidChangeTreeData: vscode.Event<CollabItem | undefined | void> = this._onDidChangeTreeData.event;
 
-    constructor({
-        debug,
-        events,
-        relay,
-        rest
-    }: {
-        debug?: boolean;
-        events: EventEmitter<EventMap>;
-        relay: Relay;
-        rest: Rest;
-    }) {
+    error = signal<Error | undefined>(undefined);
+
+    constructor({ debug, relay, rest }: { debug?: boolean; relay: Relay; rest: Rest }) {
         super(debug);
 
-        this._events = events;
         this._rest = rest;
 
         relay.on('room:join', ({ name, userId, users }) => {
@@ -136,8 +124,8 @@ class CollabProvider
             for (const id of room) {
                 let item = this._items.get(id);
                 if (!item) {
-                    const user = await this._rest.user(id);
-                    const buf = await this._rest.userThumb(user.id);
+                    const user = await guard(this._rest.user(id), this.error);
+                    const buf = await guard(this._rest.userThumb(user.id), this.error);
                     const base64 = buffer.toBase64(new Uint8Array(buf));
                     const iconUri = vscode.Uri.parse(`data:image/png;base64,${base64}`);
                     item = new CollabItem(user.username, iconUri);
@@ -154,7 +142,7 @@ class CollabProvider
 
     link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri || this._projectManager) {
-            throw new Error('manager already linked');
+            throw this.error.set(() => new Error('manager already linked'));
         }
 
         this._folderUri = folderUri;
@@ -178,7 +166,7 @@ class CollabProvider
 
     async unlink() {
         if (!this._folderUri || !this._projectManager) {
-            throw new Error('manager not linked');
+            throw this.error.set(() => new Error('manager not linked'));
         }
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;

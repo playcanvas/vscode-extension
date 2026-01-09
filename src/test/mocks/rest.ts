@@ -1,8 +1,9 @@
+import assert from 'assert';
+
 import type sinon from 'sinon';
 
 import { Rest } from '../../connections/rest';
 import type { Asset, Branch, Project, User } from '../../typings/models';
-import { signal } from '../../utils/signal';
 import { hash } from '../../utils/utils';
 
 import type { MockMessenger } from './messenger';
@@ -10,8 +11,6 @@ import { user, project, assets, branches, documents, accessToken, uniqueId } fro
 import type { MockShareDb } from './sharedb';
 
 class MockRest extends Rest {
-    error: ReturnType<typeof signal<Error | undefined>> = signal<Error | undefined>(undefined);
-
     id: sinon.SinonSpy<[], Promise<number>>;
 
     user: sinon.SinonSpy<[], Promise<User>>;
@@ -109,9 +108,7 @@ class MockRest extends Rest {
         this.assetRename = sandbox.spy(async (_projectId: number, _branchId: string, assetId: number, name: string) => {
             // find asset and document
             const asset = assets.get(assetId);
-            if (!asset) {
-                throw new Error(`Asset with ID ${assetId} not found`);
-            }
+            assert(asset, `asset with ID ${assetId} not found`);
 
             // rename asset
             asset.name = name;

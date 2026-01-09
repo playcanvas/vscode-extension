@@ -2,7 +2,7 @@ type Effect = () => void;
 
 let current: Effect | null = null;
 
-export const signal = <T>(value: T): { get: () => T; set: (setter: (prev: T) => T) => void } => {
+export const signal = <T>(value: T): { get: () => T; set: <U extends T>(setter: (prev: T) => U) => U } => {
     let _value: T = value;
 
     const subscribers = new Set<Effect>();
@@ -14,12 +14,13 @@ export const signal = <T>(value: T): { get: () => T; set: (setter: (prev: T) => 
         return _value;
     };
 
-    const set = (setter: (prev: T) => T) => {
+    const set = <U extends T>(setter: (prev: T) => U): U => {
         const newValue = setter(_value);
         if (newValue !== _value) {
             _value = newValue;
             subscribers.forEach((effect) => effect());
         }
+        return newValue;
     };
 
     return { get, set };

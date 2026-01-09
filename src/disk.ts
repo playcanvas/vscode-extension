@@ -11,6 +11,7 @@ import { Debouncer } from './utils/debouncer';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { Mutex } from './utils/mutex';
+import { signal } from './utils/signal';
 import {
     parsePath,
     sharedb2vscode,
@@ -18,7 +19,7 @@ import {
     vscode2sharedb,
     uriStartsWith,
     fileExists,
-    catchError
+    tryCatch
 } from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
@@ -36,7 +37,7 @@ const readDirRecursive = async (uri: vscode.Uri) => {
 };
 
 const fileType = async (uri: vscode.Uri) => {
-    const [error, stat] = await catchError(() => vscode.workspace.fs.stat(uri) as Promise<vscode.FileStat>);
+    const [error, stat] = await tryCatch(vscode.workspace.fs.stat(uri) as Promise<vscode.FileStat>);
     if (error) {
         return undefined;
     }
@@ -47,7 +48,7 @@ const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder' | un
     if ((await type) !== 'file') {
         return undefined;
     }
-    const [error, content] = await catchError(() => vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
+    const [error, content] = await tryCatch(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
     if (error) {
         return undefined;
     }
@@ -74,6 +75,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _debouncer = new Debouncer<void>(50);
 
     private _ignoring = (_uri: vscode.Uri) => false;
+
+    error = signal<Error | undefined>(undefined);
 
     constructor({ debug = false, events }: { debug?: boolean; events: EventEmitter<EventMap> }) {
         super(debug);
@@ -162,7 +165,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const parentUri = vscode.Uri.joinPath(uri, '..');
             const parentExists = await fileExists(parentUri);
             if (!parentExists) {
-                throw new Error(`parent folder does not exist: ${parentUri.path}`);
+                throw this.error.set(() => new Error(`parent folder does not exist: ${parentUri.path}`));
             }
 
             // create on disk
@@ -199,7 +202,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (viewing) {
                 const document = await vscode.workspace.openTextDocument(uri);
                 const workspaceEdit = new vscode.WorkspaceEdit();
-                workspaceEdit.set(uri, sharedb2vscode(document, [op]));
+                workspaceEdit.set(uri, sharedb2vscode(document, [op], this._warn.bind(this)));
 
                 // apply edit with lock to prevent local change handler from firing
                 this._locks.add(`${uri}`);
@@ -737,7 +740,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         openFilePath?: string;
     }) {
         if (this._folderUri || this._projectManager) {
-            throw new Error('manager already linked');
+            throw this.error.set(() => new Error('manager already linked'));
         }
 
         // read files to disk
@@ -828,7 +831,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     async unlink() {
         if (!this._folderUri || !this._projectManager) {
-            throw new Error('manager not linked');
+            throw this.error.set(() => new Error('manager not linked'));
         }
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;

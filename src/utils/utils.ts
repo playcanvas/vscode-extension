@@ -6,16 +6,25 @@ import { ShareDb } from '../connections/sharedb';
 import type { Project } from '../typings/models';
 import type { ShareDbTextOp } from '../typings/sharedb';
 
+import type { signal } from './signal';
+
 export const hash = (data: string | Uint8Array) => {
     return crypto.createHash('md5').update(data).digest('hex');
 };
 
-export const catchError = async <T>(fn: () => Promise<T>): Promise<[Error, null] | [null, T]> => {
+export const tryCatch = async <T>(promise: Promise<T>): Promise<[Error, null] | [null, T]> => {
     try {
-        return [null, await fn()];
+        return [null, await promise];
     } catch (err: unknown) {
         return [err as Error, null];
     }
+};
+
+export const guard = <T>(promise: Promise<T>, error: ReturnType<typeof signal<Error | undefined>>) => {
+    return promise.catch((err: Error) => {
+        error.set(() => err);
+        throw err;
+    });
 };
 
 export const fileExists = async (uri: vscode.Uri) => {
@@ -66,7 +75,7 @@ export const vscode2sharedb = (changes: readonly vscode.TextDocumentContentChang
 };
 
 // derived from custom ot-text
-export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[]) => {
+export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[], warn: (message: string) => void) => {
     const edits: vscode.TextEdit[] = [];
 
     const add = (cleanOp: [number, string | { d: number }]) => {
@@ -105,7 +114,8 @@ export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[]) =
                 break;
             }
             default: {
-                throw new Error(`Invalid ShareDB text op: ${JSON.stringify(op)}`);
+                warn(`invalid ShareDB text op: ${JSON.stringify(op)}`);
+                break;
             }
         }
     }
