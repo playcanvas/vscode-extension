@@ -713,7 +713,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             });
 
             // rename asset
-            const renamed = await guard(
+            const renamed = guard(
                 this._rest.assetRename(this._projectId, this._branchId, file.uniqueId, newName),
                 this.error
             );
