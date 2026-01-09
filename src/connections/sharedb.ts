@@ -83,7 +83,7 @@ class ShareDb extends EventEmitter<EventMap> {
                 // check if auth was successful
                 const json = JSON.parse(data.toString().slice(4));
                 if (!json.id) {
-                    const reason = `[${this.constructor.name}] Invalid access token`;
+                    const reason = `[${this.constructor.name}] invalid access token`;
                     socket.close(3000, reason);
                     throw this.error.set(() => new Error(reason));
                 }

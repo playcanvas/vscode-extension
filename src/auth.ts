@@ -25,8 +25,7 @@ class Auth {
         });
         const [error] = await tryCatch(rest.id());
         if (error && /HTTP 4\d{2}/.test(error.message)) {
-            await vscode.window.showErrorMessage('Invalid PlayCanvas Access Token', { modal: true });
-            return;
+            await vscode.window.showErrorMessage('invalid Playcanvas Access Token', { modal: true });
         }
         return accessToken;
     }

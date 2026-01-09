@@ -63,7 +63,7 @@ class Relay extends EventEmitter<EventMap> {
         // send request for auth
         // ! Invalid access tokens will hang here
         const timeout = setTimeout(() => {
-            const reason = `[${this.constructor.name}] Invalid access token`;
+            const reason = `[${this.constructor.name}] invalid access token`;
             // TODO: figure out why this triggers 1006 not 3000
             socket.close(3000, reason);
             throw this.error.set(() => new Error(reason));

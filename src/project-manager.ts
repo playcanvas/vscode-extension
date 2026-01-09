@@ -807,7 +807,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // validate token scope by checking for uniqueId presence
         if (!Array.isArray(assets) || (assets.length > 0 && !('uniqueId' in assets[0]))) {
-            throw this.error.set(() => new Error('Invalid access token scope.'));
+            throw this.error.set(() => new Error('invalid access token scope'));
         }
 
         // add root folder
