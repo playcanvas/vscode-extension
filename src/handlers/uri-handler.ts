@@ -55,6 +55,7 @@ class UriHandler implements vscode.UriHandler {
         // find matching project
         const project = projects.find((p) => projectToName(p) === projectName);
         if (!project) {
+            this.error.set(() => new Error(`project ${projectName} not found`));
             return;
         }
 
