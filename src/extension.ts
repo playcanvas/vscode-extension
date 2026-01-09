@@ -129,6 +129,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         debug: DEBUG,
         events
     });
+    effect(() => handleError(disk.error.get()));
 
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
         const diskState = await disk.unlink();
