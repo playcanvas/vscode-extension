@@ -13,7 +13,7 @@ import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
-import { hash, parsePath } from './utils/utils';
+import { catchError, hash, parsePath } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -587,7 +587,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         });
 
         // create asset
-        let asset: {
+        let data: {
             type: string;
             name: string;
             parent?: number;
@@ -596,7 +596,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             file?: Blob;
         };
         if (type === 'folder') {
-            asset = {
+            data = {
                 type: 'folder',
                 name,
                 parent,
@@ -610,7 +610,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             };
             const src = content?.length ? buffer.toString(content) : '\n';
             ext = EXT_TO_ASSET.has(ext) ? ext : 'txt';
-            asset = {
+            data = {
                 type: assetType,
                 name,
                 parent,
@@ -619,7 +619,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 file: new Blob([src], { type: blobType })
             };
         }
-        this._rest.assetCreate(this._projectId, this._branchId, asset).then(rest.resolve).catch(rest.reject);
+
+        // create asset
+        const { _projectId, _branchId } = this;
+        const [error, asset] = await catchError(() => this._rest.assetCreate(_projectId, _branchId, data));
+        if (error) {
+            this.error.set(() => error);
+            return;
+        }
+
+        // resolve rest promise
+        rest.resolve(asset);
 
         // wait for asset to be created
         await created;
@@ -708,7 +718,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             });
 
             // rename asset
-            const renamed = this._rest.assetRename(this._projectId, this._branchId, file.uniqueId, newName);
+            const { _projectId, _branchId } = this;
+            const [error, renamed] = await catchError(() =>
+                this._rest.assetRename(_projectId, _branchId, file.uniqueId, newName)
+            );
+            if (error) {
+                this.error.set(() => error);
+                return;
+            }
 
             // wait for rename and file update to complete
             await Promise.all([renamed, updated]);
@@ -795,7 +812,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // fetch project asset metadata
-        const assets = await this._rest.projectAssets(projectId, branchId, 'codeeditor');
+        const [error, assets] = await catchError(() => this._rest.projectAssets(projectId, branchId, 'codeeditor'));
+        if (error) {
+            this.error.set(() => error);
+            return;
+        }
 
         // validate token scope by checking for uniqueId presence
         if (!Array.isArray(assets) || (assets.length > 0 && !('uniqueId' in assets[0]))) {

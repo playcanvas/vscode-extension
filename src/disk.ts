@@ -199,7 +199,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (viewing) {
                 const document = await vscode.workspace.openTextDocument(uri);
                 const workspaceEdit = new vscode.WorkspaceEdit();
-                workspaceEdit.set(uri, sharedb2vscode(document, [op]));
+                workspaceEdit.set(uri, sharedb2vscode(document, [op], this._warn.bind(this)));
 
                 // apply edit with lock to prevent local change handler from firing
                 this._locks.add(`${uri}`);

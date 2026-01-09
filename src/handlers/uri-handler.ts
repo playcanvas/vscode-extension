@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 import { NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
-import { fileExists, projectToName } from '../utils/utils';
+import { catchError, fileExists, projectToName } from '../utils/utils';
 
 class UriHandler implements vscode.UriHandler {
     static OPEN_FILE_KEY = `${NAME}.openFile`;
@@ -47,7 +47,10 @@ class UriHandler implements vscode.UriHandler {
         const filePath = pathParts.join('/');
 
         // fetch all user projects
-        const projects = await this._rest.userProjects(this._userId, 'profile');
+        const [error, projects] = await catchError(() => this._rest.userProjects(this._userId, 'profile'));
+        if (error) {
+            return;
+        }
 
         // find matching project
         const project = projects.find((p) => projectToName(p) === projectName);

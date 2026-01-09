@@ -82,7 +82,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
         origin: HOME_URL,
         accessToken
     });
-    effect(() => handleError(rest.error.get()));
 
     // realtime connection
     const sharedb = new ShareDb({
@@ -155,10 +154,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // collab provider
     const collabProvider = new CollabProvider({
         debug: DEBUG,
-        events,
         relay,
         rest
     });
+    effect(() => handleError(collabProvider.error.get()));
     context.subscriptions.push(vscode.window.registerTreeDataProvider('collab-view', collabProvider));
 
     // connection status bar item

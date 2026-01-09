@@ -1,5 +1,4 @@
 import type { Asset, Branch, Project, User } from '../typings/models';
-import { signal } from '../utils/signal';
 
 class Rest {
     private _debug: boolean;
@@ -9,8 +8,6 @@ class Rest {
     origin: string;
 
     accessToken: string;
-
-    error = signal<Error | undefined>(undefined);
 
     constructor({
         debug = false,
@@ -56,9 +53,7 @@ class Rest {
             body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined
         });
         if (!res.ok) {
-            const error = new Error(`HTTP ${res.status} ${res.statusText}: ${await res.text()}`);
-            this.error.set(() => error);
-            throw error;
+            throw new Error(`HTTP ${res.status} ${res.statusText}: ${await res.text()}`);
         }
         switch (type) {
             case 'buffer': {
