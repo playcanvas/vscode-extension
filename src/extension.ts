@@ -149,6 +149,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         userId,
         rest
     });
+    effect(() => handleError(uriHandler.error.get()));
     context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
 
     // collab provider

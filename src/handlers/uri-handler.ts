@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 
 import { NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
-import { tryCatch, fileExists, projectToName } from '../utils/utils';
+import { signal } from '../utils/signal';
+import { fileExists, projectToName, guard } from '../utils/utils';
 
 class UriHandler implements vscode.UriHandler {
     static OPEN_FILE_KEY = `${NAME}.openFile`;
@@ -14,6 +15,8 @@ class UriHandler implements vscode.UriHandler {
     private _userId: number;
 
     private _rest: Rest;
+
+    error = signal<Error | undefined>(undefined);
 
     constructor({
         context,
@@ -47,10 +50,7 @@ class UriHandler implements vscode.UriHandler {
         const filePath = pathParts.join('/');
 
         // fetch all user projects
-        const [error, projects] = await tryCatch(this._rest.userProjects(this._userId, 'profile'));
-        if (error) {
-            return;
-        }
+        const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);
 
         // find matching project
         const project = projects.find((p) => projectToName(p) === projectName);

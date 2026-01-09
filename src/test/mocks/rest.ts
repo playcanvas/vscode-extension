@@ -1,3 +1,5 @@
+import assert from 'assert';
+
 import type sinon from 'sinon';
 
 import { Rest } from '../../connections/rest';
@@ -106,9 +108,7 @@ class MockRest extends Rest {
         this.assetRename = sandbox.spy(async (_projectId: number, _branchId: string, assetId: number, name: string) => {
             // find asset and document
             const asset = assets.get(assetId);
-            if (!asset) {
-                throw new Error(`Asset with ID ${assetId} not found`);
-            }
+            assert(asset, `asset with ID ${assetId} not found`);
 
             // rename asset
             asset.name = name;

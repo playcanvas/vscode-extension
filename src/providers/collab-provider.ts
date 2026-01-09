@@ -6,7 +6,7 @@ import type { ProjectManager } from '../project-manager';
 import * as buffer from '../utils/buffer';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
-import { tryCatch, relativePath, uriStartsWith } from '../utils/utils';
+import { relativePath, uriStartsWith, guard } from '../utils/utils';
 
 class CollabItem extends vscode.TreeItem {
     readonly username: string;
@@ -124,16 +124,8 @@ class CollabProvider
             for (const id of room) {
                 let item = this._items.get(id);
                 if (!item) {
-                    const [error1, user] = await tryCatch(this._rest.user(id));
-                    if (error1) {
-                        this.error.set(() => error1);
-                        continue;
-                    }
-                    const [error2, buf] = await tryCatch(this._rest.userThumb(user.id));
-                    if (error2) {
-                        this.error.set(() => error2);
-                        continue;
-                    }
+                    const user = await guard(this._rest.user(id), this.error);
+                    const buf = await guard(this._rest.userThumb(user.id), this.error);
                     const base64 = buffer.toBase64(new Uint8Array(buf));
                     const iconUri = vscode.Uri.parse(`data:image/png;base64,${base64}`);
                     item = new CollabItem(user.username, iconUri);
@@ -150,7 +142,7 @@ class CollabProvider
 
     link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri || this._projectManager) {
-            throw new Error('manager already linked');
+            throw this.error.set(() => new Error('manager already linked'));
         }
 
         this._folderUri = folderUri;
@@ -174,7 +166,7 @@ class CollabProvider
 
     async unlink() {
         if (!this._folderUri || !this._projectManager) {
-            throw new Error('manager not linked');
+            throw this.error.set(() => new Error('manager not linked'));
         }
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
