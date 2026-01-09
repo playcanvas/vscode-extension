@@ -10,9 +10,9 @@ export const hash = (data: string | Uint8Array) => {
     return crypto.createHash('md5').update(data).digest('hex');
 };
 
-export const catchError = async <T>(fn: () => Promise<T>): Promise<[Error, null] | [null, T]> => {
+export const tryCatch = async <T>(promise: Promise<T>): Promise<[Error, null] | [null, T]> => {
     try {
-        return [null, await fn()];
+        return [null, await promise];
     } catch (err: unknown) {
         return [err as Error, null];
     }

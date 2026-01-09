@@ -18,7 +18,7 @@ import {
     vscode2sharedb,
     uriStartsWith,
     fileExists,
-    catchError
+    tryCatch
 } from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
@@ -36,7 +36,7 @@ const readDirRecursive = async (uri: vscode.Uri) => {
 };
 
 const fileType = async (uri: vscode.Uri) => {
-    const [error, stat] = await catchError(() => vscode.workspace.fs.stat(uri) as Promise<vscode.FileStat>);
+    const [error, stat] = await tryCatch(vscode.workspace.fs.stat(uri) as Promise<vscode.FileStat>);
     if (error) {
         return undefined;
     }
@@ -47,7 +47,7 @@ const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder' | un
     if ((await type) !== 'file') {
         return undefined;
     }
-    const [error, content] = await catchError(() => vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
+    const [error, content] = await tryCatch(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
     if (error) {
         return undefined;
     }

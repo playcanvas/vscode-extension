@@ -13,7 +13,7 @@ import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
-import { catchError, hash, parsePath } from './utils/utils';
+import { tryCatch, hash, parsePath } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -621,8 +621,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // create asset
-        const { _projectId, _branchId } = this;
-        const [error, asset] = await catchError(() => this._rest.assetCreate(_projectId, _branchId, data));
+        const [error, asset] = await tryCatch(this._rest.assetCreate(this._projectId, this._branchId, data));
         if (error) {
             this.error.set(() => error);
             return;
@@ -719,7 +718,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // rename asset
             const { _projectId, _branchId } = this;
-            const [error, renamed] = await catchError(() =>
+            const [error, renamed] = await tryCatch(
                 this._rest.assetRename(_projectId, _branchId, file.uniqueId, newName)
             );
             if (error) {
@@ -812,7 +811,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // fetch project asset metadata
-        const [error, assets] = await catchError(() => this._rest.projectAssets(projectId, branchId, 'codeeditor'));
+        const [error, assets] = await tryCatch(this._rest.projectAssets(projectId, branchId, 'codeeditor'));
         if (error) {
             this.error.set(() => error);
             return;

@@ -6,7 +6,7 @@ import type { ProjectManager } from '../project-manager';
 import * as buffer from '../utils/buffer';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
-import { catchError, relativePath, uriStartsWith } from '../utils/utils';
+import { tryCatch, relativePath, uriStartsWith } from '../utils/utils';
 
 class CollabItem extends vscode.TreeItem {
     readonly username: string;
@@ -124,12 +124,12 @@ class CollabProvider
             for (const id of room) {
                 let item = this._items.get(id);
                 if (!item) {
-                    const [error1, user] = await catchError(() => this._rest.user(id));
+                    const [error1, user] = await tryCatch(this._rest.user(id));
                     if (error1) {
                         this.error.set(() => error1);
                         continue;
                     }
-                    const [error2, buf] = await catchError(() => this._rest.userThumb(user.id));
+                    const [error2, buf] = await tryCatch(this._rest.userThumb(user.id));
                     if (error2) {
                         this.error.set(() => error2);
                         continue;
