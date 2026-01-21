@@ -285,11 +285,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const projects = await rest.userProjects(userId, 'profile');
 
             // show picker
-            const list = projects.map((p) => projectToName(p)).reverse();
+            const list = projects.map((p) => projectToName(p, false)).reverse();
             const chosen = await vscode.window.showQuickPick(list, {
                 placeHolder: 'Select a project'
             });
-            const project = projects.find((p) => chosen === projectToName(p));
+            const project = projects.find((p) => chosen === projectToName(p, false));
             if (!project) {
                 return;
             }
