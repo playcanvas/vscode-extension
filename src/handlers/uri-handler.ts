@@ -47,7 +47,8 @@ class UriHandler implements vscode.UriHandler {
         }
 
         // parse uri: /{projectName} ({projectId})/{filePath}
-        const [projectName, projectId, filePath = ''] = groups.slice(1);
+        const [projectName, projectId, filePath = '/'] = groups.slice(1);
+        console.log(projectName, projectId, filePath);
 
         // fetch all user projects
         const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);
@@ -66,7 +67,7 @@ class UriHandler implements vscode.UriHandler {
         const folders = vscode.workspace.workspaceFolders ?? [];
         const folder = folders.find((f) => f.uri.toString() === folderUri.toString());
         if (folder) {
-            if (filePath) {
+            if (filePath !== '/') {
                 // open file
                 const openUri = vscode.Uri.joinPath(folderUri, filePath);
                 if (await fileExists(openUri)) {
