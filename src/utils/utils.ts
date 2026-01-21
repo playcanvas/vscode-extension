@@ -123,6 +123,8 @@ export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[], w
     return edits;
 };
 
-export const projectToName = (project: Project) => {
-    return `${project.name} (${project.id})`;
+export const projectToName = (project: Project, encode = true) => {
+    // encode to escape symbols except spaces
+    const name = encode ? encodeURIComponent(project.name).replace(/%20/g, ' ') : project.name;
+    return `${name} (${project.id})`;
 };

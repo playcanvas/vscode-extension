@@ -41,20 +41,22 @@ class UriHandler implements vscode.UriHandler {
         }
 
         // validate path
-        if (!/\/.+\s\(\d+\)(\/.*)?$/.test(uri.path)) {
+        const groups = /^\/(.+)\s\((\d+)\)(\/.*)?$/.exec(uri.path);
+        if (!groups) {
             return;
         }
 
         // parse uri: /{projectName} ({projectId})/{filePath}
-        const [_blank, projectName, ...pathParts] = uri.path.split('/');
-        const filePath = pathParts.join('/');
+        const [projectName, projectId, filePath = '/'] = groups.slice(1);
+        console.log(projectName, projectId, filePath);
 
         // fetch all user projects
         const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);
 
         // find matching project
-        const project = projects.find((p) => projectToName(p) === projectName);
+        const project = projects.find((p) => p.id === parseInt(projectId) && p.name === projectName);
         if (!project) {
+            this.error.set(() => new Error(`project ${projectName} not found`));
             return;
         }
 
@@ -65,7 +67,7 @@ class UriHandler implements vscode.UriHandler {
         const folders = vscode.workspace.workspaceFolders ?? [];
         const folder = folders.find((f) => f.uri.toString() === folderUri.toString());
         if (folder) {
-            if (filePath) {
+            if (filePath !== '/') {
                 // open file
                 const openUri = vscode.Uri.joinPath(folderUri, filePath);
                 if (await fileExists(openUri)) {
