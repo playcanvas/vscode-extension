@@ -41,13 +41,13 @@ class UriHandler implements vscode.UriHandler {
         }
 
         // validate path
-        const groups = /^\/(.+)\s\((\d+)\)(\/.+)/.exec(uri.path);
+        const groups = /^\/(.+)\s\((\d+)\)(\/.*)?$/.exec(uri.path);
         if (!groups) {
             return;
         }
 
         // parse uri: /{projectName} ({projectId})/{filePath}
-        const [projectName, projectId, filePath] = groups.slice(1);
+        const [projectName, projectId, filePath = ''] = groups.slice(1);
 
         // fetch all user projects
         const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);
