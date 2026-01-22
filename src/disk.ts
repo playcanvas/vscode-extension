@@ -687,13 +687,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (folderUri.scheme !== uri.scheme) {
                 return;
             }
-            // const key = `${uri}:change`;
-
-            // // check local echo
-            // if (this._echo.has(key)) {
-            //     this._echo.delete(key);
-            //     return;
-            // }
 
             // ignore check
             if (this._ignoring(uri)) {
