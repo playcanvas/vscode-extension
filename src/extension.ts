@@ -23,8 +23,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     // register log channel for cleanup
-    Log.channel.show(DEBUG);
     context.subscriptions.push(Log.channel);
+    if (DEBUG) {
+        Log.channel.show(true);
+    }
 
     // load config
     const config = vscode.workspace.getConfiguration(NAME);
