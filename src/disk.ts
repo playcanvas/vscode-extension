@@ -278,7 +278,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 if (document.getText().length === 0) {
                     // cancel debounced sync and write immediately
                     this._debouncer.cancel(`${uri}`);
-                    await vscode.workspace.fs.writeFile(uri, buffer.from(''));
+                    await vscode.workspace.fs.writeFile(uri, new Uint8Array());
 
                     // revert document to reload from disk (clears dirty indicator)
                     const active = vscode.window.activeTextEditor;
