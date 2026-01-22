@@ -763,27 +763,34 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._log(`moved ${oldPath} to ${newPath}`);
     }
 
-    save(path: string, content?: Uint8Array) {
+    write(path: string, content: Uint8Array) {
         // check if file is in memory
         const file = this._files.get(path);
         if (!file || file.type !== 'file') {
             return;
         }
 
-        // check if content is provided
-        if (content) {
-            // overwrite entire document content
-            // vscode -> shareDB
-            // FIXME: optimize to use ops instead of full replace
-            file.doc.submitOp([0, { d: file.doc.data.length }], {
-                source: ShareDb.SOURCE
-            });
-            file.doc.submitOp([0, buffer.toString(content)], {
-                source: ShareDb.SOURCE
-            });
+        // overwrite entire document content
+        // vscode -> shareDB
+        // FIXME: optimize to use ops instead of full replace
+        file.doc.submitOp([0, { d: file.doc.data.length }], {
+            source: ShareDb.SOURCE
+        });
+        file.doc.submitOp([0, buffer.toString(content)], {
+            source: ShareDb.SOURCE
+        });
 
-            // mark as dirty (ops submitted that aren't saved yet)
-            file.dirty = true;
+        // mark as dirty (ops submitted that aren't saved yet)
+        file.dirty = true;
+
+        this._log(`wrote file ${path}`);
+    }
+
+    save(path: string) {
+        // check if file is in memory
+        const file = this._files.get(path);
+        if (!file || file.type !== 'file') {
+            return;
         }
 
         // check if already saved (no pending changes)
@@ -794,7 +801,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // notify ShareDB to save the document
         this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
 
-        this._log(`wrote file ${path}`);
+        this._log(`saved file ${path}`);
     }
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
