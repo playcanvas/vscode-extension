@@ -159,7 +159,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         object[p] = {};
                     } else if (typeof object[p] !== 'object') {
                         // Cannot traverse into a primitive value - skip this op
-                        this._warn(`skipping op that traverses into non-object property: ${o.p.join('.')}`);
+                        this._log.warn(`skipping op that traverses into non-object property: ${o.p.join('.')}`);
                         skip = true;
                         break;
                     }
@@ -444,11 +444,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 case key === 'name' || key === 'path': {
                     // skip if types are invalid
                     if (key === 'name' && (typeof before !== 'string' || typeof after !== 'string')) {
-                        this._warn(`skipping invalid name update: before=${typeof before}, after=${typeof after}`);
+                        this._log.warn(`skipping invalid name update: before=${typeof before}, after=${typeof after}`);
                         break;
                     }
                     if (key === 'path' && (!Array.isArray(before) || !Array.isArray(after))) {
-                        this._warn(`skipping invalid path update: before=${typeof before}, after=${typeof after}`);
+                        this._log.warn(`skipping invalid path update: before=${typeof before}, after=${typeof after}`);
                         break;
                     }
                     const from = this._assetPath(uniqueId, { [key]: before });

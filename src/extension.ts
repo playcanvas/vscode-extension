@@ -66,6 +66,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
             return;
         }
 
+        // log to output channel
+        Log.channel.error(`[Extension] ${error.message}`);
+        if (error.stack) {
+            Log.channel.error(error.stack);
+        }
+
         // handle auth errors
         if (/access token/.test(error.message)) {
             await auth.reset(`Auth Error: ${error.message}`);
