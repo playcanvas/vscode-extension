@@ -25,11 +25,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // register log channel for cleanup
     Log.channel.show(DEBUG);
     context.subscriptions.push(Log.channel);
-    context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.showOutput`, () => {
-            Log.channel.show(true);
-        })
-    );
 
     // load config
     const config = vscode.workspace.getConfiguration(NAME);

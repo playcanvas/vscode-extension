@@ -57,10 +57,6 @@
             {
                 "command": "playcanvas.switchBranch",
                 "title": "PlayCanvas: Switch Branch"
-            },
-            {
-                "command": "playcanvas.showOutput",
-                "title": "PlayCanvas: Show Output"
             }
         ],
         "typescriptServerPlugins": [
