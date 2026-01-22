@@ -154,12 +154,21 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
             for (const o of op) {
                 let object = snapshot;
+                let skip = false;
                 for (let i = 0; i < o.p.length - 1; i++) {
                     const p = o.p[i];
-                    if (typeof object[p] !== 'object' || object[p] === null) {
+                    if (object[p] === undefined || object[p] === null) {
                         object[p] = {};
+                    } else if (typeof object[p] !== 'object') {
+                        // Cannot traverse into a primitive value - skip this op
+                        this._warn(`skipping op that traverses into non-object property: ${o.p.join('.')}`);
+                        skip = true;
+                        break;
                     }
                     object = object[p];
+                }
+                if (skip) {
+                    continue;
                 }
                 const key = o.p[o.p.length - 1];
                 if (o.oi !== undefined) {
@@ -435,6 +444,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             switch (true) {
                 // handle rename or move
                 case key === 'name' || key === 'path': {
+                    // skip if types are invalid
+                    if (key === 'name' && (typeof before !== 'string' || typeof after !== 'string')) {
+                        this._warn(`skipping invalid name update: before=${typeof before}, after=${typeof after}`);
+                        break;
+                    }
+                    if (key === 'path' && (!Array.isArray(before) || !Array.isArray(after))) {
+                        this._warn(`skipping invalid path update: before=${typeof before}, after=${typeof after}`);
+                        break;
+                    }
                     const from = this._assetPath(uniqueId, { [key]: before });
                     const to = this._assetPath(uniqueId, { [key]: after });
 
