@@ -1,6 +1,8 @@
 class Debouncer<T> {
     private _timeouts = new Map<string, NodeJS.Timeout>();
 
+    private _pending: Map<string, Promise<T>> = new Map<string, Promise<T>>();
+
     constructor(private readonly _delay: number) {}
 
     debounce(key: string, fn: () => Promise<T>): Promise<T> {

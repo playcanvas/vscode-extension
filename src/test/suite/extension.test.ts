@@ -898,6 +898,88 @@ suite('Extension Test Suite', () => {
         await assertResolves(saved, 'vscode.onDidSaveTextDocument');
     });
 
+    test('file save empty (remote -> local)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // get asset and its document content
+        const asset = await assetCreate({ name: 'save_empty_remote_local.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset, 'asset should be created');
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document, 'document should exist');
+
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // open document and show it in editor
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        // watch for file change (debounced sync will write empty content)
+        const diskSynced = watchFilePromise(folderUri, asset.name, 'change');
+
+        // clear all content to make document empty
+        const edit = new vscode.WorkspaceEdit();
+        edit.delete(uri, new vscode.Range(0, 0, tdoc.lineCount, 0));
+        await vscode.workspace.applyEdit(edit);
+
+        // verify document is now empty and dirty
+        assert.strictEqual(tdoc.getText(), '', 'document should be empty');
+        assert.strictEqual(tdoc.isDirty, true, 'document should be dirty before save');
+
+        // wait for debounced sync to write empty content to disk
+        await assertResolves(diskSynced, 'watcher.change');
+
+        // create promise that resolves when document becomes not dirty (revert completed)
+        const reverted = new Promise<void>((resolve) => {
+            if (!tdoc.isDirty) {
+                resolve();
+                return;
+            }
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && !e.document.isDirty) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+
+        // make remote save (this should trigger revert for empty files)
+        assert.ok(asset.file, 'asset.file should exist');
+        const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb asset document should exist');
+        const newHash = hash('');
+        doc.submitOp(
+            [
+                {
+                    p: ['file'],
+                    od: {
+                        filename: asset.file.filename,
+                        hash: asset.file.hash
+                    },
+                    oi: {
+                        filename: asset.file.filename,
+                        hash: newHash
+                    }
+                }
+            ],
+            { source: 'remote' }
+        );
+        asset.file.hash = newHash;
+        documents.set(asset.uniqueId, '');
+
+        // wait for revert to complete (document becomes not dirty)
+        await assertResolves(reverted, 'document.revert');
+
+        // verify document is no longer dirty (revert cleared it)
+        assert.strictEqual(tdoc.isDirty, false, 'document should not be dirty after remote save');
+
+        // verify file content on disk is empty
+        const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
+        assert.strictEqual(buffer.toString(content), '', 'file content should be empty');
+    });
+
     test('file delete (remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;

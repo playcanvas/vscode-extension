@@ -273,8 +273,28 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // for open files, save the document to clear VS Code's dirty indicator
             if (this._opened.has(uri.path)) {
                 const document = await vscode.workspace.openTextDocument(uri);
-                await document.save();
-                this._log.debug(`save.remote.open ${uri}`);
+
+                // "file on disk is newer" prompt shown when empty document is saved
+                if (document.getText().length === 0) {
+                    // cancel debounced sync and write immediately
+                    this._debouncer.cancel(`${uri}`);
+                    await vscode.workspace.fs.writeFile(uri, buffer.from(''));
+
+                    // revert document to reload from disk (clears dirty indicator)
+                    const active = vscode.window.activeTextEditor;
+                    await vscode.window.showTextDocument(document, { preserveFocus: true });
+                    await vscode.commands.executeCommand('workbench.action.files.revert');
+
+                    // restore active editor if different
+                    if (active && active.document.uri.toString() !== uri.toString()) {
+                        await vscode.window.showTextDocument(active.document, { preserveFocus: false });
+                    }
+
+                    this._log.debug(`save.remote.open.empty ${uri}`);
+                } else {
+                    await document.save();
+                    this._log.debug(`save.remote.open ${uri}`);
+                }
             } else {
                 this._log.debug(`save.remote.closed ${uri}`);
             }
