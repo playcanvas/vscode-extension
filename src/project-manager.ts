@@ -64,21 +64,19 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     error = signal<Error | undefined>(undefined);
 
     constructor({
-        debug,
         events,
         sharedb,
         messenger,
         relay,
         rest
     }: {
-        debug?: boolean;
         events: EventEmitter<EventMap>;
         sharedb: ShareDb;
         messenger: Messenger;
         relay: Relay;
         rest: Rest;
     }) {
-        super(debug);
+        super();
 
         this._events = events;
         this._sharedb = sharedb;
@@ -197,7 +195,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // check if file path already exists
         if (this._files.has(path)) {
-            this._warn(`skipping load of ${path} for asset ${uniqueId} as it already exists`);
+            this._log.warn(`skipping load of ${path} for asset ${uniqueId} as it already exists`);
             return;
         }
 
@@ -237,7 +235,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // emit file created event with ShareDB content for disk
         this._events.emit('asset:file:create', path, 'file', buffer.from(doc.data));
 
-        this._log(`added file ${path} (${dirty ? 'dirty' : 'clean'})`);
+        this._log.debug(`added file ${path} (${dirty ? 'dirty' : 'clean'})`);
     }
 
     private async _addFolder(uniqueId: number) {
@@ -245,7 +243,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // check if file path already exists
         if (this._files.has(path)) {
-            this._warn(`skipping load of ${path} for asset ${uniqueId} as it already exists`);
+            this._log.warn(`skipping load of ${path} for asset ${uniqueId} as it already exists`);
             return;
         }
 
@@ -259,13 +257,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // emit folder created event
         this._events.emit('asset:file:create', path, 'folder', new Uint8Array());
 
-        this._log(`added folder ${path}`);
+        this._log.debug(`added folder ${path}`);
     }
 
     private _watchSharedb() {
         const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
             if (state !== 'success') {
-                this._warn(`failed to save document ${uniqueId}: ${state}`);
+                this._log.warn(`failed to save document ${uniqueId}: ${state}`);
                 return;
             }
 
@@ -396,7 +394,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 if (file?.uniqueId === uniqueId) {
                     this._files.delete(path);
                 } else {
-                    this._warn(`skipping delete of ${path} for asset ${uniqueId} as it does not exist`);
+                    this._log.warn(`skipping delete of ${path} for asset ${uniqueId} as it does not exist`);
                 }
 
                 // emit a change event to update on disk
@@ -557,7 +555,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // check if file already exists
         if (this._files.get(path)?.type === type) {
-            this._warn(`skipping create of ${type} ${path} as it already exists`);
+            this._log.warn(`skipping create of ${type} ${path} as it already exists`);
             return;
         }
 
@@ -634,7 +632,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // check if file exists
         const file = this._files.get(path);
         if (!file || file.type !== type) {
-            this._warn(`skipping delete of ${path} as it does not exist`);
+            this._log.warn(`skipping delete of ${path} as it does not exist`);
             return;
         }
 
@@ -661,7 +659,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // wait for delete promise to resolve
         await delete_;
 
-        this._log(`deleted ${path}`);
+        this._log.debug(`deleted ${path}`);
     }
 
     async rename(oldPath: string, newPath: string) {
@@ -721,7 +719,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // wait for rename and file update to complete
             await Promise.all([renamed, updated]);
 
-            this._log(`renamed ${oldPath} to ${newPath}`);
+            this._log.debug(`renamed ${oldPath} to ${newPath}`);
             return;
         }
 
@@ -760,7 +758,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // wait for file update to complete
         await updated;
 
-        this._log(`moved ${oldPath} to ${newPath}`);
+        this._log.debug(`moved ${oldPath} to ${newPath}`);
     }
 
     write(path: string, content: Uint8Array) {
@@ -783,7 +781,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // mark as dirty (ops submitted that aren't saved yet)
         file.dirty = true;
 
-        this._log(`wrote file ${path}`);
+        this._log.debug(`wrote file ${path}`);
     }
 
     save(path: string) {
@@ -801,7 +799,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // notify ShareDB to save the document
         this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
 
-        this._log(`saved file ${path}`);
+        this._log.debug(`saved file ${path}`);
     }
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
@@ -929,7 +927,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._branchId = undefined;
         });
 
-        this._log(`project ${this._projectId} (branch ${this._branchId}) loaded`);
+        this._log.info(`project ${this._projectId} (branch ${this._branchId}) loaded`);
     }
 
     async unlink() {
@@ -941,7 +939,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         await super.unlink();
 
-        this._log(`project ${projectId} (branch ${branchId}) unloaded`);
+        this._log.info(`project ${projectId} (branch ${branchId}) unloaded`);
 
         return { projectId, branchId };
     }

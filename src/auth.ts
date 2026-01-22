@@ -2,7 +2,7 @@ import http from 'http';
 
 import * as vscode from 'vscode';
 
-import { API_URL, COOKIE_NAME, DEBUG, NAME, PUBLISHER, HOME_URL, LOGIN_URL, PORT, WEB } from './config';
+import { API_URL, COOKIE_NAME, NAME, PUBLISHER, HOME_URL, LOGIN_URL, PORT, WEB } from './config';
 import { Rest } from './connections/rest';
 import { tryCatch } from './utils/utils';
 
@@ -18,7 +18,6 @@ class Auth {
             return;
         }
         const rest = new Rest({
-            debug: DEBUG,
             url: API_URL,
             origin: HOME_URL,
             accessToken

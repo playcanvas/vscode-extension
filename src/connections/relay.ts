@@ -1,6 +1,7 @@
 import WebSocket, { type Data } from 'isomorphic-ws';
 
 import { WEB } from '../config';
+import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
@@ -11,7 +12,7 @@ type EventMap = {
 };
 
 class Relay extends EventEmitter<EventMap> {
-    private _debug: boolean;
+    private _log = new Log(this.constructor.name);
 
     private _active = new Deferred<WebSocket>();
 
@@ -29,23 +30,11 @@ class Relay extends EventEmitter<EventMap> {
 
     error = signal<Error | undefined>(undefined);
 
-    constructor({ debug = false, url, origin }: { debug?: boolean; url: string; origin: string }) {
+    constructor({ url, origin }: { url: string; origin: string }) {
         super();
-        this._debug = debug;
 
         this.url = url;
         this.origin = origin;
-    }
-
-    private _log(...args: unknown[]) {
-        if (!this._debug) {
-            return;
-        }
-        console.log(`[${this.constructor.name}]`, ...args);
-    }
-
-    private _warn(...args: unknown[]) {
-        console.warn(`[${this.constructor.name}]`, ...args);
     }
 
     private _connect(accessToken: string) {
@@ -69,7 +58,7 @@ class Relay extends EventEmitter<EventMap> {
             throw this.error.set(() => new Error(reason));
         }, 5000);
         socket.addEventListener('open', () => {
-            this._log('socket.open');
+            this._log.debug('socket.open');
             clearTimeout(timeout);
 
             this._onauth(socket);
@@ -77,12 +66,12 @@ class Relay extends EventEmitter<EventMap> {
 
         // error event
         socket.addEventListener('error', ({ error }: { error: Error }) => {
-            this._log('socket.error', error);
+            this._log.debug('socket.error', error);
         });
 
         // close event
         socket.addEventListener('close', ({ code, reason }: { code: number; reason: string }) => {
-            this._log('socket.close', code, reason.toString());
+            this._log.debug('socket.close', code, reason.toString());
 
             // reset connected
             this._active = new Deferred();
@@ -120,14 +109,14 @@ class Relay extends EventEmitter<EventMap> {
             try {
                 const { t, error, ...rest } = JSON.parse(raw.toString());
                 if (error) {
-                    this._warn('relay.error', error);
+                    this._log.warn('relay.error', error);
                     return;
                 }
 
-                this._log('socket.message', t, rest);
+                this._log.debug('socket.message', t, rest);
                 this.emit(t, rest);
             } catch (e) {
-                this._log('socket.message', e);
+                this._log.debug('socket.message', e);
             }
         });
 
@@ -135,13 +124,13 @@ class Relay extends EventEmitter<EventMap> {
         this._active.resolve(socket);
         this.connected.set(() => true);
 
-        this._log('socket.connected');
+        this._log.info('socket.connected');
     }
 
     join(name: string, projectId: number) {
         // check if already joined
         if (this.rooms.get(projectId)?.has(name)) {
-            this._log(`skipped joining room ${name} as already joined`);
+            this._log.debug(`skipped joining room ${name} as already joined`);
             return;
         }
 
@@ -154,7 +143,7 @@ class Relay extends EventEmitter<EventMap> {
                 id: projectId
             }
         }).then(() => {
-            this._log(`joined room ${name}`);
+            this._log.debug(`joined room ${name}`);
         });
 
         // track joined rooms
@@ -167,7 +156,7 @@ class Relay extends EventEmitter<EventMap> {
     leave(name: string, projectId: number) {
         // check if joined
         if (!this.rooms.get(projectId)?.has(name)) {
-            this._log(`skipped leaving room ${name} as not joined`);
+            this._log.debug(`skipped leaving room ${name} as not joined`);
             return;
         }
 
@@ -176,7 +165,7 @@ class Relay extends EventEmitter<EventMap> {
             t: 'room:leave',
             name: name
         }).then(() => {
-            this._log(`left room ${name}`);
+            this._log.debug(`left room ${name}`);
         });
 
         // track left rooms
@@ -190,7 +179,7 @@ class Relay extends EventEmitter<EventMap> {
             name: name,
             to: userId
         }).then(() => {
-            this._log(`sent message to room ${name}`, msg);
+            this._log.debug(`sent message to room ${name}`, msg);
         });
     }
 
@@ -208,7 +197,7 @@ class Relay extends EventEmitter<EventMap> {
         // close socket
         this._socket?.close();
 
-        this._log('disconnected');
+        this._log.info('disconnected');
     }
 }
 

@@ -79,8 +79,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     error = signal<Error | undefined>(undefined);
 
-    constructor({ debug = false, events }: { debug?: boolean; events: EventEmitter<EventMap> }) {
-        super(debug);
+    constructor({ events }: { events: EventEmitter<EventMap> }) {
+        super();
 
         this._events = events;
     }
@@ -111,7 +111,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _parseIgnoreText(text: string, folderUri: vscode.Uri) {
         if (!text) {
             this._ignoring = (_uri: vscode.Uri) => false;
-            this._log(`cleared ignore rules from empty ignore file`);
+            this._log.debug(`cleared ignore rules from empty ignore file`);
             return;
         }
 
@@ -131,7 +131,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             return ig.ignores(path);
         };
-        this._log(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
+        this._log.debug(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
     }
 
     private _sync(uri: vscode.Uri, content: Uint8Array) {
@@ -186,7 +186,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 }
             }
 
-            this._log(`${exists ? 'change' : 'create'}.remote ${type} ${uri}`);
+            this._log.debug(`${exists ? 'change' : 'create'}.remote ${type} ${uri}`);
         });
     }
 
@@ -203,7 +203,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (viewing) {
                 const document = await vscode.workspace.openTextDocument(uri);
                 const workspaceEdit = new vscode.WorkspaceEdit();
-                workspaceEdit.set(uri, sharedb2vscode(document, [op], this._warn.bind(this)));
+                workspaceEdit.set(uri, sharedb2vscode(document, [op], this._log.warn.bind(this._log)));
 
                 // apply edit with lock to prevent local change handler from firing
                 this._locks.add(`${uri}`);
@@ -214,7 +214,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // sync to disk (debounced)
             this._sync(uri, content);
 
-            this._log(`change.remote.${viewing ? 'open' : 'closed'} ${uri}`);
+            this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri}`);
         });
     }
 
@@ -237,7 +237,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 useTrash: false
             });
 
-            this._log(`delete.remote file ${uri}`);
+            this._log.debug(`delete.remote file ${uri}`);
         });
     }
 
@@ -260,7 +260,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 overwrite: false
             });
 
-            this._log(`rename.remote ${oldUri.path} -> ${newUri.path}`);
+            this._log.debug(`rename.remote ${oldUri.path} -> ${newUri.path}`);
         });
     }
 
@@ -274,9 +274,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (this._opened.has(uri.path)) {
                 const document = await vscode.workspace.openTextDocument(uri);
                 await document.save();
-                this._log(`save.remote.open ${uri}`);
+                this._log.debug(`save.remote.open ${uri}`);
             } else {
-                this._log(`save.remote.closed ${uri}`);
+                this._log.debug(`save.remote.closed ${uri}`);
             }
         });
     }
@@ -344,7 +344,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 await vscode.workspace.applyEdit(edit2);
                 this._locks.delete(`${open.uri}`);
 
-                this._log(`dirtify ${open.uri}`);
+                this._log.debug(`dirtify ${open.uri}`);
             });
         };
 
@@ -416,7 +416,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // mark as dirty if any ops received (any unsaved changes)
             file.dirty ||= !!opOptions.length;
 
-            this._log(`document.change ${document.uri.path}`);
+            this._log.debug(`document.change ${document.uri.path}`);
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;
@@ -526,7 +526,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                         // schedule promise
                         const chain = wait
-                            .then(() => fn().catch((error) => this._warn(`schedule error: ${error}`)))
+                            .then(() => fn().catch((error) => this._log.warn(`schedule error: ${error}`)))
                             .finally(() => {
                                 // cleanup
                                 deps.forEach((path) => {
@@ -558,16 +558,16 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     schedule([path1, path2], async () => {
                                         const type1 = await op1.type;
                                         if (!type1) {
-                                            this._warn(`skipping rename of ${op1.uri} as type not found`);
+                                            this._log.warn(`skipping rename of ${op1.uri} as type not found`);
                                             return;
                                         }
                                         const type2 = await op2.type;
                                         if (!type2) {
-                                            this._warn(`skipping rename of ${op2.uri} as type not found`);
+                                            this._log.warn(`skipping rename of ${op2.uri} as type not found`);
                                             return;
                                         }
 
-                                        this._log(`rename.local ${op2.uri} -> ${op1.uri}`);
+                                        this._log.debug(`rename.local ${op2.uri} -> ${op1.uri}`);
                                         return projectManager.rename(path2, path1);
                                     });
                                     i++;
@@ -583,11 +583,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     const type = await op.type;
                                     const content = await op.content;
                                     if (!type) {
-                                        this._warn(`skipping create of ${op.uri} as type not found`);
+                                        this._log.warn(`skipping create of ${op.uri} as type not found`);
                                         return;
                                     }
 
-                                    this._log(`create.local ${type} ${op.uri}`);
+                                    this._log.debug(`create.local ${type} ${op.uri}`);
                                     return projectManager.create(path, type, content);
                                 });
                                 break;
@@ -597,7 +597,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 schedule([path], async () => {
                                     const content = await op.content;
                                     if (!content) {
-                                        this._warn(`skipping change of ${op.uri} as content not found`);
+                                        this._log.warn(`skipping change of ${op.uri} as content not found`);
                                         return;
                                     }
 
@@ -624,7 +624,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         }
                                     }
 
-                                    this._log(`change.local ${op.uri}`);
+                                    this._log.debug(`change.local ${op.uri}`);
                                     projectManager.write(path, content);
                                     projectManager.save(path);
                                     return Promise.resolve();
@@ -636,11 +636,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 schedule([path], async () => {
                                     const type = await op.type;
                                     if (!type) {
-                                        this._warn(`skipping delete of ${op.uri} as type not found`);
+                                        this._log.warn(`skipping delete of ${op.uri} as type not found`);
                                         return;
                                     }
 
-                                    this._log(`delete.local ${type} ${op.uri}`);
+                                    this._log.debug(`delete.local ${type} ${op.uri}`);
                                     return projectManager.delete(path, type);
                                 });
                                 break;
@@ -736,7 +736,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(uri, folderUri);
             const file = projectManager.files.get(path);
             if (!file) {
-                this._warn(`skipping delete of ${path} as it is not in memory`);
+                this._log.warn(`skipping delete of ${path} as it is not in memory`);
                 return;
             }
 
@@ -851,7 +851,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // notify completion
         updatingDiskDone();
 
-        this._log(`linked to ${folderUri.toString()}`);
+        this._log.info(`linked to ${folderUri.toString()}`);
     }
 
     async unlink() {
@@ -864,7 +864,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         await Promise.all(this._cleanup.map((fn) => fn()));
         this._cleanup.length = 0;
 
-        this._log(`unlinked from ${folderUri.toString()}`);
+        this._log.info(`unlinked from ${folderUri.toString()}`);
 
         return { folderUri, projectManager };
     }

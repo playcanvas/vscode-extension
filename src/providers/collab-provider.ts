@@ -41,8 +41,8 @@ class CollabProvider
 
     error = signal<Error | undefined>(undefined);
 
-    constructor({ debug, relay, rest }: { debug?: boolean; relay: Relay; rest: Rest }) {
-        super(debug);
+    constructor({ relay, rest }: { relay: Relay; rest: Rest }) {
+        super();
 
         this._rest = rest;
 
@@ -159,7 +159,7 @@ class CollabProvider
             this._projectManager = undefined;
         });
 
-        this._log(`linked to ${folderUri.toString()}`);
+        this._log.info(`linked to ${folderUri.toString()}`);
 
         return Promise.resolve();
     }
@@ -173,7 +173,7 @@ class CollabProvider
 
         await super.unlink();
 
-        this._log(`unlinked from ${folderUri.toString()}`);
+        this._log.info(`unlinked from ${folderUri.toString()}`);
 
         return { folderUri, projectManager };
     }

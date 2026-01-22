@@ -4,6 +4,7 @@ import * as sharedb from 'sharedb/lib/client/index.js';
 import type { Socket } from 'sharedb/lib/sharedb.js';
 
 import { WEB } from '../config';
+import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
@@ -24,7 +25,7 @@ type EventMap = {
 class ShareDb extends EventEmitter<EventMap> {
     static readonly SOURCE = 'vscode';
 
-    private _debug: boolean;
+    private _log = new Log(this.constructor.name);
 
     private _active = new Deferred<[Connection, WebSocket]>();
 
@@ -44,19 +45,11 @@ class ShareDb extends EventEmitter<EventMap> {
 
     error = signal<Error | undefined>(undefined);
 
-    constructor({ debug = false, url, origin }: { debug?: boolean; url: string; origin: string }) {
+    constructor({ url, origin }: { url: string; origin: string }) {
         super();
-        this._debug = debug;
 
         this.url = url;
         this.origin = origin;
-    }
-
-    private _log(...args: unknown[]) {
-        if (!this._debug) {
-            return;
-        }
-        console.log(`[${this.constructor.name}]`, ...args);
     }
 
     private _connect(accessToken: string) {
@@ -71,7 +64,7 @@ class ShareDb extends EventEmitter<EventMap> {
 
         // send request for auth
         socket.addEventListener('open', () => {
-            this._log('socket.open');
+            this._log.debug('socket.open');
             socket.send(`auth${JSON.stringify({ accessToken })}`);
         });
 
@@ -87,7 +80,7 @@ class ShareDb extends EventEmitter<EventMap> {
                     socket.close(3000, reason);
                     throw this.error.set(() => new Error(reason));
                 }
-                this._log('socket.auth', json);
+                this._log.debug('socket.auth', json);
 
                 // authenticated
                 await this._onauth(socket);
@@ -97,13 +90,13 @@ class ShareDb extends EventEmitter<EventMap> {
 
         // error event
         socket.addEventListener('error', ({ error }: { error: Error }) => {
-            this._log('socket.error', error);
+            this._log.debug('socket.error', error);
         });
 
         // close event
         // ! use addEventListener as sharedb overrides onclose
         socket.addEventListener('close', ({ code, reason }: { code: number; reason: string }) => {
-            this._log('socket.close', code, reason.toString());
+            this._log.debug('socket.close', code, reason.toString());
 
             // reset connected
             this._active = new Deferred();
@@ -118,7 +111,7 @@ class ShareDb extends EventEmitter<EventMap> {
             // pause all docs
             for (const [key, doc] of this.subscriptions) {
                 doc.pause();
-                this._log('paused', key);
+                this._log.debug('paused', key);
             }
 
             // if not unauthorized error,try to reconnect
@@ -138,7 +131,7 @@ class ShareDb extends EventEmitter<EventMap> {
         } else {
             this._connection = new sharedb.Connection(socket as Socket) as Connection;
             this._connection.on('error', (err) => {
-                this._log(err);
+                this._log.debug(err);
             });
         }
 
@@ -156,7 +149,7 @@ class ShareDb extends EventEmitter<EventMap> {
             // intercept custom messages
             const str = msg.data.toString();
             if (/^(\w+):/.test(str)) {
-                this._log(str);
+                this._log.debug(str);
 
                 // handle doc:save
                 if (str.startsWith('doc:save:')) {
@@ -190,20 +183,20 @@ class ShareDb extends EventEmitter<EventMap> {
                 doc.subscribe();
             }
             doc.resume();
-            this._log('resumed', key);
+            this._log.debug('resumed', key);
         }
 
         // resolve active
         this._active.resolve([this._connection, socket]);
         this.connected.set(() => true);
 
-        this._log('socket.connected');
+        this._log.info('socket.connected');
     }
 
     async subscribe(type: string, key: string) {
         // check if already subscribed
         if (this.subscriptions.has(`${type}:${key}`)) {
-            this._log('skipped as already subscribed to', type, key);
+            this._log.debug('skipped as already subscribed to', type, key);
             return this.subscriptions.get(`${type}:${key}`);
         }
 
@@ -212,18 +205,18 @@ class ShareDb extends EventEmitter<EventMap> {
         return new Promise<sharedb.Doc | undefined>((resolve) => {
             const doc = connection.get(type, key);
             doc.on('load', () => {
-                this._log('doc.load', type, key);
+                this._log.debug('doc.load', type, key);
                 resolve(doc);
             });
             doc.on('error', (err) => {
-                this._log('doc.error', err);
+                this._log.debug('doc.error', err);
                 resolve(undefined);
             });
             doc.on('destroy', () => {
-                this._log('doc.destroy', type, key);
+                this._log.debug('doc.destroy', type, key);
             });
             doc.subscribe();
-            this._log('doc.subscribe', type, key);
+            this._log.debug('doc.subscribe', type, key);
 
             // track subscription
             this.subscriptions.set(`${type}:${key}`, doc);
@@ -244,7 +237,7 @@ class ShareDb extends EventEmitter<EventMap> {
         // check if subscribed
         const doc = this.subscriptions.get(`${type}:${key}`);
         if (!doc) {
-            this._log('skipped as not subscribed to', type, key);
+            this._log.debug('skipped as not subscribed to', type, key);
             return;
         }
 
@@ -289,7 +282,7 @@ class ShareDb extends EventEmitter<EventMap> {
         // close socket
         this._socket?.close();
 
-        this._log('disconnected');
+        this._log.info('disconnected');
     }
 }
 
