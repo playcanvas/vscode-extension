@@ -282,10 +282,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                     // revert document to reload from disk (clears dirty indicator)
                     const active = vscode.window.activeTextEditor;
-                    await vscode.window.showTextDocument(document, { preserveFocus: true });
+                    await vscode.window.showTextDocument(document, { preserveFocus: false });
                     await vscode.commands.executeCommand('workbench.action.files.revert');
 
-                    // restore active editor if different
+                    // restore previous active editor if different
                     if (active && active.document.uri.toString() !== uri.toString()) {
                         await vscode.window.showTextDocument(active.document, { preserveFocus: false });
                     }
