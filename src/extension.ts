@@ -1,13 +1,14 @@
 import * as vscode from 'vscode';
 
 import { Auth } from './auth';
-import { API_URL, DEBUG, ENV, NAME, HOME_URL, MESSENGER_URL, REALTIME_URL, RELAY_URL, ROOT_FOLDER } from './config';
+import { API_URL, ENV, NAME, HOME_URL, MESSENGER_URL, REALTIME_URL, RELAY_URL, ROOT_FOLDER, DEBUG } from './config';
 import { Messenger } from './connections/messenger';
 import { Relay } from './connections/relay';
 import { Rest } from './connections/rest';
 import { ShareDb } from './connections/sharedb';
 import { Disk } from './disk';
 import { UriHandler } from './handlers/uri-handler';
+import { Log } from './log';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
@@ -20,6 +21,12 @@ import { projectToName, uriStartsWith } from './utils/utils';
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
     await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // register log channel for cleanup
+    context.subscriptions.push(Log.channel);
+    if (DEBUG) {
+        Log.channel.show(true);
+    }
 
     // load config
     const config = vscode.workspace.getConfiguration(NAME);
@@ -59,6 +66,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
             return;
         }
 
+        // log to output channel
+        Log.channel.error(`[Extension] ${error.message}`);
+        if (error.stack) {
+            Log.channel.error(error.stack);
+        }
+
         // handle auth errors
         if (/access token/.test(error.message)) {
             await auth.reset(`Auth Error: ${error.message}`);
@@ -77,7 +90,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // rest client
     const rest = new Rest({
-        debug: DEBUG,
         url: API_URL,
         origin: HOME_URL,
         accessToken
@@ -85,7 +97,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // realtime connection
     const sharedb = new ShareDb({
-        debug: DEBUG,
         url: REALTIME_URL,
         origin: HOME_URL
     });
@@ -93,14 +104,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // messenger
     const messenger = new Messenger({
-        debug: DEBUG,
         url: MESSENGER_URL,
         origin: HOME_URL
     });
 
     // relay
     const relay = new Relay({
-        debug: DEBUG,
         url: RELAY_URL,
         origin: HOME_URL
     });
@@ -126,7 +135,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
     >();
 
     const disk = new Disk({
-        debug: DEBUG,
         events
     });
     effect(() => handleError(disk.error.get()));
@@ -155,7 +163,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // collab provider
     const collabProvider = new CollabProvider({
-        debug: DEBUG,
         relay,
         rest
     });
@@ -450,7 +457,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // load project
         const projectManager = new ProjectManager({
-            debug: DEBUG,
             events,
             sharedb,
             messenger,

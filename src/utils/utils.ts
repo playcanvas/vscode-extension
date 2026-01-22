@@ -128,3 +128,20 @@ export const projectToName = (project: Project, encode = true) => {
     const name = encode ? encodeURIComponent(project.name).replace(/%20/g, ' ') : project.name;
     return `${name} (${project.id})`;
 };
+
+export const summarize = (data: unknown): string => {
+    if (data instanceof ArrayBuffer) {
+        return `[Buffer(${data.byteLength})]`;
+    }
+    if (Array.isArray(data)) {
+        return `[Array(${data.length})]`;
+    }
+    if (data && typeof data === 'object') {
+        const keys = Object.keys(data);
+        if (keys.length > 5) {
+            return `{${keys.slice(0, 5).join(', ')}, ... +${keys.length - 5} more}`;
+        }
+        return `{${keys.join(', ')}}`;
+    }
+    return String(data);
+};

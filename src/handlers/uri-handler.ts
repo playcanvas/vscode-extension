@@ -2,11 +2,14 @@ import * as vscode from 'vscode';
 
 import { NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
+import { Log } from '../log';
 import { signal } from '../utils/signal';
 import { fileExists, projectToName, guard } from '../utils/utils';
 
 class UriHandler implements vscode.UriHandler {
     static OPEN_FILE_KEY = `${NAME}.openFile`;
+
+    private _log = new Log(this.constructor.name);
 
     private _context: vscode.ExtensionContext;
 
@@ -48,7 +51,7 @@ class UriHandler implements vscode.UriHandler {
 
         // parse uri: /{projectName} ({projectId})/{filePath}
         const [projectName, projectId, filePath = '/'] = groups.slice(1);
-        console.log(projectName, projectId, filePath);
+        this._log.debug(projectName, projectId, filePath);
 
         // fetch all user projects
         const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);

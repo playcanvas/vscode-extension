@@ -1,6 +1,7 @@
 import WebSocket, { type Data } from 'isomorphic-ws';
 
 import { WEB } from '../config';
+import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
@@ -66,7 +67,7 @@ type EventMap = {
 };
 
 class Messenger extends EventEmitter<EventMap> {
-    private _debug: boolean;
+    private _log = new Log(this.constructor.name);
 
     private _active = new Deferred<WebSocket>();
 
@@ -82,19 +83,11 @@ class Messenger extends EventEmitter<EventMap> {
 
     connected = signal<boolean>(false);
 
-    constructor({ debug = false, url, origin }: { debug?: boolean; url: string; origin: string }) {
+    constructor({ url, origin }: { url: string; origin: string }) {
         super();
-        this._debug = debug;
 
         this.url = url;
         this.origin = origin;
-    }
-
-    private _log(...args: unknown[]) {
-        if (!this._debug) {
-            return;
-        }
-        console.log(`[${this.constructor.name}]`, ...args);
     }
 
     private _connect(accessToken: string) {
@@ -109,7 +102,7 @@ class Messenger extends EventEmitter<EventMap> {
 
         // send request for auth
         socket.addEventListener('open', () => {
-            this._log('socket.open');
+            this._log.debug('socket.open');
 
             socket.send(
                 JSON.stringify({
@@ -131,19 +124,19 @@ class Messenger extends EventEmitter<EventMap> {
                     await this._onauth(socket);
                 }
             } catch (e) {
-                this._log('messenger.message', e);
+                this._log.debug('messenger.message', e);
             }
         };
         socket.addEventListener('message', onmessage);
 
         // error event
         socket.addEventListener('error', ({ error }: { error: Error }) => {
-            this._log('socket.error', error);
+            this._log.debug('socket.error', error);
         });
 
         // close event
         socket.addEventListener('close', ({ code, reason }: { code: number; reason: string }) => {
-            this._log('socket.close', code, reason.toString());
+            this._log.debug('socket.close', code, reason.toString());
 
             // reset connected
             this._active = new Deferred();
@@ -182,10 +175,10 @@ class Messenger extends EventEmitter<EventMap> {
             }
             try {
                 const { name, ...rest } = JSON.parse(raw.toString());
-                this._log('socket.message', name, rest);
+                this._log.debug('socket.message', name, rest);
                 this.emit(name, rest);
             } catch (e) {
-                this._log('socket.message', e);
+                this._log.debug('socket.message', e);
             }
         });
 
@@ -193,13 +186,13 @@ class Messenger extends EventEmitter<EventMap> {
         this._active.resolve(socket);
         this.connected.set(() => true);
 
-        this._log('socket.connected');
+        this._log.info('socket.connected');
     }
 
     watch(projectId: number) {
         // check if already watching
         if (this.watchers.has(projectId)) {
-            this._log(`skipped as already watching project ${projectId}`);
+            this._log.debug(`skipped as already watching project ${projectId}`);
             return;
         }
 
@@ -210,7 +203,7 @@ class Messenger extends EventEmitter<EventMap> {
             env: ['*'],
             data: { id: projectId }
         }).then(() => {
-            this._log(`watching project ${projectId}`);
+            this._log.info(`watching project ${projectId}`);
         });
 
         // track watchers
@@ -220,7 +213,7 @@ class Messenger extends EventEmitter<EventMap> {
     unwatch(projectId: number) {
         // check if watching
         if (!this.watchers.has(projectId)) {
-            this._log(`skipped unwatching project ${projectId} as not watching`);
+            this._log.debug(`skipped unwatching project ${projectId} as not watching`);
             return;
         }
 
@@ -231,7 +224,7 @@ class Messenger extends EventEmitter<EventMap> {
             env: ['*'],
             data: { id: projectId }
         }).then(() => {
-            this._log(`unwatched project ${projectId}`);
+            this._log.info(`unwatched project ${projectId}`);
         });
 
         // remove from watchers
@@ -252,7 +245,7 @@ class Messenger extends EventEmitter<EventMap> {
         // close socket
         this._socket?.close();
 
-        this._log('disconnected');
+        this._log.info('disconnected');
     }
 }
 

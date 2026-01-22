@@ -1,22 +1,9 @@
+import { Log } from '../log';
+
 abstract class Linker<T> {
-    private _debug: boolean;
+    protected _log = new Log(this.constructor.name);
 
     protected _cleanup: (() => Promise<void>)[] = [];
-
-    constructor(debug = false) {
-        this._debug = debug;
-    }
-
-    protected _log(...args: unknown[]) {
-        if (!this._debug) {
-            return;
-        }
-        console.log(`[${this.constructor.name}]`, ...args);
-    }
-
-    protected _warn(...args: unknown[]) {
-        console.warn(`[${this.constructor.name}]`, ...args);
-    }
 
     abstract link(params: T): Promise<void>;
 

@@ -1,7 +1,9 @@
+import { Log } from '../log';
 import type { Asset, Branch, Project, User } from '../typings/models';
+import { summarize } from '../utils/utils';
 
 class Rest {
-    private _debug: boolean;
+    private _log = new Log(this.constructor.name);
 
     url: string;
 
@@ -9,29 +11,10 @@ class Rest {
 
     accessToken: string;
 
-    constructor({
-        debug = false,
-        url,
-        origin,
-        accessToken
-    }: {
-        debug?: boolean;
-        url: string;
-        origin: string;
-        accessToken: string;
-    }) {
-        this._debug = debug;
-
+    constructor({ url, origin, accessToken }: { url: string; origin: string; accessToken: string }) {
         this.url = url;
         this.origin = origin;
         this.accessToken = accessToken;
-    }
-
-    private _log(...args: unknown[]) {
-        if (!this._debug) {
-            return;
-        }
-        console.log(`[${this.constructor.name}]`, ...args);
     }
 
     private async _request<T>(
@@ -58,12 +41,12 @@ class Rest {
         switch (type) {
             case 'buffer': {
                 const buf = await res.arrayBuffer();
-                this._log(res.status, method, path, buf);
+                this._log.debug(res.status, method, path, summarize(buf));
                 return buf as T;
             }
             case 'json': {
                 const json = await res.json();
-                this._log(res.status, method, path, json);
+                this._log.debug(res.status, method, path, summarize(json));
                 return json as T;
             }
         }
