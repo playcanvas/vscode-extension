@@ -499,11 +499,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
             })
         );
 
-        // open file if specified
-        const openFile = await uriHandler.openFile(folderUri);
-        if (openFile) {
-            await uriHandler.showFile(folderUri, openFile);
-        }
+        // handle open file if specified
+        await uriHandler.openFile(folderUri);
 
         // store in cache
         cache.set(project.id, { branchId, projectManager });

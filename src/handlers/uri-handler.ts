@@ -44,6 +44,20 @@ class UriHandler implements vscode.UriHandler {
         this._rest = rest;
     }
 
+    protected async _openDocument(folderUri: vscode.Uri, open: OpenFile) {
+        const uri = vscode.Uri.joinPath(folderUri, open.filePath);
+        if (!(await fileExists(uri))) {
+            this._log.warn(`file does not exist: ${uri.toString()}`);
+            return;
+        }
+        const options: vscode.TextDocumentShowOptions = {};
+        if (open.line !== undefined && open.col !== undefined) {
+            options.selection = new vscode.Range(open.line, open.col, open.line, open.col);
+        }
+        const openDoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(openDoc, options);
+    }
+
     async handleUri(uri: vscode.Uri) {
         if (uri.authority !== `${PUBLISHER}.${NAME}`) {
             return;
@@ -90,8 +104,8 @@ class UriHandler implements vscode.UriHandler {
         const folder = folders.find((f) => f.uri.toString() === folderUri.toString());
         if (folder) {
             if (filePath !== '/') {
-                // open file if it exists
-                await this.showFile(folderUri, { filePath, line, col });
+                // open text document
+                await this._openDocument(folderUri, { filePath, line, col });
             }
             return;
         }
@@ -109,9 +123,9 @@ class UriHandler implements vscode.UriHandler {
         await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
     }
 
-    async openFile(folderUri: vscode.Uri): Promise<OpenFile | undefined> {
+    async openFile(folderUri: vscode.Uri) {
         // retrieve and clear stored open file (always consume)
-        const openFile = this._context.globalState.get<
+        const open = this._context.globalState.get<
             OpenFile & {
                 folderUriStr: string;
             }
@@ -119,33 +133,17 @@ class UriHandler implements vscode.UriHandler {
         await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, undefined);
 
         // check if valid
-        if (!openFile) {
-            return;
-        }
-        if (openFile.folderUriStr !== folderUri.toString()) {
+        if (!open) {
             return;
         }
 
-        return {
-            filePath: openFile.filePath,
-            line: openFile.line,
-            col: openFile.col
-        };
-    }
-
-    async showFile(folderUri: vscode.Uri, openFile: OpenFile) {
-        const openUri = vscode.Uri.joinPath(folderUri, openFile.filePath);
-        if (!(await fileExists(openUri))) {
-            this._log.warn(`file does not exist: ${openUri.toString()}`);
+        // check if file is for the current project
+        if (open.folderUriStr !== folderUri.toString()) {
             return;
         }
 
-        const options: vscode.TextDocumentShowOptions = {};
-        if (openFile.line !== undefined && openFile.col !== undefined) {
-            options.selection = new vscode.Range(openFile.line, openFile.col, openFile.line, openFile.col);
-        }
-        const openDoc = await vscode.workspace.openTextDocument(openUri);
-        await vscode.window.showTextDocument(openDoc, options);
+        // open text document
+        await this._openDocument(folderUri, open);
     }
 }
 
