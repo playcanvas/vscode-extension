@@ -6,6 +6,12 @@ import { Log } from '../log';
 import { signal } from '../utils/signal';
 import { fileExists, projectToName, guard } from '../utils/utils';
 
+type OpenFile = {
+    filePath: string;
+    line: number | undefined;
+    col: number | undefined;
+};
+
 class UriHandler implements vscode.UriHandler {
     static OPEN_FILE_KEY = `${NAME}.openFile`;
 
@@ -49,9 +55,22 @@ class UriHandler implements vscode.UriHandler {
             return;
         }
 
+        // parse line and column from query params
+        const params = new URLSearchParams(uri.query);
+        const l = params.get('line') || '';
+        const c = params.get('col') || '';
+        let line: number | undefined;
+        let col: number | undefined;
+        if (/^\d+$/.test(l)) {
+            line = Math.max(parseInt(l) - 1, 0);
+        }
+        if (/^\d+$/.test(c)) {
+            col = Math.max(parseInt(c) - 1, 0);
+        }
+
         // parse uri: /{projectName} ({projectId})/{filePath}
         const [projectName, projectId, filePath = '/'] = groups.slice(1);
-        this._log.debug(projectName, projectId, filePath);
+        this._log.debug(projectName, projectId, filePath, line, col);
 
         // fetch all user projects
         const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);
@@ -71,11 +90,17 @@ class UriHandler implements vscode.UriHandler {
         const folder = folders.find((f) => f.uri.toString() === folderUri.toString());
         if (folder) {
             if (filePath !== '/') {
-                // open file
+                // open file if it exists
                 const openUri = vscode.Uri.joinPath(folderUri, filePath);
                 if (await fileExists(openUri)) {
+                    const options: vscode.TextDocumentShowOptions = {};
+                    if (line !== undefined && col !== undefined) {
+                        options.selection = new vscode.Range(line, col, line, col);
+                    }
                     const openDoc = await vscode.workspace.openTextDocument(openUri);
-                    await vscode.window.showTextDocument(openDoc);
+                    await vscode.window.showTextDocument(openDoc, options);
+                } else {
+                    this._log.warn(`file does not exist: ${openUri.toString()}`);
                 }
             }
             return;
@@ -84,7 +109,9 @@ class UriHandler implements vscode.UriHandler {
         // save full path to global storage for later retrieval
         await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, {
             folderUriStr: folderUri.toString(),
-            filePath
+            filePath,
+            line,
+            col
         });
 
         // open project folder
@@ -92,12 +119,13 @@ class UriHandler implements vscode.UriHandler {
         await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
     }
 
-    async getOpenFilePath(folderUri: vscode.Uri): Promise<string | undefined> {
+    async openFile(folderUri: vscode.Uri): Promise<OpenFile | undefined> {
         // retrieve and clear stored open file (always consume)
-        const openFile = this._context.globalState.get<{
-            folderUriStr: string;
-            filePath: string;
-        }>(UriHandler.OPEN_FILE_KEY);
+        const openFile = this._context.globalState.get<
+            OpenFile & {
+                folderUriStr: string;
+            }
+        >(UriHandler.OPEN_FILE_KEY);
         await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, undefined);
 
         // check if valid
@@ -108,8 +136,12 @@ class UriHandler implements vscode.UriHandler {
             return;
         }
 
-        return openFile.filePath;
+        return {
+            filePath: openFile.filePath,
+            line: openFile.line,
+            col: openFile.col
+        };
     }
 }
 
-export { UriHandler };
+export { type OpenFile, UriHandler };

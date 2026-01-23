@@ -8,7 +8,11 @@ import { assets, user } from './models';
 import type { MockRest } from './rest';
 
 class MockUriHandler extends UriHandler {
-    openFilePath: string | undefined = assets.get(1)?.name;
+    filePath: string | undefined = assets.get(1)?.name;
+
+    line: number | undefined = undefined;
+
+    col: number | undefined = undefined;
 
     handleUri: sinon.SinonSpy<[vscode.Uri], Promise<void>>;
 
@@ -23,10 +27,22 @@ class MockUriHandler extends UriHandler {
         this.handleUri = sandbox.spy(super.handleUri.bind(this));
     }
 
-    getOpenFilePath() {
-        const openFilePath = this.openFilePath;
-        this.openFilePath = undefined;
-        return Promise.resolve(openFilePath);
+    openFile() {
+        const filePath = this.filePath;
+        this.filePath = undefined;
+        const line = this.line;
+        this.line = undefined;
+        const col = this.col;
+        this.col = undefined;
+        return Promise.resolve(
+            filePath
+                ? {
+                      filePath,
+                      line,
+                      col
+                  }
+                : undefined
+        );
     }
 }
 

@@ -2,6 +2,7 @@ import ignore from 'ignore';
 import * as vscode from 'vscode';
 
 import { NAME } from './config';
+import type { OpenFile } from './handlers/uri-handler';
 import { simpleNotification } from './notification';
 import type { ProjectManager } from './project-manager';
 import type { EventMap } from './typings/event-map';
@@ -778,11 +779,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     async link({
         folderUri,
         projectManager,
-        openFilePath
+        openFile
     }: {
         folderUri: vscode.Uri;
         projectManager: ProjectManager;
-        openFilePath?: string;
+        openFile?: OpenFile;
     }) {
         if (this._folderUri || this._projectManager) {
             throw this.error.set(() => new Error('manager already linked'));
@@ -836,11 +837,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         }
 
         // open file if specified
-        if (openFilePath) {
-            const openUri = vscode.Uri.joinPath(folderUri, openFilePath);
+        if (openFile) {
+            const openUri = vscode.Uri.joinPath(folderUri, openFile.filePath);
             if (await fileExists(openUri)) {
+                const options: vscode.TextDocumentShowOptions = {};
+                if (openFile.line !== undefined && openFile.col !== undefined) {
+                    options.selection = new vscode.Range(openFile.line, openFile.col, openFile.line, openFile.col);
+                }
                 const openDoc = await vscode.workspace.openTextDocument(openUri);
-                await vscode.window.showTextDocument(openDoc);
+                await vscode.window.showTextDocument(openDoc, options);
+            } else {
+                this._log.warn(`file does not exist: ${openUri.toString()}`);
             }
         }
 

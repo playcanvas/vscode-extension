@@ -480,7 +480,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         await disk.link({
             folderUri,
             projectManager,
-            openFilePath: await uriHandler.getOpenFilePath(folderUri)
+            openFile: await uriHandler.openFile(folderUri)
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
