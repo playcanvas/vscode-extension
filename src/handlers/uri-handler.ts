@@ -10,10 +10,13 @@ type OpenFile = {
     filePath: string;
     line: number | undefined;
     col: number | undefined;
+    error: boolean;
 };
 
 class UriHandler implements vscode.UriHandler {
     static OPEN_FILE_KEY = `${NAME}.openFile`;
+
+    static ERROR_COLOR = 'rgba(244, 67, 54, 0.2)';
 
     private _log = new Log(this.constructor.name);
 
@@ -24,6 +27,13 @@ class UriHandler implements vscode.UriHandler {
     private _userId: number;
 
     private _rest: Rest;
+
+    private _errorDecoration = vscode.window.createTextEditorDecorationType({
+        backgroundColor: UriHandler.ERROR_COLOR,
+        isWholeLine: true,
+        overviewRulerColor: UriHandler.ERROR_COLOR,
+        overviewRulerLane: vscode.OverviewRulerLane.Full
+    });
 
     error = signal<Error | undefined>(undefined);
 
@@ -42,20 +52,35 @@ class UriHandler implements vscode.UriHandler {
         this._rootUri = rootUri;
         this._userId = userId;
         this._rest = rest;
+
+        this._context.subscriptions.push(this._errorDecoration);
     }
 
     protected async _openDocument(folderUri: vscode.Uri, open: OpenFile) {
-        const uri = vscode.Uri.joinPath(folderUri, open.filePath);
+        const { filePath, line, col, error } = open;
+        const uri = vscode.Uri.joinPath(folderUri, filePath);
+
+        // check if file exists
         if (!(await fileExists(uri))) {
             this._log.warn(`file does not exist: ${uri.toString()}`);
             return;
         }
-        const options: vscode.TextDocumentShowOptions = {};
-        if (open.line !== undefined && open.col !== undefined) {
-            options.selection = new vscode.Range(open.line, open.col, open.line, open.col);
-        }
+
+        // open text document
         const openDoc = await vscode.workspace.openTextDocument(uri);
-        await vscode.window.showTextDocument(openDoc, options);
+        const options: vscode.TextDocumentShowOptions = {};
+        const selection = line !== undefined && col !== undefined ? new vscode.Range(line, col, line, col) : undefined;
+        if (selection) {
+            options.selection = selection;
+        }
+
+        // show text document
+        const editor = await vscode.window.showTextDocument(openDoc, options);
+
+        // set error decoration
+        if (error && selection) {
+            editor.setDecorations(this._errorDecoration, [selection]);
+        }
     }
 
     async handleUri(uri: vscode.Uri) {
@@ -73,8 +98,10 @@ class UriHandler implements vscode.UriHandler {
         const params = new URLSearchParams(uri.query);
         const l = params.get('line') || '';
         const c = params.get('col') || '';
+        const e = params.get('error') || '';
         let line: number | undefined;
         let col: number | undefined;
+        const error = e === 'true';
         if (/^\d+$/.test(l)) {
             line = Math.max(parseInt(l) - 1, 0);
         }
@@ -105,7 +132,7 @@ class UriHandler implements vscode.UriHandler {
         if (folder) {
             if (filePath !== '/') {
                 // open text document
-                await this._openDocument(folderUri, { filePath, line, col });
+                await this._openDocument(folderUri, { filePath, line, col, error });
             }
             return;
         }
@@ -115,7 +142,8 @@ class UriHandler implements vscode.UriHandler {
             folderUriStr: folderUri.toString(),
             filePath,
             line,
-            col
+            col,
+            error
         });
 
         // open project folder

@@ -10,10 +10,6 @@ import type { MockRest } from './rest';
 class MockUriHandler extends UriHandler {
     filePath: string | undefined = assets.get(1)?.name;
 
-    line: number | undefined = undefined;
-
-    col: number | undefined = undefined;
-
     handleUri: sinon.SinonSpy<[vscode.Uri], Promise<void>>;
 
     constructor(sandbox: sinon.SinonSandbox, rest: MockRest) {
@@ -30,16 +26,12 @@ class MockUriHandler extends UriHandler {
     async openFile(folderUri: vscode.Uri) {
         const filePath = this.filePath;
         this.filePath = undefined;
-        const line = this.line;
-        this.line = undefined;
-        const col = this.col;
-        this.col = undefined;
 
         if (!filePath) {
             return;
         }
 
-        await super._openDocument(folderUri, { filePath, line, col });
+        await super._openDocument(folderUri, { filePath, line: 1, col: 1, error: true });
     }
 }
 
