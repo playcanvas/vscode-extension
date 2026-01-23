@@ -14,7 +14,7 @@ class MockUriHandler extends UriHandler {
 
     constructor(sandbox: sinon.SinonSandbox, rest: MockRest) {
         super({
-            context: {} as vscode.ExtensionContext,
+            context: { subscriptions: [] } as Partial<vscode.ExtensionContext> as vscode.ExtensionContext,
             rootUri: vscode.Uri.parse(`${ROOT_FOLDER}/${ENV}`),
             userId: user.id,
             rest
