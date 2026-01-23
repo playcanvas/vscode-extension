@@ -16,7 +16,7 @@ import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect } from './utils/signal';
-import { fileExists, projectToName, uriStartsWith } from './utils/utils';
+import { projectToName, uriStartsWith } from './utils/utils';
 
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
@@ -502,17 +502,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // open file if specified
         const openFile = await uriHandler.openFile(folderUri);
         if (openFile) {
-            const openUri = vscode.Uri.joinPath(folderUri, openFile.filePath);
-            if (await fileExists(openUri)) {
-                const options: vscode.TextDocumentShowOptions = {};
-                if (openFile.line !== undefined && openFile.col !== undefined) {
-                    options.selection = new vscode.Range(openFile.line, openFile.col, openFile.line, openFile.col);
-                }
-                const openDoc = await vscode.workspace.openTextDocument(openUri);
-                await vscode.window.showTextDocument(openDoc, options);
-            } else {
-                log.warn(`file does not exist: ${openUri.toString()}`);
-            }
+            await uriHandler.showFile(folderUri, openFile);
         }
 
         // store in cache

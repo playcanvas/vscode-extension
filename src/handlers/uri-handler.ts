@@ -91,17 +91,7 @@ class UriHandler implements vscode.UriHandler {
         if (folder) {
             if (filePath !== '/') {
                 // open file if it exists
-                const openUri = vscode.Uri.joinPath(folderUri, filePath);
-                if (await fileExists(openUri)) {
-                    const options: vscode.TextDocumentShowOptions = {};
-                    if (line !== undefined && col !== undefined) {
-                        options.selection = new vscode.Range(line, col, line, col);
-                    }
-                    const openDoc = await vscode.workspace.openTextDocument(openUri);
-                    await vscode.window.showTextDocument(openDoc, options);
-                } else {
-                    this._log.warn(`file does not exist: ${openUri.toString()}`);
-                }
+                await this.showFile(folderUri, { filePath, line, col });
             }
             return;
         }
@@ -141,6 +131,21 @@ class UriHandler implements vscode.UriHandler {
             line: openFile.line,
             col: openFile.col
         };
+    }
+
+    async showFile(folderUri: vscode.Uri, openFile: OpenFile) {
+        const openUri = vscode.Uri.joinPath(folderUri, openFile.filePath);
+        if (!(await fileExists(openUri))) {
+            this._log.warn(`file does not exist: ${openUri.toString()}`);
+            return;
+        }
+
+        const options: vscode.TextDocumentShowOptions = {};
+        if (openFile.line !== undefined && openFile.col !== undefined) {
+            options.selection = new vscode.Range(openFile.line, openFile.col, openFile.line, openFile.col);
+        }
+        const openDoc = await vscode.workspace.openTextDocument(openUri);
+        await vscode.window.showTextDocument(openDoc, options);
     }
 }
 
