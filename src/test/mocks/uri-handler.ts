@@ -8,13 +8,13 @@ import { assets, user } from './models';
 import type { MockRest } from './rest';
 
 class MockUriHandler extends UriHandler {
-    openFilePath: string | undefined = assets.get(1)?.name;
+    filePath: string | undefined = assets.get(1)?.name;
 
     handleUri: sinon.SinonSpy<[vscode.Uri], Promise<void>>;
 
     constructor(sandbox: sinon.SinonSandbox, rest: MockRest) {
         super({
-            context: {} as vscode.ExtensionContext,
+            context: { subscriptions: [] } as Partial<vscode.ExtensionContext> as vscode.ExtensionContext,
             rootUri: vscode.Uri.parse(`${ROOT_FOLDER}/${ENV}`),
             userId: user.id,
             rest
@@ -23,10 +23,15 @@ class MockUriHandler extends UriHandler {
         this.handleUri = sandbox.spy(super.handleUri.bind(this));
     }
 
-    getOpenFilePath() {
-        const openFilePath = this.openFilePath;
-        this.openFilePath = undefined;
-        return Promise.resolve(openFilePath);
+    async openFile(folderUri: vscode.Uri) {
+        const filePath = this.filePath;
+        this.filePath = undefined;
+
+        if (!filePath) {
+            return;
+        }
+
+        await super._openDocument(folderUri, { filePath, line: 1, col: 1, error: true });
     }
 }
 

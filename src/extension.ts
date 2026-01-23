@@ -27,6 +27,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     if (DEBUG) {
         Log.channel.show(true);
     }
+    const log = new Log('Extension');
 
     // load config
     const config = vscode.workspace.getConfiguration(NAME);
@@ -67,9 +68,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
 
         // log to output channel
-        Log.channel.error(`[Extension] ${error.message}`);
+        log.error(error.message);
         if (error.stack) {
-            Log.channel.error(error.stack);
+            log.error(error.stack);
         }
 
         // handle auth errors
@@ -479,8 +480,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // mount disk
         await disk.link({
             folderUri,
-            projectManager,
-            openFilePath: await uriHandler.getOpenFilePath(folderUri)
+            projectManager
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
@@ -498,6 +498,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 collabProvider.unlink();
             })
         );
+
+        // handle open file if specified
+        await uriHandler.openFile(folderUri);
 
         // store in cache
         cache.set(project.id, { branchId, projectManager });

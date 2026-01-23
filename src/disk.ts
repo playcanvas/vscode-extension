@@ -775,15 +775,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         };
     }
 
-    async link({
-        folderUri,
-        projectManager,
-        openFilePath
-    }: {
-        folderUri: vscode.Uri;
-        projectManager: ProjectManager;
-        openFilePath?: string;
-    }) {
+    async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri || this._projectManager) {
             throw this.error.set(() => new Error('manager already linked'));
         }
@@ -832,15 +824,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(uri, folderUri);
             if (!projectManager.files.has(path)) {
                 await this._delete(uri);
-            }
-        }
-
-        // open file if specified
-        if (openFilePath) {
-            const openUri = vscode.Uri.joinPath(folderUri, openFilePath);
-            if (await fileExists(openUri)) {
-                const openDoc = await vscode.workspace.openTextDocument(openUri);
-                await vscode.window.showTextDocument(openDoc);
             }
         }
 
