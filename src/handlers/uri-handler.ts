@@ -32,7 +32,7 @@ class UriHandler
 
     private _folderUri?: vscode.Uri;
 
-    private _projectManager?: ProjectManager;
+    protected _projectManager?: ProjectManager;
 
     private _errorDecoration = vscode.window.createTextEditorDecorationType({
         backgroundColor: UriHandler.ERROR_COLOR,
@@ -64,13 +64,16 @@ class UriHandler
         this._context.subscriptions.push(this._errorDecoration);
     }
 
-    protected async _openDocument(
-        folderUri: vscode.Uri,
-        filePath: string,
-        line: number | undefined,
-        col: number | undefined,
-        error: boolean
-    ) {
+    protected async _openDocument(folderUri: vscode.Uri, projectManager: ProjectManager, open: OpenFile) {
+        const { assetId, line, col, error } = open;
+
+        // check if file path exists
+        const filePath = projectManager.path(assetId);
+        if (!filePath) {
+            this._log.warn(`file not found in ${folderUri.toString()}`);
+            return;
+        }
+
         const uri = vscode.Uri.joinPath(folderUri, filePath);
 
         // check if file exists
@@ -94,6 +97,8 @@ class UriHandler
         if (error && selection) {
             editor.setDecorations(this._errorDecoration, [selection]);
         }
+
+        this._log.info(`opened file ${uri.toString()}`);
     }
 
     protected async _openFile(folderUri: vscode.Uri, projectManager: ProjectManager) {
@@ -115,15 +120,8 @@ class UriHandler
             return;
         }
 
-        // check if file path exists
-        const filePath = projectManager.path(open.assetId);
-        if (!filePath) {
-            this._log.warn(`file not found in ${folderUri.toString()}`);
-            return;
-        }
-
         // open text document
-        await this._openDocument(folderUri, filePath, open.line, open.col, open.error);
+        await this._openDocument(folderUri, projectManager, open);
     }
 
     async handleUri(uri: vscode.Uri) {
@@ -182,14 +180,9 @@ class UriHandler
 
         // check if current workspace already has the project opened
         if (this._projectManager && this._folderUri?.toString() === folderUri.toString()) {
-            // check if file exists
-            const filePath = this._projectManager.path(assetId);
-            if (filePath) {
-                // open text document
-                await this._openDocument(folderUri, filePath, line, col, error);
-                this._log.info(`opened file ${filePath} in ${folderUri.toString()}`);
-            } else {
-                this._log.warn(`file not found in ${folderUri.toString()}`);
+            // open file if asset id is provided
+            if (assetId) {
+                await this._openDocument(folderUri, this._projectManager, { assetId, line, col, error });
             }
             return;
         }
