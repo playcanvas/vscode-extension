@@ -151,9 +151,19 @@ class UriHandler
             col = Math.max(parseInt(c) - 1, 0);
         }
 
-        // parse uri: /{projectName} ({projectId})/{filePath}
+        // parse uri: /project/{projectId}/asset/{assetId}[?line={line}&col={col}&error={error}]
         const [projectId, assetId] = groups.slice(1).map((g) => parseInt(g));
-        this._log.debug(projectId, assetId, line, col, error);
+        this._log.debug(
+            [
+                `parsed project ${projectId}`,
+                assetId ? `asset ${assetId}` : '',
+                line ? `line ${line}` : '',
+                col ? `col ${col}` : '',
+                error ? 'error' : ''
+            ]
+                .filter(Boolean)
+                .join(' ')
+        );
 
         // fetch all user projects
         const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);
