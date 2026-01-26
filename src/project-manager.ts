@@ -820,6 +820,19 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._log.debug(`saved file ${path}`);
     }
 
+    path(assetId: number) {
+        const uniqueId = this._idToUniqueId.get(assetId);
+        if (!uniqueId) {
+            return undefined;
+        }
+        for (const [path, file] of this._files) {
+            if (file.uniqueId === uniqueId) {
+                return path;
+            }
+        }
+        return undefined;
+    }
+
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
         if (this._projectId || this._branchId) {
             throw this.error.set(() => new Error('project already linked'));

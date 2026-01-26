@@ -2,23 +2,25 @@ import * as vscode from 'vscode';
 
 import { NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
-import { Log } from '../log';
+import type { ProjectManager } from '../project-manager';
+import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
 import { fileExists, projectToName, guard } from '../utils/utils';
 
 type OpenFile = {
-    filePath: string;
+    assetId: number;
     line: number | undefined;
     col: number | undefined;
     error: boolean;
 };
 
-class UriHandler implements vscode.UriHandler {
+class UriHandler
+    extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManager }>
+    implements vscode.UriHandler
+{
     static OPEN_FILE_KEY = `${NAME}.openFile`;
 
     static ERROR_COLOR = 'rgba(244, 67, 54, 0.2)';
-
-    private _log = new Log(this.constructor.name);
 
     private _context: vscode.ExtensionContext;
 
@@ -27,6 +29,10 @@ class UriHandler implements vscode.UriHandler {
     private _userId: number;
 
     private _rest: Rest;
+
+    private _folderUri?: vscode.Uri;
+
+    private _projectManager?: ProjectManager;
 
     private _errorDecoration = vscode.window.createTextEditorDecorationType({
         backgroundColor: UriHandler.ERROR_COLOR,
@@ -48,6 +54,8 @@ class UriHandler implements vscode.UriHandler {
         userId: number;
         rest: Rest;
     }) {
+        super();
+
         this._context = context;
         this._rootUri = rootUri;
         this._userId = userId;
@@ -56,8 +64,13 @@ class UriHandler implements vscode.UriHandler {
         this._context.subscriptions.push(this._errorDecoration);
     }
 
-    protected async _openDocument(folderUri: vscode.Uri, open: OpenFile) {
-        const { filePath, line, col, error } = open;
+    protected async _openDocument(
+        folderUri: vscode.Uri,
+        filePath: string,
+        line: number | undefined,
+        col: number | undefined,
+        error: boolean
+    ) {
         const uri = vscode.Uri.joinPath(folderUri, filePath);
 
         // check if file exists
@@ -83,13 +96,42 @@ class UriHandler implements vscode.UriHandler {
         }
     }
 
+    protected async _openFile(folderUri: vscode.Uri, projectManager: ProjectManager) {
+        // retrieve and clear stored open file (always consume)
+        const open = this._context.globalState.get<
+            OpenFile & {
+                folderUriStr: string;
+            }
+        >(UriHandler.OPEN_FILE_KEY);
+        await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, undefined);
+
+        // check if valid
+        if (!open) {
+            return;
+        }
+
+        // check if file is for the current project
+        if (open.folderUriStr !== folderUri.toString()) {
+            return;
+        }
+
+        // check if file path exists
+        const filePath = projectManager.path(open.assetId);
+        if (!filePath) {
+            return;
+        }
+
+        // open text document
+        await this._openDocument(folderUri, filePath, open.line, open.col, open.error);
+    }
+
     async handleUri(uri: vscode.Uri) {
         if (uri.authority !== `${PUBLISHER}.${NAME}`) {
             return;
         }
 
         // validate path
-        const groups = /^\/(.+)\s\((\d+)\)(\/.*)?$/.exec(uri.path);
+        const groups = /^\/project\/(\d+)\/asset\/(\d+)(\/?)$/.exec(uri.path);
         if (!groups) {
             return;
         }
@@ -110,16 +152,16 @@ class UriHandler implements vscode.UriHandler {
         }
 
         // parse uri: /{projectName} ({projectId})/{filePath}
-        const [projectName, projectId, filePath = '/'] = groups.slice(1);
-        this._log.debug(projectName, projectId, filePath, line, col);
+        const [projectId, assetId] = groups.slice(1).map((g) => parseInt(g));
+        this._log.debug(projectId, assetId, line, col, error);
 
         // fetch all user projects
         const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);
 
         // find matching project
-        const project = projects.find((p) => p.id === parseInt(projectId) && p.name === projectName);
+        const project = projects.find((p) => p.id === projectId);
         if (!project) {
-            this.error.set(() => new Error(`project ${projectName} not found`));
+            this.error.set(() => new Error(`project ${projectId} not found`));
             return;
         }
 
@@ -127,12 +169,15 @@ class UriHandler implements vscode.UriHandler {
         const folderUri = vscode.Uri.joinPath(this._rootUri, projectToName(project));
 
         // check if current workspace already has the project opened
-        const folders = vscode.workspace.workspaceFolders ?? [];
-        const folder = folders.find((f) => f.uri.toString() === folderUri.toString());
-        if (folder) {
-            if (filePath !== '/') {
+        if (this._projectManager && this._folderUri?.toString() === folderUri.toString()) {
+            // check if file exists
+            const filePath = this._projectManager.path(assetId);
+            if (filePath) {
                 // open text document
-                await this._openDocument(folderUri, { filePath, line, col, error });
+                await this._openDocument(folderUri, filePath, line, col, error);
+                this._log.info(`opened file ${filePath} in ${folderUri.toString()}`);
+            } else {
+                this._log.warn(`file not found in ${folderUri.toString()}`);
             }
             return;
         }
@@ -140,7 +185,7 @@ class UriHandler implements vscode.UriHandler {
         // save full path to global storage for later retrieval
         await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, {
             folderUriStr: folderUri.toString(),
-            filePath,
+            assetId,
             line,
             col,
             error
@@ -151,27 +196,31 @@ class UriHandler implements vscode.UriHandler {
         await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
     }
 
-    async openFile(folderUri: vscode.Uri) {
-        // retrieve and clear stored open file (always consume)
-        const open = this._context.globalState.get<
-            OpenFile & {
-                folderUriStr: string;
-            }
-        >(UriHandler.OPEN_FILE_KEY);
-        await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, undefined);
-
-        // check if valid
-        if (!open) {
-            return;
+    async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
+        if (this._folderUri || this._projectManager) {
+            throw this.error.set(() => new Error('manager already linked'));
         }
 
-        // check if file is for the current project
-        if (open.folderUriStr !== folderUri.toString()) {
-            return;
-        }
+        this._folderUri = folderUri;
+        this._projectManager = projectManager;
 
-        // open text document
-        await this._openDocument(folderUri, open);
+        await this._openFile(folderUri, projectManager);
+
+        this._log.info(`linked to ${folderUri.toString()}`);
+    }
+
+    async unlink() {
+        if (!this._folderUri || !this._projectManager) {
+            throw this.error.set(() => new Error('manager not linked'));
+        }
+        const folderUri = this._folderUri;
+        const projectManager = this._projectManager;
+
+        await super.unlink();
+
+        this._log.info(`unlinked from ${folderUri.toString()}`);
+
+        return { folderUri, projectManager };
     }
 }
 

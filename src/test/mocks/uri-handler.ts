@@ -23,7 +23,7 @@ class MockUriHandler extends UriHandler {
         this.handleUri = sandbox.spy(super.handleUri.bind(this));
     }
 
-    async openFile(folderUri: vscode.Uri) {
+    async _openFile(folderUri: vscode.Uri) {
         const filePath = this.filePath;
         this.filePath = undefined;
 
@@ -31,7 +31,7 @@ class MockUriHandler extends UriHandler {
             return;
         }
 
-        await super._openDocument(folderUri, { filePath, line: 1, col: 1, error: true });
+        await super._openDocument(folderUri, filePath, 1, 1, true);
     }
 }
 
