@@ -105,8 +105,8 @@ class UriHandler
         >(UriHandler.OPEN_FILE_KEY);
         await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, undefined);
 
-        // check if valid
-        if (!open) {
+        // check if we need to open a file
+        if (!open || !open.assetId) {
             return;
         }
 
@@ -132,7 +132,7 @@ class UriHandler
         }
 
         // validate path
-        const groups = /^\/project\/(\d+)\/asset\/(\d+)(\/?)$/.exec(uri.path);
+        const groups = /^\/project\/(\d+)(?:\/asset\/(\d+))?(\/?)$/.exec(uri.path);
         if (!groups) {
             return;
         }
@@ -152,8 +152,9 @@ class UriHandler
             col = Math.max(parseInt(c) - 1, 0);
         }
 
-        // parse uri: /project/{projectId}/asset/{assetId}[?line={line}&col={col}&error={error}]
-        const [projectId, assetId] = groups.slice(1).map((g) => parseInt(g));
+        // parse uri: /project/{projectId}[/asset/{assetId}][?line={line}&col={col}&error={error}]
+        const projectId = parseInt(groups[1]);
+        const assetId = groups[2] !== undefined ? parseInt(groups[2]) : undefined;
         this._log.debug(
             [
                 `parsed project ${projectId}`,
