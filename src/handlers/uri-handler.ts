@@ -118,6 +118,7 @@ class UriHandler
         // check if file path exists
         const filePath = projectManager.path(open.assetId);
         if (!filePath) {
+            this._log.warn(`file not found in ${folderUri.toString()}`);
             return;
         }
 
