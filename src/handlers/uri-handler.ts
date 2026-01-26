@@ -98,7 +98,7 @@ class UriHandler
             editor.setDecorations(this._errorDecoration, [selection]);
         }
 
-        this._log.info(`opened file ${uri.toString()}`);
+        this._log.info(`opened asset ${assetId} at ${filePath}`);
     }
 
     protected async _openFile(folderUri: vscode.Uri, projectManager: ProjectManager) {
