@@ -199,7 +199,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         });
     }
 
-    private async _addFile(uniqueId: number, doc: Doc) {
+    private _addFile(uniqueId: number, doc: Doc) {
         const path = this._assetPath(uniqueId);
 
         // check if file path already exists
@@ -247,7 +247,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._log.debug(`added file ${path} (${dirty ? 'dirty' : 'clean'})`);
     }
 
-    private async _addFolder(uniqueId: number) {
+    private _addFolder(uniqueId: number) {
         const path = this._assetPath(uniqueId);
 
         // check if file path already exists
@@ -329,7 +329,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // handle folders
             if (asset.type === 'folder') {
                 // add folder to file system
-                await this._addFolder(uniqueId);
+                this._addFolder(uniqueId);
 
                 // emit asset created event
                 this._events.emit('asset:create', uniqueId);
@@ -362,7 +362,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             });
 
             // add file to file system
-            await this._addFile(uniqueId, doc2);
+            this._addFile(uniqueId, doc2);
 
             // emit asset created event
             this._events.emit('asset:create', uniqueId);
@@ -908,7 +908,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // add all folders first
         for (const asset of folders) {
-            await this._addFolder(asset.uniqueId);
+            this._addFolder(asset.uniqueId);
             loadFileNext();
         }
 
@@ -930,7 +930,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 }
 
                 // add file to file system
-                await this._addFile(uniqueId, doc);
+                this._addFile(uniqueId, doc);
                 loadFileNext();
             }
         }
