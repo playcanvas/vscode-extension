@@ -462,18 +462,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         }
                     }
 
-                    // update all files
+                    // update all files in memory
                     for (const [path, file] of update) {
                         const oldPath = path;
                         const newPath = path.replace(from, to);
-
-                        // update in files
                         this._files.delete(oldPath);
                         this._files.set(newPath, file);
-
-                        // add events for VS Code
-                        this._events.emit('asset:file:rename', oldPath, newPath);
                     }
+
+                    // emit rename event
+                    // NOTE: this will be the parent folder so do not emit for child files
+                    this._events.emit('asset:file:rename', from, to);
                     break;
                 }
 
