@@ -140,7 +140,7 @@ class CollabProvider
         return Promise.resolve([]);
     }
 
-    link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
+    async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri || this._projectManager) {
             throw this.error.set(() => new Error('manager already linked'));
         }
@@ -160,8 +160,6 @@ class CollabProvider
         });
 
         this._log.info(`linked to ${folderUri.toString()}`);
-
-        return Promise.resolve();
     }
 
     async unlink() {

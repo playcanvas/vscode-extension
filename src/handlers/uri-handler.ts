@@ -209,6 +209,11 @@ class UriHandler
         this._folderUri = folderUri;
         this._projectManager = projectManager;
 
+        this._cleanup.push(async () => {
+            this._folderUri = undefined;
+            this._projectManager = undefined;
+        });
+
         await this._openFile(folderUri, projectManager);
 
         this._log.info(`linked to ${folderUri.toString()}`);
