@@ -268,7 +268,7 @@ suite('Extension Test Suite', () => {
         const externalUri = vscode.Uri.from({
             scheme: vscode.env.uriScheme,
             authority: `${PUBLISHER}.${NAME}`,
-            path: `/${project.name} (${project.id})/${asset.name}`
+            path: `/project/${project.id}/asset/${asset.uniqueId}`
         });
         await vscode.env.openExternal(externalUri);
 
