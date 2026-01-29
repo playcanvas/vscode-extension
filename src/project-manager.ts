@@ -153,7 +153,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return false;
     }
 
-    private async _showCollisions() {
+    private _showCollisions() {
         if (this._collisions.size === 0) {
             return;
         }
@@ -168,7 +168,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             };
         });
 
-        await vscode.window.showQuickPick(items, {
+        vscode.window.showQuickPick(items, {
             title: 'Assets Skipped Due to Path Collisions',
             placeHolder: 'Filter assets',
             canPickMany: false
@@ -417,7 +417,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // show any path collisions if found
             if (collisionsFound) {
-                await this._showCollisions();
+                this._showCollisions();
             }
         });
         const assetDeleteHandle = this._messenger.on('assets.delete', async ({ data: { assets } }) => {
@@ -489,7 +489,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // show any remaining path collisions
             if (collisionsRemoved) {
-                await this._showCollisions();
+                this._showCollisions();
             }
         });
         return () => {
@@ -524,7 +524,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         this._events.emit('asset:file:delete', from);
 
                         // show collisions
-                        await this._showCollisions();
+                        this._showCollisions();
                         break;
                     }
 
@@ -1025,7 +1025,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // show any path collisions
         if (collisionFound) {
-            await this._showCollisions();
+            this._showCollisions();
         }
 
         // watchers
