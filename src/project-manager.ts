@@ -15,6 +15,7 @@ import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
 import { hash, parsePath, guard } from './utils/utils';
+import { DISPLAY_NAME } from './config.js';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -92,6 +93,23 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return this._files;
     }
 
+    get collisions() {
+        const list: { path: string; id: number }[] = [];
+        if (this._collisions.size === 0) {
+            return list;
+        }
+        for (const uniqueId of this._collisions) {
+            const asset = this._assets.get(uniqueId);
+            if (!asset) {
+                continue;
+            }
+            const path = this._assetPath(uniqueId);
+            const id = parseInt(asset.item_id, 10);
+            list.push({ path, id });
+        }
+        return list;
+    }
+
     private _assetPath(uniqueId: number, override: { path?: number[]; name?: string } = {}) {
         const asset = this._assets.get(uniqueId);
         if (!asset) {
@@ -153,26 +171,16 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return false;
     }
 
-    private _showCollisions() {
+    private _alertCollisions() {
         if (this._collisions.size === 0) {
             return;
         }
-
-        const items = [...this._collisions].map((uniqueId) => {
-            const asset = this._assets.get(uniqueId);
-            const path = asset ? this._assetPath(uniqueId) : 'Unknown';
-            return {
-                label: path,
-                description: `ID: ${uniqueId}`,
-                detail: 'Skipped due to path collision'
-            };
-        });
-
-        vscode.window.showQuickPick(items, {
-            title: 'Assets Skipped Due to Path Collisions',
-            placeHolder: 'Filter assets',
-            canPickMany: false
-        });
+        vscode.window.showWarningMessage(
+            [
+                `${this._collisions.size} assets skipped due to path collisions. `,
+                `Run the command '${DISPLAY_NAME}: Show Path Collisions' to view the affected assets.`
+            ].join(' ')
+        );
     }
 
     private _addAsset(uniqueId: number, doc: Doc) {
@@ -417,7 +425,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // show any path collisions if found
             if (collisionsFound) {
-                this._showCollisions();
+                this._alertCollisions();
             }
         });
         const assetDeleteHandle = this._messenger.on('assets.delete', async ({ data: { assets } }) => {
@@ -489,7 +497,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // show any remaining path collisions
             if (collisionsRemoved) {
-                this._showCollisions();
+                this._alertCollisions();
             }
         });
         return () => {
@@ -524,7 +532,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         this._events.emit('asset:file:delete', from);
 
                         // show collisions
-                        this._showCollisions();
+                        this._alertCollisions();
                         break;
                     }
 
@@ -1025,7 +1033,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // show any path collisions
         if (collisionFound) {
-            this._showCollisions();
+            this._alertCollisions();
         }
 
         // watchers

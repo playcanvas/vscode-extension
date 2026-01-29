@@ -376,6 +376,36 @@ export const activate = async (context: vscode.ExtensionContext) => {
         })
     );
 
+    // show path collisions
+    context.subscriptions.push(
+        vscode.commands.registerCommand(`${NAME}.showPathCollisions`, async () => {
+            if (!state.projectId) {
+                return;
+            }
+            const { projectManager } = cache.get(state.projectId) ?? {};
+            if (!projectManager) {
+                return;
+            }
+            if (projectManager.collisions.length === 0) {
+                return;
+            }
+
+            vscode.window.showQuickPick(
+                projectManager.collisions.map(
+                    (c) => ({
+                        label: c.path,
+                        description: `(${c.id})`
+                    }),
+                    {
+                        title: 'Assets Skipped Due to Path Collisions',
+                        placeHolder: 'Filter assets',
+                        canPickMany: false
+                    }
+                )
+            );
+        })
+    );
+
     // load project
     const projects = await rest.userProjects(userId, 'profile');
     const valid: [vscode.WorkspaceFolder, Project][] = (vscode.workspace.workspaceFolders ?? []).reduce(
