@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { NAME, PUBLISHER } from '../config';
+import { DISPLAY_NAME, NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
 import type { ProjectManager } from '../project-manager';
 import { Linker } from '../utils/linker';
@@ -66,6 +66,20 @@ class UriHandler
 
     protected async _openDocument(folderUri: vscode.Uri, projectManager: ProjectManager, open: OpenFile) {
         const { assetId, line, col, error } = open;
+
+        // check if assetId is a collision
+        const collision = projectManager.collisions.find((c) => c.id === assetId);
+        if (collision) {
+            vscode.window.showWarningMessage(
+                [
+                    `Cannot open ${collision.path} (${assetId}) due to path collision.`,
+                    '',
+                    `Run the command '${DISPLAY_NAME}: Show Path Collisions' to view the affected assets.`
+                ].join('\n'),
+                { modal: true }
+            );
+            return;
+        }
 
         // check if file path exists
         const filePath = projectManager.path(assetId);

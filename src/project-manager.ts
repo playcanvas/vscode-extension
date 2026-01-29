@@ -1,6 +1,7 @@
 import type { Doc } from 'sharedb';
 import * as vscode from 'vscode';
 
+import { DISPLAY_NAME } from './config';
 import type { Messenger } from './connections/messenger';
 import type { Relay } from './connections/relay';
 import type { Rest } from './connections/rest';
@@ -15,7 +16,6 @@ import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
 import { hash, parsePath, guard } from './utils/utils';
-import { DISPLAY_NAME } from './config.js';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -177,9 +177,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
         vscode.window.showWarningMessage(
             [
-                `${this._collisions.size} assets skipped due to path collisions. `,
+                `${this._collisions.size} assets skipped due to path collisions.`,
                 `Run the command '${DISPLAY_NAME}: Show Path Collisions' to view the affected assets.`
-            ].join(' ')
+            ].join('\n')
         );
     }
 
