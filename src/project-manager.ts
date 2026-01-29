@@ -1,4 +1,5 @@
 import type { Doc } from 'sharedb';
+import * as vscode from 'vscode';
 
 import type { Messenger } from './connections/messenger';
 import type { Relay } from './connections/relay';
@@ -61,6 +62,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _idToUniqueId: Map<number, number> = new Map<number, number>();
 
+    private _collisions: Set<number> = new Set<number>();
+
     error = signal<Error | undefined>(undefined);
 
     constructor({
@@ -98,37 +101,77 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = override.path ?? asset.path;
         const name = override.name ?? asset.name;
 
-        // FIXME: build full path using recursive approach as path can have duplicate asset ids
-        const segments: string[] = [name];
-        let parent = path[path.length - 1];
-        while (parent) {
-            const uniqueId = this._idToUniqueId.get(parent);
-            if (!uniqueId) {
-                throw this.error.set(() => new Error(`missing parent asset id mapping for ${parent}`));
-            }
-            const asset = this._assets.get(uniqueId);
-            if (!asset) {
-                throw this.error.set(() => new Error(`missing parent asset ${uniqueId}`));
-            }
-            segments.unshift(asset.name);
+        // NOTE: path can contain duplicate asset ids, so we need to filter them out
+        return Array.from(new Set(path))
+            .map((id) => {
+                const uniqueId = this._idToUniqueId.get(id);
+                if (!uniqueId) {
+                    throw this.error.set(() => new Error(`missing asset id mapping for ${id}`));
+                }
+                const asset = this._assets.get(uniqueId);
+                if (!asset) {
+                    throw this.error.set(() => new Error(`missing asset ${uniqueId}`));
+                }
+                return asset.name;
+            })
+            .concat(name)
+            .join('/');
+    }
 
-            const path = asset.path ?? [];
-            parent = path[path.length - 1];
+    private _checkCollision(uniqueId: number) {
+        // check if file path already exists
+        const path = this._assetPath(uniqueId);
+        if (this._files.has(path)) {
+            this._log.warn(`skipping loading asset ${uniqueId} as path already exists: ${path}`);
+            this._collisions.add(uniqueId);
+            return true;
         }
-        return segments.join('/');
 
-        // // FIXME: path can have duplicate asset ids, why?
-        // const path = [...new Set(override.path ?? asset.path)];
-        // const name = override.name ?? asset.name;
-        // return `${path
-        //     .map((id: number) => {
-        //         const asset = this._assets.get(id);
-        //         if (!asset) {
-        //             throw this.error.set(() => new Error(`missing asset ${id}`));
-        //         }
-        //         return `${asset.name}/`;
-        //     })
-        //     .join('')}${name}`;
+        // check if ancesetor of asset has a collision (not shown in file system)
+        const asset = this._assets.get(uniqueId);
+        if (!asset) {
+            throw this.error.set(() => new Error(`missing child asset ${uniqueId}`));
+        }
+        if (!asset.path) {
+            throw this.error.set(() => new Error(`missing asset path for ${uniqueId}`));
+        }
+        for (const id of asset.path) {
+            const parentUniqueId = this._idToUniqueId.get(id);
+            if (!parentUniqueId) {
+                throw this.error.set(() => new Error(`missing asset id mapping for ${id}`));
+            }
+            if (this._collisions.has(parentUniqueId)) {
+                this._log.warn(
+                    `skipping loading of asset ${uniqueId} as ancestor asset ${parentUniqueId} has a path collision`
+                );
+                this._collisions.add(uniqueId);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async _showCollisions() {
+        if (this._collisions.size === 0) {
+            return;
+        }
+
+        const items = [...this._collisions].map((uniqueId) => {
+            const asset = this._assets.get(uniqueId);
+            const path = asset ? this._assetPath(uniqueId) : 'Unknown';
+            return {
+                label: path,
+                description: `ID: ${uniqueId}`,
+                detail: 'Skipped due to path collision'
+            };
+        });
+
+        vscode.window.showQuickPick(items, {
+            title: 'Assets Skipped Due to Path Collisions',
+            placeHolder: 'Filter assets',
+            canPickMany: false
+        });
     }
 
     private _addAsset(uniqueId: number, doc: Doc) {
@@ -202,9 +245,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _addFile(uniqueId: number, doc: Doc) {
         const path = this._assetPath(uniqueId);
 
-        // check if file path already exists
-        if (this._files.has(path)) {
-            this._log.warn(`skipping load of ${path} for asset ${uniqueId} as it already exists`);
+        // check for file path collision
+        if (this._checkCollision(uniqueId)) {
             return;
         }
 
@@ -250,9 +292,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _addFolder(uniqueId: number) {
         const path = this._assetPath(uniqueId);
 
-        // check if file path already exists
-        if (this._files.has(path)) {
-            this._log.warn(`skipping load of ${path} for asset ${uniqueId} as it already exists`);
+        // check for file path collision
+        if (this._checkCollision(uniqueId)) {
             return;
         }
 
@@ -403,7 +444,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 if (file?.uniqueId === uniqueId) {
                     this._files.delete(path);
                 } else {
-                    this._log.warn(`skipping delete of ${path} for asset ${uniqueId} as it does not exist`);
+                    this._collisions.delete(uniqueId);
                 }
 
                 // emit a change event to update on disk
@@ -933,6 +974,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 loadFileNext();
             }
         }
+
+        // show any path collisions
+        this._showCollisions();
 
         // watchers
         const unwatchEvents = this._watchEvents(projectId);
