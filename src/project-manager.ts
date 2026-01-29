@@ -1046,6 +1046,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._files.clear();
             this._assets.clear();
             this._idToUniqueId.clear();
+            this._collisions.clear();
 
             this._projectId = undefined;
             this._branchId = undefined;
