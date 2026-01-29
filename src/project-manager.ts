@@ -1,12 +1,12 @@
 import type { Doc } from 'sharedb';
 import * as vscode from 'vscode';
 
-import { DISPLAY_NAME } from './config';
+import { NAME } from './config';
 import type { Messenger } from './connections/messenger';
 import type { Relay } from './connections/relay';
 import type { Rest } from './connections/rest';
 import { ShareDb } from './connections/sharedb';
-import { progressNotification } from './notification';
+import { progressNotification, warningDialog } from './notification';
 import type { EventMap } from './typings/event-map';
 import type { Asset } from './typings/models';
 import type { ShareDbOp, ShareDbTextOp } from './typings/sharedb';
@@ -175,12 +175,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (this._collisions.size === 0) {
             return;
         }
-        vscode.window.showWarningMessage(
+        const count = this._collisions.size;
+        warningDialog(
             [
-                `${this._collisions.size} assets skipped due to path collisions.`,
-                `Run the command '${DISPLAY_NAME}: Show Path Collisions' to view the affected assets.`
-            ].join('\n')
-        );
+                `Skipped loading ${count} asset${count !== 1 ? 's' : ''} due to path collisions.`,
+                'Rename or move the conflicted files in the Editor to resolve.'
+            ].join('\n'),
+            `Show Asset${count !== 1 ? 's' : ''}`
+        ).then(() => vscode.commands.executeCommand(`${NAME}.showSkippedAssets`));
     }
 
     private _addAsset(uniqueId: number, doc: Doc) {

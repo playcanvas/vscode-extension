@@ -376,9 +376,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
         })
     );
 
-    // show path collisions
+    // view collisions
     context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.showPathCollisions`, async () => {
+        vscode.commands.registerCommand(`${NAME}.showSkippedAssets`, async () => {
             if (!state.projectId) {
                 return;
             }
@@ -391,17 +391,15 @@ export const activate = async (context: vscode.ExtensionContext) => {
             }
 
             vscode.window.showQuickPick(
-                projectManager.collisions.map(
-                    (c) => ({
-                        label: c.path,
-                        description: `(${c.id})`
-                    }),
-                    {
-                        title: 'Assets Skipped Due to Path Collisions',
-                        placeHolder: 'Filter assets',
-                        canPickMany: false
-                    }
-                )
+                projectManager.collisions.map((c) => ({
+                    label: c.path,
+                    description: `(${c.id})`
+                })),
+                {
+                    title: 'Assets skipped due to path collisions',
+                    placeHolder: 'Filter assets',
+                    canPickMany: false
+                }
             );
         })
     );

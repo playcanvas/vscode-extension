@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 
-import { DISPLAY_NAME, NAME, PUBLISHER } from '../config';
+import { NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
+import { warningDialog } from '../notification.js';
 import type { ProjectManager } from '../project-manager';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
@@ -70,14 +71,14 @@ class UriHandler
         // check if assetId is a collision
         const collision = projectManager.collisions.find((c) => c.id === assetId);
         if (collision) {
-            vscode.window.showWarningMessage(
+            warningDialog(
                 [
-                    `Cannot open ${collision.path} (${assetId}) due to path collision.`,
-                    '',
-                    `Run the command '${DISPLAY_NAME}: Show Path Collisions' to view the affected assets.`
-                ].join('\n'),
-                { modal: true }
-            );
+                    `Cannot open ${collision.path} (${assetId}) due to conflicting file paths.`,
+                    'Rename or move the conflicted files in the Editor to resolve.'
+                ].join(' '),
+                'Show Assets',
+                true
+            ).then(() => vscode.commands.executeCommand(`${NAME}.showSkippedAssets`));
             return;
         }
 

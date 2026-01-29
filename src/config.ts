@@ -1,7 +1,6 @@
 import packageJson from '../package.json';
 
 export const NAME = packageJson.name;
-export const DISPLAY_NAME = packageJson.displayName || NAME;
 export const PUBLISHER = packageJson.publisher.toLowerCase();
 
 export const DEBUG = process.env.NODE_ENV === 'development';
