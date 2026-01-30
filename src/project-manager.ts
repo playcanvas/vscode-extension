@@ -182,7 +182,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 'Rename or move the conflicted files in the Editor to resolve.'
             ].join('\n'),
             `Show Asset${count !== 1 ? 's' : ''}`
-        ).then(() => vscode.commands.executeCommand(`${NAME}.showSkippedAssets`));
+        ).then((confirmed) => confirmed && vscode.commands.executeCommand(`${NAME}.showSkippedAssets`));
     }
 
     private _addAsset(uniqueId: number, doc: Doc) {
@@ -459,7 +459,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 [] as [number, string, Asset][]
             );
 
-            let collisionsRemoved = false;
+            let collisionsDirty = false;
 
             // prepare subscriptions
             const subscriptions: [string, string][] = [];
@@ -469,7 +469,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     this._files.delete(path);
                 } else {
                     this._collisions.delete(uniqueId);
-                    collisionsRemoved = true;
+                    collisionsDirty = true;
                 }
 
                 // emit a change event to update on disk
@@ -497,8 +497,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // unsubscribe from ShareDB documents in bulk
             await this._sharedb.bulkUnsubscribe(subscriptions);
 
-            // show any remaining path collisions
-            if (collisionsRemoved) {
+            // show collisions if dirty
+            if (collisionsDirty) {
                 this._alertCollisions();
             }
         });
@@ -525,16 +525,27 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     const from = this._assetPath(uniqueId, { [key]: before });
                     const to = this._assetPath(uniqueId, { [key]: after });
 
+                    let collisionsDirty = false;
+
+                    // check if old path is a collision
+                    if (this._checkCollision(uniqueId, { [key]: before })) {
+                        collisionsDirty = true;
+                    }
+
                     // check if new path is a collision
                     if (this._checkCollision(uniqueId, { [key]: after })) {
+                        collisionsDirty = true;
+
                         // remove old file/folder from memory
                         this._files.delete(from);
 
                         // emit delete event for old path
                         this._events.emit('asset:file:delete', from);
 
-                        // show collisions
-                        this._alertCollisions();
+                        // show collisions if dirty
+                        if (collisionsDirty) {
+                            this._alertCollisions();
+                        }
                         break;
                     }
 
@@ -557,6 +568,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     // emit rename event
                     // NOTE: this will be the parent folder so do not emit for child files
                     this._events.emit('asset:file:rename', from, to);
+
+                    // show collisions if dirty
+                    if (collisionsDirty) {
+                        this._alertCollisions();
+                    }
                     break;
                 }
 
@@ -998,12 +1014,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         files.sort(sortByPathDepth);
 
         const loadFileNext = await progressNotification('Loading Files', folders.length + files.length);
-        let collisionFound = false;
+        let collisionsDirty = false;
 
         // add all folders first
         for (const asset of folders) {
             if (!this._addFolder(asset.uniqueId)) {
-                collisionFound = true;
+                collisionsDirty = true;
             }
             loadFileNext();
         }
@@ -1027,14 +1043,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                 // add file to file system
                 if (!this._addFile(uniqueId, doc)) {
-                    collisionFound = true;
+                    collisionsDirty = true;
                 }
                 loadFileNext();
             }
         }
 
-        // show any path collisions
-        if (collisionFound) {
+        // show collisions if dirty
+        if (collisionsDirty) {
             this._alertCollisions();
         }
 

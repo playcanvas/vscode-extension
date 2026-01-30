@@ -78,7 +78,7 @@ class UriHandler
                 ].join(' '),
                 'Show Assets',
                 true
-            ).then(() => vscode.commands.executeCommand(`${NAME}.showSkippedAssets`));
+            ).then((confirmed) => confirmed && vscode.commands.executeCommand(`${NAME}.viewCollisions`));
             return;
         }
 
