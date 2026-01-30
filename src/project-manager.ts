@@ -63,7 +63,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _idToUniqueId: Map<number, number> = new Map<number, number>();
 
-    private _collisions: Set<number> = new Set<number>();
+    private _skipped: Map<number, boolean> = new Map<number, boolean>();
 
     error = signal<Error | undefined>(undefined);
 
@@ -95,10 +95,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     get collisions() {
         const list: { path: string; id: number }[] = [];
-        if (this._collisions.size === 0) {
+        if (this._skipped.size === 0) {
             return list;
         }
-        for (const uniqueId of this._collisions) {
+        for (const [uniqueId, colliding] of this._skipped) {
+            if (!colliding) {
+                continue;
+            }
             const asset = this._assets.get(uniqueId);
             if (!asset) {
                 continue;
@@ -141,7 +144,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const filePath = this._assetPath(uniqueId, override);
         if (this._files.has(filePath)) {
             this._log.warn(`skipping loading asset ${uniqueId} as path already exists: ${filePath}`);
-            this._collisions.add(uniqueId);
+            this._skipped.set(uniqueId, true);
             return true;
         }
 
@@ -159,11 +162,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             if (!parentUniqueId) {
                 throw this.error.set(() => new Error(`missing asset id mapping for ${id}`));
             }
-            if (this._collisions.has(parentUniqueId)) {
+            if (this._skipped.has(parentUniqueId)) {
                 this._log.warn(
                     `skipping loading of asset ${uniqueId} as ancestor asset ${parentUniqueId} has a path collision`
                 );
-                this._collisions.add(uniqueId);
+                this._skipped.set(uniqueId, false);
                 return true;
             }
         }
@@ -172,23 +175,23 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     private _alertCollisions() {
-        if (this._collisions.size === 0) {
+        if (this._skipped.size === 0) {
             return;
         }
-        const count = this._collisions.size;
-        const options = [`Show Asset${count !== 1 ? 's' : ''}`, 'Reload project'];
+        const count = this._skipped.size;
+        const options = [`Show Colliding Asset${count !== 1 ? 's' : ''}`, 'Reload project'];
         vscode.window
             .showWarningMessage(
                 [
                     `Skipped loading ${count} asset${count !== 1 ? 's' : ''} due to path collisions.`,
-                    'Rename or move the conflicted files in the Editor to resolve.'
+                    'Rename or move the colliding assets in the Editor to resolve.'
                 ].join('\n'),
                 ...options
             )
             .then((option) => {
                 switch (option) {
                     case options[0]: {
-                        vscode.commands.executeCommand(`${NAME}.showSkippedAssets`);
+                        vscode.commands.executeCommand(`${NAME}.showCollidingAssets`);
                         break;
                     }
                     case options[1]: {
@@ -473,7 +476,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 [] as [number, string, Asset][]
             );
 
-            let collisionsDirty = false;
+            let skippedDirty = false;
 
             // prepare subscriptions
             const subscriptions: [string, string][] = [];
@@ -482,8 +485,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 if (file?.uniqueId === uniqueId) {
                     this._files.delete(path);
                 } else {
-                    this._collisions.delete(uniqueId);
-                    collisionsDirty = true;
+                    this._skipped.delete(uniqueId);
+                    skippedDirty = true;
                 }
 
                 // emit a change event to update on disk
@@ -512,7 +515,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             await this._sharedb.bulkUnsubscribe(subscriptions);
 
             // show collisions if dirty
-            if (collisionsDirty) {
+            if (skippedDirty) {
                 this._alertCollisions();
             }
         });
@@ -539,16 +542,16 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     const from = this._assetPath(uniqueId, { [key]: before });
                     const to = this._assetPath(uniqueId, { [key]: after });
 
-                    let collisionsDirty = false;
+                    let skippedDirty = false;
 
                     // check if old path is a collision
                     if (this._checkCollision(uniqueId, { [key]: before })) {
-                        collisionsDirty = true;
+                        skippedDirty = true;
                     }
 
                     // check if new path is a collision
                     if (this._checkCollision(uniqueId, { [key]: after })) {
-                        collisionsDirty = true;
+                        skippedDirty = true;
 
                         // remove old file/folder from memory
                         this._files.delete(from);
@@ -557,7 +560,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         this._events.emit('asset:file:delete', from);
 
                         // show collisions if dirty
-                        if (collisionsDirty) {
+                        if (skippedDirty) {
                             this._alertCollisions();
                         }
                         break;
@@ -584,7 +587,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     this._events.emit('asset:file:rename', from, to);
 
                     // show collisions if dirty
-                    if (collisionsDirty) {
+                    if (skippedDirty) {
                         this._alertCollisions();
                     }
                     break;
@@ -1028,12 +1031,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         files.sort(sortByPathDepth);
 
         const loadFileNext = await progressNotification('Loading Files', folders.length + files.length);
-        let collisionsDirty = false;
+        let skippedDirty = false;
 
         // add all folders first
         for (const asset of folders) {
             if (!this._addFolder(asset.uniqueId)) {
-                collisionsDirty = true;
+                skippedDirty = true;
             }
             loadFileNext();
         }
@@ -1057,14 +1060,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                 // add file to file system
                 if (!this._addFile(uniqueId, doc)) {
-                    collisionsDirty = true;
+                    skippedDirty = true;
                 }
                 loadFileNext();
             }
         }
 
         // show collisions if dirty
-        if (collisionsDirty) {
+        if (skippedDirty) {
             this._alertCollisions();
         }
 
@@ -1086,7 +1089,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._files.clear();
             this._assets.clear();
             this._idToUniqueId.clear();
-            this._collisions.clear();
+            this._skipped.clear();
 
             this._projectId = undefined;
             this._branchId = undefined;

@@ -70,13 +70,22 @@ class UriHandler
         // check if assetId is a collision
         const collision = projectManager.collisions.find((c) => c.id === assetId);
         if (collision) {
-            vscode.window.showWarningMessage(
-                [
-                    `Cannot open ${collision.path} (${assetId}) due to conflicting file paths.`,
-                    'Rename or move the conflicted files in the Editor to resolve.'
-                ].join(' '),
-                { modal: true }
-            );
+            const confirmation = 'Show Colliding Assets';
+            vscode.window
+                .showWarningMessage(
+                    [
+                        `Cannot open ${collision.path} (${assetId}) due to colliding file paths.`,
+                        'Rename or move the colliding assets in the Editor to resolve.'
+                    ].join(' '),
+                    { modal: true },
+                    confirmation
+                )
+                .then((option) => {
+                    if (option !== confirmation) {
+                        return;
+                    }
+                    vscode.commands.executeCommand(`${NAME}.showCollidingAssets`);
+                });
             return;
         }
 

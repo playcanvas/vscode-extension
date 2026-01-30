@@ -244,7 +244,7 @@ suite('Extension Test Suite', () => {
         assert.deepStrictEqual(call.args, [other.id], 'branchCheckout args should match');
     });
 
-    test(`command ${NAME}.showSkippedAssets`, async () => {
+    test(`command ${NAME}.showCollidingAssets`, async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -295,7 +295,10 @@ suite('Extension Test Suite', () => {
         quickPickStub.resetHistory();
 
         // execute showSkippedAssets command
-        await assertResolves(vscode.commands.executeCommand(`${NAME}.showSkippedAssets`), `${NAME}.showSkippedAssets`);
+        await assertResolves(
+            vscode.commands.executeCommand(`${NAME}.showCollidingAssets`),
+            `${NAME}.showCollidingAssets`
+        );
 
         // check if quick pick was shown
         assert.ok(quickPickStub.called, 'quick pick should have been shown for skipped assets');
@@ -1666,7 +1669,10 @@ suite('Extension Test Suite', () => {
         quickPickStub.resetHistory();
 
         // execute showSkippedAssets command - should not show the deleted collision
-        await assertResolves(vscode.commands.executeCommand(`${NAME}.showSkippedAssets`), `${NAME}.showSkippedAssets`);
+        await assertResolves(
+            vscode.commands.executeCommand(`${NAME}.showCollidingAssets`),
+            `${NAME}.showCollidingAssets`
+        );
 
         // if quick pick was called, verify our deleted collision is not in the list
         if (quickPickStub.called) {

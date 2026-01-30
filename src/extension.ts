@@ -378,7 +378,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // view collisions
     context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.showSkippedAssets`, async () => {
+        vscode.commands.registerCommand(`${NAME}.showCollidingAssets`, async () => {
             if (!state.projectId) {
                 return;
             }
