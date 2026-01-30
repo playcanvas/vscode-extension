@@ -576,13 +576,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     for (const [path, file] of update) {
                         const oldPath = path;
                         const newPath = path.replace(from, to);
-                        if (this._files.has(newPath)) {
-                            this._files.delete(oldPath);
-                        } else {
-                            this._skips.delete(uniqueId);
-                            skipDirty = true;
-                        }
+                        this._files.delete(oldPath);
                         this._files.set(newPath, file);
+                    }
+
+                    // check if this resolves a previous collision
+                    if (this._skips.delete(uniqueId)) {
+                        skipDirty = true;
                     }
 
                     // emit rename event
@@ -959,23 +959,22 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             if (!collisions.has(path)) {
                 const file = this._files.get(path);
                 if (!file) {
-                    continue;
+                    throw this.error.set(() => new Error(`missing loaded file for collision path: ${path}`));
                 }
-                const id = this._idUniqueId.getR(file.uniqueId);
-                if (!id) {
-                    continue;
+                const loadedId = this._idUniqueId.getR(file.uniqueId);
+                if (!loadedId) {
+                    throw this.error.set(() => new Error(`missing id mapping for loaded file: ${file.uniqueId}`));
                 }
-                collisions.set(path, [id]);
+                collisions.set(path, [loadedId]);
             }
 
             // add colliding asset id
             const id = this._idUniqueId.getR(uniqueId);
             if (!id) {
-                continue;
+                throw this.error.set(() => new Error(`missing id mapping for skipped asset: ${uniqueId}`));
             }
-            const array = collisions.get(path) ?? [];
+            const array = collisions.get(path)!;
             array.push(id);
-            collisions.set(path, array);
         }
         return collisions;
     }
