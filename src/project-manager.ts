@@ -182,7 +182,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // show warning message
         const count = this._skips.size;
-        const options = [`Show Colliding Asset${count !== 1 ? 's' : ''}`, 'Reload project'];
+        const options = ['Show Path Collisions', 'Reload project'];
         vscode.window
             .showWarningMessage(
                 [
