@@ -973,7 +973,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             if (!id) {
                 throw this.error.set(() => new Error(`missing id mapping for skipped asset: ${uniqueId}`));
             }
-            const array = collisions.get(path)!;
+            const array = collisions.get(path);
+            if (!array) {
+                throw this.error.set(() => new Error(`missing collision array for path: ${path}`));
+            }
             array.push(id);
         }
         return collisions;
