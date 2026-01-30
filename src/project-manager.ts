@@ -6,7 +6,7 @@ import type { Messenger } from './connections/messenger';
 import type { Relay } from './connections/relay';
 import type { Rest } from './connections/rest';
 import { ShareDb } from './connections/sharedb';
-import { progressNotification, warningDialog } from './notification';
+import { progressNotification } from './notification';
 import type { EventMap } from './typings/event-map';
 import type { Asset } from './typings/models';
 import type { ShareDbOp, ShareDbTextOp } from './typings/sharedb';
@@ -176,13 +176,27 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
         const count = this._collisions.size;
-        warningDialog(
-            [
-                `Skipped loading ${count} asset${count !== 1 ? 's' : ''} due to path collisions.`,
-                'Rename or move the conflicted files in the Editor to resolve.'
-            ].join('\n'),
-            `Show Asset${count !== 1 ? 's' : ''}`
-        ).then((confirmed) => confirmed && vscode.commands.executeCommand(`${NAME}.showSkippedAssets`));
+        const options = [`Show Asset${count !== 1 ? 's' : ''}`, 'Reload project'];
+        vscode.window
+            .showWarningMessage(
+                [
+                    `Skipped loading ${count} asset${count !== 1 ? 's' : ''} due to path collisions.`,
+                    'Rename or move the conflicted files in the Editor to resolve.'
+                ].join('\n'),
+                ...options
+            )
+            .then((option) => {
+                switch (option) {
+                    case options[0]: {
+                        vscode.commands.executeCommand(`${NAME}.showSkippedAssets`);
+                        break;
+                    }
+                    case options[1]: {
+                        vscode.commands.executeCommand(`${NAME}.reloadProject`);
+                        break;
+                    }
+                }
+            });
     }
 
     private _addAsset(uniqueId: number, doc: Doc) {

@@ -51,9 +51,3 @@ export const progressNotification = (message: string, total: number) => {
         );
     });
 };
-
-export const warningDialog = (message: string, confirmation: string, modal = false) => {
-    return vscode.window.showWarningMessage(message, { modal }, confirmation).then((selection) => {
-        return selection === confirmation;
-    });
-};
