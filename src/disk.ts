@@ -56,6 +56,20 @@ const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder' | un
     return content;
 };
 
+// Helper function for path matching (checks if paths are related - ancestor/descendant)
+const pathsRelated = (path1: string, path2: string): boolean => {
+    if (path1 === path2) {
+        return true;
+    }
+    if (path1.startsWith(`${path2}/`)) {
+        return true;
+    }
+    if (path2.startsWith(`${path1}/`)) {
+        return true;
+    }
+    return false;
+};
+
 class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManager }> {
     static IGNORE_FILE = '.pcignore';
 
@@ -71,7 +85,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _locks: Set<string> = new Set<string>();
 
-    private _mutex = new Mutex<void>();
+    private _readMutex = new Mutex<void>(pathsRelated);
+
+    private _writeMutex = new Mutex<void>(pathsRelated);
 
     private _debouncer = new Debouncer<void>(50);
 
@@ -142,7 +158,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
-        return this._mutex.atomic(`${uri}`, async () => {
+        return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
             }
@@ -191,7 +207,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _update(uri: vscode.Uri, op: ShareDbTextOp, content: Uint8Array) {
-        return this._mutex.atomic(`${uri}`, async () => {
+        return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
             }
@@ -219,7 +235,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _delete(uri: vscode.Uri) {
-        return this._mutex.atomic(`${uri}`, async () => {
+        return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
             }
@@ -242,7 +258,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _rename(oldUri: vscode.Uri, newUri: vscode.Uri) {
-        return this._mutex.atomic(`${oldUri}`, async () => {
+        return this._writeMutex.atomic([`${oldUri}`, `${newUri}`], async () => {
             if (this._ignoring(oldUri)) {
                 return;
             }
@@ -265,7 +281,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _save(uri: vscode.Uri) {
-        return this._mutex.atomic(`${uri}`, async () => {
+        return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
             }
@@ -340,7 +356,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _watchDocument(folderUri: vscode.Uri, projectManager: ProjectManager) {
         const dirtify = (open: vscode.TextDocument) => {
-            return this._mutex.atomic(`${open.uri}`, async () => {
+            return this._writeMutex.atomic([`${open.uri}`], async () => {
                 const path = relativePath(open.uri, folderUri);
                 const file = projectManager.files.get(path);
                 if (!file || file.type !== 'file') {
@@ -500,20 +516,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return null;
         };
 
-        // check if one path is related to the other (i.e. one is a parent of the other)
-        const related = (path1: string, path2: string) => {
-            if (path1 === path2) {
-                return true;
-            }
-            if (path1.startsWith(`${path2}/`)) {
-                return true;
-            }
-            if (path2.startsWith(`${path1}/`)) {
-                return true;
-            }
-            return false;
-        };
-
         // defer operation to queue
         const defer = (op: DeferOp) => {
             queue.push(op);
@@ -529,39 +531,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     // snapshot queue
                     const batch = queue.splice(0);
 
-                    // processing promises
-                    const processing = new Map<string, Promise<void>>();
-
-                    // schedule promise
-                    const schedule = (deps: string[], fn: () => Promise<void>) => {
-                        // wait for all dependencies to resolve
-                        const wait = Promise.all(
-                            Array.from(processing.entries()).reduce((rest, [path, promise]) => {
-                                if (deps.some((p) => related(p, path))) {
-                                    rest.push(promise);
-                                }
-                                return rest;
-                            }, [] as Promise<void>[])
-                        );
-
-                        // schedule promise
-                        const chain = wait
-                            .then(() => fn().catch((error) => this._log.warn(`schedule error: ${error}`)))
-                            .finally(() => {
-                                // cleanup
-                                deps.forEach((path) => {
-                                    if (processing.get(path) === chain) {
-                                        processing.delete(path);
-                                    }
-                                });
-                            });
-
-                        // add to processing
-                        deps.forEach((path) => processing.set(path, chain));
-
-                        return chain;
-                    };
-
                     // process batch
                     for (let i = 0; i < batch.length; i++) {
                         if (i + 1 < batch.length) {
@@ -575,7 +544,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 const [folder1, name1] = parsePath(path1);
                                 const [folder2, name2] = parsePath(path2);
                                 if (name1 === name2 || folder1 === folder2) {
-                                    schedule([path1, path2], async () => {
+                                    this._readMutex.atomic([path1, path2], async () => {
                                         const type1 = await op1.type;
                                         if (!type1) {
                                             this._log.warn(`skipping rename of ${op1.uri} as type not found`);
@@ -599,7 +568,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         switch (op.action) {
                             case 'create': {
                                 const path = relativePath(op.uri, folderUri);
-                                schedule([path], async () => {
+                                this._readMutex.atomic([path], async () => {
                                     const type = await op.type;
                                     const content = await op.content;
                                     if (!type) {
@@ -614,7 +583,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             }
                             case 'change': {
                                 const path = relativePath(op.uri, folderUri);
-                                schedule([path], async () => {
+                                this._readMutex.atomic([path], async () => {
                                     const content = await op.content;
                                     if (!content) {
                                         this._log.warn(`skipping change of ${op.uri} as content not found`);
@@ -653,7 +622,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             }
                             case 'delete': {
                                 const path = relativePath(op.uri, folderUri);
-                                schedule([path], async () => {
+                                this._readMutex.atomic([path], async () => {
                                     const type = await op.type;
                                     if (!type) {
                                         this._log.warn(`skipping delete of ${op.uri} as type not found`);
@@ -669,7 +638,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     }
 
                     // wait for all processing promises to resolve
-                    await Promise.all(Array.from(processing.values()));
+                    await this._readMutex.all();
                 }
 
                 timeout = null;
@@ -843,7 +812,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             unwatchDisk();
 
             this._echo.clear();
-            this._mutex.clear();
+            this._writeMutex.clear();
             this._debouncer.clear();
             this._opened.clear();
 
