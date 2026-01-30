@@ -396,7 +396,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
                     description: `(${c.id})`
                 })),
                 {
-                    title: 'Assets skipped due to path collisions',
+                    title: 'Assets with colliding file paths',
                     placeHolder: 'Filter assets',
                     canPickMany: false
                 }
