@@ -76,7 +76,7 @@ class UriHandler
         // check if file is loaded
         const loaded = projectManager.files.has(filePath);
         if (!loaded) {
-            const confirmation = 'Show Colliding Assets';
+            const confirmation = 'Show Path Collisions';
             vscode.window
                 .showWarningMessage(
                     [
