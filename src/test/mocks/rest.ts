@@ -68,6 +68,16 @@ class MockRest extends Rest {
                     file?: Blob;
                 }
             ) => {
+                // calculate path
+                let path: number[] = [];
+                if (data.parent) {
+                    const asset = assets.get(data.parent);
+                    if (!asset) {
+                        throw new Error(`parent asset with ID ${data.parent} not found`);
+                    }
+                    path = asset.path.concat(data.parent);
+                }
+
                 // add new asset to assets map
                 const id = uniqueId.next().value;
                 const document = data.file ? await data.file.text() : '';
@@ -82,7 +92,7 @@ class MockRest extends Rest {
                                   hash: hash(document)
                               },
                     type: data.type,
-                    path: data.parent ? [data.parent] : [],
+                    path,
                     name: data.name
                 };
                 assets.set(id, asset);
