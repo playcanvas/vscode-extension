@@ -64,7 +64,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _idUniqueId: Bimap<number, number> = new Bimap<number, number>();
 
-    private _skips: Map<number, boolean> = new Map<number, boolean>();
+    private _skips: Map<number, string> = new Map<number, string>();
 
     skipped = signal<number>(0);
 
@@ -127,7 +127,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const filePath = this._assetPath(uniqueId, override);
         if (this._files.has(filePath)) {
             this._log.warn(`skipping loading asset ${uniqueId} as path already exists: ${filePath}`);
-            this._skips.set(uniqueId, true);
+            this._skips.set(uniqueId, filePath);
             return true;
         }
 
@@ -149,7 +149,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 this._log.warn(
                     `skipping loading of asset ${uniqueId} as ancestor asset ${parentUniqueId} has a path collision`
                 );
-                this._skips.set(uniqueId, false);
+                this._skips.set(uniqueId, '');
                 return true;
             }
         }
@@ -959,11 +959,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     collisions() {
         const collisions = new Map<string, number[]>();
-        for (const [uniqueId, colliding] of this._skips) {
-            if (!colliding) {
+        for (const [uniqueId, path] of this._skips) {
+            if (!path) {
                 continue;
             }
-            const path = this._assetPath(uniqueId);
 
             // if no collision entry, create it and add the loaded asset id
             if (!collisions.has(path)) {
