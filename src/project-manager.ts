@@ -399,13 +399,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // add asset
             this._addAsset(uniqueId, doc1);
 
-            let collisionsFound = false;
+            let skippedDirty = false;
 
             // handle folders
             if (asset.type === 'folder') {
                 // add folder to file system
                 if (!this._addFolder(uniqueId)) {
-                    collisionsFound = true;
+                    skippedDirty = true;
                 }
             } else {
                 // wait for text based documents to be created
@@ -435,7 +435,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                 // add file to file system
                 if (!this._addFile(uniqueId, doc2)) {
-                    collisionsFound = true;
+                    skippedDirty = true;
                 }
             }
 
@@ -443,7 +443,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._events.emit('asset:create', uniqueId);
 
             // show any path collisions if found
-            if (collisionsFound) {
+            if (skippedDirty) {
                 this._alertCollisions();
             }
         });
