@@ -57,6 +57,10 @@
             {
                 "command": "playcanvas.switchBranch",
                 "title": "PlayCanvas: Switch Branch"
+            },
+            {
+                "command": "playcanvas.showCollidingAssets",
+                "title": "PlayCanvas: Show Colliding Assets"
             }
         ],
         "typescriptServerPlugins": [

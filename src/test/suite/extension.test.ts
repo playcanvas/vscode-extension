@@ -50,6 +50,9 @@ const openFolderStub = sandbox
     .callThrough()
     .withArgs('vscode.openFolder', sandbox.match.any, false);
 
+// stub warning message for collision dialogs
+const warningMessageStub = sandbox.stub(vscode.window, 'showWarningMessage').resolves(undefined);
+
 // spy vscode methods
 const openTextDocumentSpy = sandbox.spy(vscode.workspace, 'openTextDocument');
 
@@ -241,6 +244,75 @@ suite('Extension Test Suite', () => {
         assert.deepStrictEqual(call.args, [other.id], 'branchCheckout args should match');
     });
 
+    test(`command ${NAME}.showCollidingAssets`, async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create first asset
+        const name = 'show_skipped_test.js';
+        const document = `console.log('first file');\n`;
+        const asset1 = await assetCreate({ name, content: document });
+        assert.ok(asset1, 'first asset should be created');
+
+        // add second asset with same name (simulating remote collision)
+        const id = uniqueId.next().value;
+        const document2 = `console.log('second file');\n`;
+        const asset2: Asset = {
+            uniqueId: id,
+            item_id: `${id}`,
+            file: {
+                filename: `${name}.js`,
+                hash: hash(document2)
+            },
+            path: [],
+            name: name,
+            type: 'script'
+        };
+        assets.set(asset2.uniqueId, asset2);
+        documents.set(asset2.uniqueId, document2);
+
+        // create promise for asset processing
+        const assetProcessed = new Promise<void>((resolve) => {
+            setTimeout(resolve, 100);
+        });
+
+        // fire messenger event for second asset
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: asset2.item_id,
+                    name: asset2.name,
+                    type: asset2.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        await assertResolves(assetProcessed, 'asset.new processing');
+
+        // reset quick pick stub
+        quickPickStub.resetHistory();
+
+        // execute showSkippedAssets command
+        await assertResolves(
+            vscode.commands.executeCommand(`${NAME}.showCollidingAssets`),
+            `${NAME}.showCollidingAssets`
+        );
+
+        // check if quick pick was shown
+        assert.ok(quickPickStub.called, 'quick pick should have been shown for skipped assets');
+
+        // verify the quick pick contains collision info
+        const quickPickCall = quickPickStub.getCall(0);
+        const items = (await quickPickCall.args[0]) as vscode.QuickPickItem[];
+        assert.ok(items.length > 0, 'quick pick should have at least one item');
+
+        // check that one of the items is our collided asset
+        const collisionItem = items.find((item) => item.label === name || item.description?.includes(`${id}`));
+        assert.ok(collisionItem, 'quick pick should contain the collided asset');
+    });
+
     test('uri open file', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -278,6 +350,85 @@ suite('Extension Test Suite', () => {
         // check if uri handler was called
         const call = uriHandler.handleUri.getCall(0);
         assert.strictEqual(call.args[0].toString(), externalUri.toString(), 'uri handler args should match');
+    });
+
+    test('uri open collision file shows warning', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create first asset
+        const name = 'uri_collision_test.js';
+        const document = `console.log('first file');\n`;
+        const asset1 = await assetCreate({ name, content: document });
+        assert.ok(asset1, 'first asset should be created');
+
+        // add second asset with same name (simulating remote collision)
+        const id = uniqueId.next().value;
+        const document2 = `console.log('second file');\n`;
+        const asset2: Asset = {
+            uniqueId: id,
+            item_id: `${id}`,
+            file: {
+                filename: `${name}.js`,
+                hash: hash(document2)
+            },
+            path: [],
+            name: name,
+            type: 'script'
+        };
+        assets.set(asset2.uniqueId, asset2);
+        documents.set(asset2.uniqueId, document2);
+
+        // create promise for asset processing
+        const assetProcessed = new Promise<void>((resolve) => {
+            setTimeout(resolve, 100);
+        });
+
+        // fire messenger event for second asset
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: asset2.item_id,
+                    name: asset2.name,
+                    type: asset2.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        await assertResolves(assetProcessed, 'asset.new processing');
+
+        // reset warning message stub and open text document spy
+        warningMessageStub.resetHistory();
+        openTextDocumentSpy.resetHistory();
+
+        // try to open the collided asset via uri handler
+        const externalUri = vscode.Uri.from({
+            scheme: vscode.env.uriScheme,
+            authority: `${PUBLISHER}.${NAME}`,
+            path: `/project/${project.id}/asset/${id}` // use the collided asset's id
+        });
+        await vscode.env.openExternal(externalUri);
+
+        // give time for uri handler to process
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        // check if warning dialog was shown for collision
+        assert.ok(
+            warningMessageStub.called,
+            'warning dialog should have been shown when trying to open collided asset'
+        );
+
+        // verify the warning mentions the collision
+        const warningCall = warningMessageStub.getCall(0);
+        if (warningCall) {
+            const message = warningCall.args[0] as string;
+            assert.ok(
+                message.includes('collision') || message.includes('conflicting') || message.includes('Cannot open'),
+                'warning message should mention collision or conflicting paths'
+            );
+        }
     });
 
     test('file create (remote -> local)', async () => {
@@ -1240,5 +1391,299 @@ suite('Extension Test Suite', () => {
         // check ignored file and folder do not exist as assets
         const ignoredFileAsset = Array.from(assets.values()).find((a) => a.name === 'ignored_file.js');
         assert.strictEqual(ignoredFileAsset, undefined, 'ignored file should not exist as asset');
+    });
+
+    test('file path collision (remote -> local)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create first asset
+        const name = 'collision_test.js';
+        const document = `console.log('first file');\n`;
+        const asset1 = await assetCreate({ name, content: document });
+        assert.ok(asset1, 'first asset should be created');
+
+        // reset warning message stub
+        warningMessageStub.resetHistory();
+
+        // add second asset with same name (simulating remote collision)
+        const id = uniqueId.next().value;
+        const document2 = `console.log('second file');\n`;
+        const asset2: Asset = {
+            uniqueId: id,
+            item_id: `${id}`,
+            file: {
+                filename: `${name}.js`,
+                hash: hash(document2)
+            },
+            path: [],
+            name: name,
+            type: 'script'
+        };
+        assets.set(asset2.uniqueId, asset2);
+        documents.set(asset2.uniqueId, document2);
+
+        // create promise that resolves after asset.new event is processed
+        const assetProcessed = new Promise<void>((resolve) => {
+            // give time for collision detection to complete
+            setTimeout(resolve, 100);
+        });
+
+        // fire messenger event for second asset with same name
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: asset2.item_id,
+                    name: asset2.name,
+                    type: asset2.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        // wait for asset processing
+        await assertResolves(assetProcessed, 'asset.new processing');
+
+        // check if warning dialog was shown
+        assert.ok(warningMessageStub.called, 'warning dialog should have been shown for collision');
+
+        // verify the warning message mentions collision
+        const warningCall = warningMessageStub.getCall(0);
+        assert.ok(warningCall, 'warning message should have been called');
+        const message = warningCall.args[0] as string;
+        assert.ok(
+            message.includes('collision') || message.includes('Skipped'),
+            'warning message should mention collision or skipped'
+        );
+    });
+
+    test('folder collision causes children to be skipped (remote -> local)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create first folder
+        const folderName = 'collision_folder';
+        const watcher = watchFilePromise(folderUri, folderName, 'create');
+
+        // create folder asset via rest
+        await assertResolves(
+            rest.assetCreate(project.id, projectSettings.branch, {
+                type: 'folder',
+                name: folderName,
+                preload: false
+            }),
+            'rest.assetCreate folder'
+        );
+        await assertResolves(watcher, 'watcher.create folder');
+
+        // reset warning message stub
+        warningMessageStub.resetHistory();
+
+        // add second folder with same name (simulating remote collision)
+        const folderId = uniqueId.next().value;
+        const folder2: Asset = {
+            uniqueId: folderId,
+            item_id: `${folderId}`,
+            path: [],
+            name: folderName,
+            type: 'folder'
+        };
+        assets.set(folder2.uniqueId, folder2);
+
+        // create promise for folder processing
+        const folderProcessed = new Promise<void>((resolve) => {
+            setTimeout(resolve, 100);
+        });
+
+        // fire messenger event for second folder with same name
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: folder2.item_id,
+                    name: folder2.name,
+                    type: folder2.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        await assertResolves(folderProcessed, 'folder.new processing');
+
+        // check if warning dialog was shown for folder collision
+        assert.ok(warningMessageStub.called, 'warning dialog should have been shown for folder collision');
+
+        // now add a child file to the collided folder
+        warningMessageStub.resetHistory();
+        const childId = uniqueId.next().value;
+        const childAsset: Asset = {
+            uniqueId: childId,
+            item_id: `${childId}`,
+            file: {
+                filename: 'child.js.js',
+                hash: hash('// child content')
+            },
+            path: [parseInt(folder2.item_id, 10)],
+            name: 'child.js',
+            type: 'script'
+        };
+        assets.set(childAsset.uniqueId, childAsset);
+        documents.set(childAsset.uniqueId, '// child content');
+
+        // create promise for child processing
+        const childProcessed = new Promise<void>((resolve) => {
+            setTimeout(resolve, 100);
+        });
+
+        // fire messenger event for child
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: childAsset.item_id,
+                    name: childAsset.name,
+                    type: childAsset.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        await assertResolves(childProcessed, 'child.new processing');
+
+        // child should also be skipped due to parent collision
+        assert.ok(warningMessageStub.called, 'warning dialog should have been shown for child of collided folder');
+    });
+
+    test('collision on rename (remote -> local)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create two assets with different names
+        const name1 = 'rename_collision_target.js';
+        const name2 = 'rename_collision_source.js';
+        const document1 = `console.log('target file');\n`;
+        const document2 = `console.log('source file');\n`;
+
+        const asset1 = await assetCreate({ name: name1, content: document1 });
+        assert.ok(asset1, 'target asset should be created');
+
+        const asset2 = await assetCreate({ name: name2, content: document2 });
+        assert.ok(asset2, 'source asset should be created');
+
+        // reset warning message stub
+        warningMessageStub.resetHistory();
+
+        // watch for file deletion (source file gets removed when becoming collision)
+        const deleteWatcher = watchFilePromise(folderUri, name2, 'delete');
+
+        // make remote name change to cause collision
+        const doc = sharedb.subscriptions.get(`assets:${asset2.uniqueId}`);
+        assert.ok(doc, 'sharedb asset document should exist');
+        doc.submitOp(
+            [
+                {
+                    p: ['name'],
+                    oi: name1 // rename to same name as asset1
+                }
+            ],
+            { source: 'remote' }
+        );
+
+        // wait for file deletion (collision causes old file to be removed)
+        await assertResolves(deleteWatcher, 'watcher.delete');
+
+        // check if warning dialog was shown
+        assert.ok(warningMessageStub.called, 'warning dialog should have been shown for rename collision');
+    });
+
+    test('collision removed on asset delete', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create first asset
+        const name = 'delete_collision_test.js';
+        const document = `console.log('first file');\n`;
+        const asset1 = await assetCreate({ name, content: document });
+        assert.ok(asset1, 'first asset should be created');
+
+        // add second asset with same name (simulating remote collision)
+        const id = uniqueId.next().value;
+        const document2 = `console.log('second file');\n`;
+        const asset2: Asset = {
+            uniqueId: id,
+            item_id: `${id}`,
+            file: {
+                filename: `${name}.js`,
+                hash: hash(document2)
+            },
+            path: [],
+            name: name,
+            type: 'script'
+        };
+        assets.set(asset2.uniqueId, asset2);
+        documents.set(asset2.uniqueId, document2);
+
+        // create promise for asset processing
+        const assetProcessed = new Promise<void>((resolve) => {
+            setTimeout(resolve, 100);
+        });
+
+        // fire messenger event for second asset (will be collision)
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: asset2.item_id,
+                    name: asset2.name,
+                    type: asset2.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        await assertResolves(assetProcessed, 'asset.new processing');
+
+        // reset warning message stub
+        warningMessageStub.resetHistory();
+
+        // create delete processed promise
+        const deleteProcessed = new Promise<void>((resolve) => {
+            setTimeout(resolve, 100);
+        });
+
+        // fire messenger event for deletion of collided asset
+        messenger.emit('assets.delete', {
+            data: {
+                assets: [asset2.item_id]
+            }
+        });
+
+        await assertResolves(deleteProcessed, 'assets.delete processing');
+
+        // manually clean up the mock assets map to simulate remote state
+        assets.delete(asset2.uniqueId);
+        documents.delete(asset2.uniqueId);
+
+        // reset quick pick stub and check if showSkippedAssets no longer shows this collision
+        quickPickStub.resetHistory();
+
+        // execute showSkippedAssets command - should not show the deleted collision
+        await assertResolves(
+            vscode.commands.executeCommand(`${NAME}.showCollidingAssets`),
+            `${NAME}.showCollidingAssets`
+        );
+
+        // if quick pick was called, verify our deleted collision is not in the list
+        if (quickPickStub.called) {
+            const quickPickCall = quickPickStub.getCall(0);
+            const items = (await quickPickCall.args[0]) as vscode.QuickPickItem[];
+            const deletedCollisionItem = items.find((item) => item.description?.includes(`${id}`));
+            assert.strictEqual(
+                deletedCollisionItem,
+                undefined,
+                'deleted collision should not appear in skipped assets'
+            );
+        }
     });
 });

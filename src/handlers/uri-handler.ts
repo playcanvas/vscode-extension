@@ -67,6 +67,28 @@ class UriHandler
     protected async _openDocument(folderUri: vscode.Uri, projectManager: ProjectManager, open: OpenFile) {
         const { assetId, line, col, error } = open;
 
+        // check if assetId is a collision
+        const collision = projectManager.collisions.find((c) => c.id === assetId);
+        if (collision) {
+            const confirmation = 'Show Colliding Assets';
+            vscode.window
+                .showWarningMessage(
+                    [
+                        `Cannot open ${collision.path} (${assetId}) due to colliding file paths.`,
+                        'Rename or move the colliding assets in the Editor to resolve.'
+                    ].join(' '),
+                    { modal: true },
+                    confirmation
+                )
+                .then((option) => {
+                    if (option !== confirmation) {
+                        return;
+                    }
+                    vscode.commands.executeCommand(`${NAME}.showCollidingAssets`);
+                });
+            return;
+        }
+
         // check if file path exists
         const filePath = projectManager.path(assetId);
         if (!filePath) {

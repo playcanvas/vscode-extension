@@ -376,6 +376,34 @@ export const activate = async (context: vscode.ExtensionContext) => {
         })
     );
 
+    // view collisions
+    context.subscriptions.push(
+        vscode.commands.registerCommand(`${NAME}.showCollidingAssets`, async () => {
+            if (!state.projectId) {
+                return;
+            }
+            const { projectManager } = cache.get(state.projectId) ?? {};
+            if (!projectManager) {
+                return;
+            }
+            if (projectManager.collisions.length === 0) {
+                return;
+            }
+
+            vscode.window.showQuickPick(
+                projectManager.collisions.map((c) => ({
+                    label: c.path,
+                    description: `(${c.id})`
+                })),
+                {
+                    title: 'Assets with colliding file paths',
+                    placeHolder: 'Filter assets',
+                    canPickMany: false
+                }
+            );
+        })
+    );
+
     // load project
     const projects = await rest.userProjects(userId, 'profile');
     const valid: [vscode.WorkspaceFolder, Project][] = (vscode.workspace.workspaceFolders ?? []).reduce(
