@@ -947,6 +947,16 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return this._assetPath(uniqueId);
     }
 
+    loaded(assetId: number) {
+        const uniqueId = this._idUniqueId.getL(assetId);
+        if (!uniqueId) {
+            return false;
+        }
+        const path = this._assetPath(uniqueId);
+        const file = this._files.get(path);
+        return file?.uniqueId === uniqueId;
+    }
+
     collisions() {
         const collisions = new Map<string, number[]>();
         for (const [uniqueId, colliding] of this._skips) {
