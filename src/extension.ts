@@ -399,21 +399,42 @@ export const activate = async (context: vscode.ExtensionContext) => {
             if (!projectManager) {
                 return;
             }
+
             const collisions = projectManager.collisions();
             if (collisions.size === 0) {
                 return;
             }
 
-            const list = Array.from(collisions.entries()).map(([path, ids]) => ({
-                label: path,
-                description: `(${ids.join(', ')})`
-            }));
-
-            vscode.window.showQuickPick(list, {
-                title: 'Asset Path Collisions',
-                placeHolder: 'Filter paths',
-                canPickMany: false
-            });
+            // show warning message
+            const options = ['Show Path Collisions', 'Reload project'];
+            vscode.window
+                .showWarningMessage(
+                    [
+                        `${collisions.size} asset path collision${collisions.size !== 1 ? 's' : ''} found.`,
+                        'Rename or move the colliding assets in the Editor to resolve.'
+                    ].join('\n'),
+                    ...options
+                )
+                .then((option) => {
+                    switch (option) {
+                        case options[0]: {
+                            const list = Array.from(collisions.entries()).map(([path, ids]) => ({
+                                label: path,
+                                description: `(${ids.join(', ')})`
+                            }));
+                            vscode.window.showQuickPick(list, {
+                                title: 'Asset Path Collisions',
+                                placeHolder: 'Filter paths',
+                                canPickMany: false
+                            });
+                            break;
+                        }
+                        case options[1]: {
+                            vscode.commands.executeCommand(`${NAME}.reloadProject`);
+                            break;
+                        }
+                    }
+                });
         })
     );
 
@@ -507,7 +528,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         });
         effect(() => handleError(projectManager.error.get()));
         effect(() => {
-            const count = projectManager.skipped.get();
+            const count = projectManager.collided.get();
             collisionStatusItem.color = count > 0 ? collisionStatusColors.found : collisionStatusColors.none;
             collisionStatusItem.text = `$(${count > 0 ? 'warning' : 'check'}) Path Collisions: ${count}`;
         });
