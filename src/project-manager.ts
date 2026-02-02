@@ -1,7 +1,5 @@
 import type { Doc } from 'sharedb';
-import * as vscode from 'vscode';
 
-import { NAME } from './config';
 import type { Messenger } from './connections/messenger';
 import type { Relay } from './connections/relay';
 import type { Rest } from './connections/rest';
@@ -10,6 +8,7 @@ import { progressNotification } from './notification';
 import type { EventMap } from './typings/event-map';
 import type { Asset } from './typings/models';
 import type { ShareDbOp, ShareDbTextOp } from './typings/sharedb';
+import { Bimap } from './utils/bimap';
 import * as buffer from './utils/buffer';
 import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
@@ -61,9 +60,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _files: Map<string, VirtualFile> = new Map<string, VirtualFile>();
 
-    private _idToUniqueId: Map<number, number> = new Map<number, number>();
+    private _idUniqueId: Bimap<number, number> = new Bimap<number, number>();
 
-    private _skipped: Map<number, boolean> = new Map<number, boolean>();
+    private _collided: Map<number, string> = new Map<number, string>();
+
+    private _collidedByPath: Map<string, Set<number>> = new Map<string, Set<number>>();
+
+    collisions = signal<number>(0);
 
     error = signal<Error | undefined>(undefined);
 
@@ -93,26 +96,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return this._files;
     }
 
-    get collisions() {
-        const list: { path: string; id: number }[] = [];
-        if (this._skipped.size === 0) {
-            return list;
-        }
-        for (const [uniqueId, colliding] of this._skipped) {
-            if (!colliding) {
-                continue;
-            }
-            const asset = this._assets.get(uniqueId);
-            if (!asset) {
-                continue;
-            }
-            const path = this._assetPath(uniqueId);
-            const id = parseInt(asset.item_id, 10);
-            list.push({ path, id });
-        }
-        return list;
-    }
-
     private _assetPath(uniqueId: number, override: { path?: number[]; name?: string } = {}) {
         const asset = this._assets.get(uniqueId);
         if (!asset) {
@@ -125,7 +108,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // NOTE: path can contain duplicate asset ids, so we need to filter them out
         return Array.from(new Set(path))
             .map((id) => {
-                const uniqueId = this._idToUniqueId.get(id);
+                const uniqueId = this._idUniqueId.getL(id);
                 if (!uniqueId) {
                     throw this.error.set(() => new Error(`missing asset id mapping for ${id}`));
                 }
@@ -139,67 +122,88 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             .join('/');
     }
 
-    private _checkCollision(uniqueId: number, override: { path?: number[]; name?: string } = {}) {
-        // check if file path already exists
+    private _addCollision(uniqueId: number, filePath: string) {
+        this._collided.set(uniqueId, filePath);
+        const set = this._collidedByPath.get(filePath) ?? new Set();
+        set.add(uniqueId);
+        this._collidedByPath.set(filePath, set);
+    }
+
+    private _removeCollision(uniqueId: number) {
+        const filePath = this._collided.get(uniqueId);
+        if (!filePath) {
+            return false;
+        }
+        this._collided.delete(uniqueId);
+        const set = this._collidedByPath.get(filePath);
+        if (set) {
+            set.delete(uniqueId);
+            if (set.size === 0) {
+                this._collidedByPath.delete(filePath);
+            }
+        }
+        return true;
+    }
+
+    private _checkForSkip(uniqueId: number, override: { path?: number[]; name?: string } = {}) {
         const filePath = this._assetPath(uniqueId, override);
-        if (this._files.has(filePath)) {
+        const file = this._files.get(filePath);
+
+        // file exists at path - add both to collisions
+        if (file) {
             this._log.warn(`skipping loading asset ${uniqueId} as path already exists: ${filePath}`);
-            this._skipped.set(uniqueId, true);
+            this._addCollision(file.uniqueId, filePath);
+            this._addCollision(uniqueId, filePath);
             return true;
         }
 
-        // check if ancesetor of asset has a collision (not shown in file system)
+        // no file but existing collisions at path - join the collision (O(1) lookup)
+        if (this._collidedByPath.has(filePath)) {
+            this._log.warn(`skipping loading asset ${uniqueId} as path already exists: ${filePath}`);
+            this._addCollision(uniqueId, filePath);
+            return true;
+        }
+
+        // ancestor has a collision - skip without adding to collisions
         const asset = this._assets.get(uniqueId);
-        if (!asset) {
-            throw this.error.set(() => new Error(`missing child asset ${uniqueId}`));
-        }
-        const path = override.path ?? asset.path;
-        if (!path) {
-            throw this.error.set(() => new Error(`missing asset path for ${uniqueId}`));
-        }
-        for (const id of path) {
-            const parentUniqueId = this._idToUniqueId.get(id);
-            if (!parentUniqueId) {
-                throw this.error.set(() => new Error(`missing asset id mapping for ${id}`));
-            }
-            if (this._skipped.has(parentUniqueId)) {
-                this._log.warn(
-                    `skipping loading of asset ${uniqueId} as ancestor asset ${parentUniqueId} has a path collision`
-                );
-                this._skipped.set(uniqueId, false);
-                return true;
+        const assetPath = override.path ?? asset?.path;
+        if (assetPath) {
+            for (const id of assetPath) {
+                const parentUniqueId = this._idUniqueId.getL(id);
+                if (parentUniqueId && this._collided.has(parentUniqueId)) {
+                    this._log.warn(
+                        `skipping loading of asset ${uniqueId} as ancestor asset ${parentUniqueId} has a path collision`
+                    );
+                    return true;
+                }
             }
         }
 
         return false;
     }
 
-    private _alertCollisions() {
-        if (this._skipped.size === 0) {
-            return;
+    private _updateCollisions() {
+        // count assets per path
+        const counts = new Map<string, number>();
+        for (const path of this._collided.values()) {
+            counts.set(path, (counts.get(path) ?? 0) + 1);
         }
-        const count = this._skipped.size;
-        const options = [`Show Colliding Asset${count !== 1 ? 's' : ''}`, 'Reload project'];
-        vscode.window
-            .showWarningMessage(
-                [
-                    `Skipped loading ${count} asset${count !== 1 ? 's' : ''} due to path collisions.`,
-                    'Rename or move the colliding assets in the Editor to resolve.'
-                ].join('\n'),
-                ...options
-            )
-            .then((option) => {
-                switch (option) {
-                    case options[0]: {
-                        vscode.commands.executeCommand(`${NAME}.showCollidingAssets`);
-                        break;
-                    }
-                    case options[1]: {
-                        vscode.commands.executeCommand(`${NAME}.reloadProject`);
-                        break;
-                    }
-                }
-            });
+
+        // collect entries to remove (path has < 2 assets, no longer a collision)
+        const remove: number[] = [];
+        for (const [uniqueId, path] of this._collided) {
+            if ((counts.get(path) ?? 0) < 2) {
+                remove.push(uniqueId);
+            }
+        }
+
+        // remove after iteration to avoid modifying map during iteration
+        for (const uniqueId of remove) {
+            this._removeCollision(uniqueId);
+        }
+
+        // update signal
+        this.collisions.set(() => this._collidedByPath.size);
     }
 
     private _addAsset(uniqueId: number, doc: Doc) {
@@ -214,7 +218,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // store id to uniqueId mapping
         const id = parseInt(snapshot.item_id, 10);
-        this._idToUniqueId.set(id, uniqueId);
+        this._idUniqueId.set(id, uniqueId);
 
         // subscribe to asset document
         doc.on('op', (op: ShareDbOp[], source: string) => {
@@ -274,7 +278,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = this._assetPath(uniqueId);
 
         // check for file path collision
-        if (this._checkCollision(uniqueId)) {
+        if (this._checkForSkip(uniqueId)) {
             return false;
         }
 
@@ -323,7 +327,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = this._assetPath(uniqueId);
 
         // check for file path collision
-        if (this._checkCollision(uniqueId)) {
+        if (this._checkForSkip(uniqueId)) {
             return false;
         }
 
@@ -399,13 +403,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // add asset
             this._addAsset(uniqueId, doc1);
 
-            let skippedDirty = false;
+            let skipsDirty = false;
 
             // handle folders
             if (asset.type === 'folder') {
                 // add folder to file system
                 if (!this._addFolder(uniqueId)) {
-                    skippedDirty = true;
+                    skipsDirty = true;
                 }
             } else {
                 // wait for text based documents to be created
@@ -435,7 +439,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                 // add file to file system
                 if (!this._addFile(uniqueId, doc2)) {
-                    skippedDirty = true;
+                    skipsDirty = true;
                 }
             }
 
@@ -443,8 +447,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._events.emit('asset:create', uniqueId);
 
             // show any path collisions if found
-            if (skippedDirty) {
-                this._alertCollisions();
+            if (skipsDirty) {
+                this._updateCollisions();
             }
         });
         const assetDeleteHandle = this._messenger.on('assets.delete', async ({ data: { assets } }) => {
@@ -476,7 +480,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 [] as [number, string, Asset][]
             );
 
-            let skippedDirty = false;
+            let skipsDirty = false;
 
             // prepare subscriptions
             const subscriptions: [string, string][] = [];
@@ -484,9 +488,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 const file = this._files.get(path);
                 if (file?.uniqueId === uniqueId) {
                     this._files.delete(path);
-                } else {
-                    this._skipped.delete(uniqueId);
-                    skippedDirty = true;
+                }
+
+                // check if collisions updated
+                if (this._removeCollision(uniqueId)) {
+                    skipsDirty = true;
                 }
 
                 // emit a change event to update on disk
@@ -497,7 +503,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                 // remove from id mapping
                 const id = parseInt(asset.item_id, 10);
-                this._idToUniqueId.delete(id);
+                this._idUniqueId.delete(id, uniqueId);
 
                 // prepare asset unsubscribe
                 subscriptions.push(['assets', `${uniqueId}`]);
@@ -514,9 +520,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // unsubscribe from ShareDB documents in bulk
             await this._sharedb.bulkUnsubscribe(subscriptions);
 
-            // show collisions if dirty
-            if (skippedDirty) {
-                this._alertCollisions();
+            // update collisions if any were modified
+            if (skipsDirty) {
+                this._updateCollisions();
             }
         });
         return () => {
@@ -542,34 +548,35 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     const from = this._assetPath(uniqueId, { [key]: before });
                     const to = this._assetPath(uniqueId, { [key]: after });
 
-                    let skippedDirty = false;
+                    let skipsDirty = false;
 
-                    // check if old path is a collision
-                    if (this._checkCollision(uniqueId, { [key]: before })) {
-                        skippedDirty = true;
-                    }
+                    // check if new path will be a collision
+                    if (this._checkForSkip(uniqueId, { [key]: after })) {
+                        skipsDirty = true;
 
-                    // check if new path is a collision
-                    if (this._checkCollision(uniqueId, { [key]: after })) {
-                        skippedDirty = true;
-
-                        // remove old file/folder from memory
-                        this._files.delete(from);
-
-                        // emit delete event for old path
-                        this._events.emit('asset:file:delete', from);
-
-                        // show collisions if dirty
-                        if (skippedDirty) {
-                            this._alertCollisions();
+                        // collect paths to remove (don't modify map during iteration)
+                        // note: children are not added to collisions - they are implicitly
+                        // inaccessible because their parent is colliding. when the parent
+                        // collision resolves, children will be reloaded via project reload.
+                        const remove: string[] = [];
+                        for (const [path] of this._files) {
+                            if (path === from || path.startsWith(from + '/')) {
+                                remove.push(path);
+                            }
                         }
+                        for (const path of remove) {
+                            this._files.delete(path);
+                            this._events.emit('asset:file:delete', path);
+                        }
+
+                        this._updateCollisions();
                         break;
                     }
 
                     // find all files that need updating
                     const update: [string, VirtualFile][] = [];
                     for (const [path, file] of this._files) {
-                        if (path.startsWith(from)) {
+                        if (path === from || path.startsWith(from + '/')) {
                             update.push([path, file]);
                         }
                     }
@@ -577,9 +584,19 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     // update all files in memory
                     for (const [path, file] of update) {
                         const oldPath = path;
-                        const newPath = path.replace(from, to);
+                        const newPath = to + path.slice(from.length);
                         this._files.delete(oldPath);
                         this._files.set(newPath, file);
+
+                        // check if collisions updated
+                        if (this._removeCollision(file.uniqueId)) {
+                            skipsDirty = true;
+                        }
+                    }
+
+                    // check if collisions updated
+                    if (this._removeCollision(uniqueId)) {
+                        skipsDirty = true;
                     }
 
                     // emit rename event
@@ -587,8 +604,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     this._events.emit('asset:file:rename', from, to);
 
                     // show collisions if dirty
-                    if (skippedDirty) {
-                        this._alertCollisions();
+                    if (skipsDirty) {
+                        this._updateCollisions();
                     }
                     break;
                 }
@@ -937,16 +954,36 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     path(assetId: number) {
-        const uniqueId = this._idToUniqueId.get(assetId);
+        const uniqueId = this._idUniqueId.getL(assetId);
         if (!uniqueId) {
             return undefined;
         }
-        for (const [path, file] of this._files) {
-            if (file.uniqueId === uniqueId) {
-                return path;
-            }
+        return this._assetPath(uniqueId);
+    }
+
+    loaded(assetId: number) {
+        const uniqueId = this._idUniqueId.getL(assetId);
+        if (!uniqueId) {
+            return false;
         }
-        return undefined;
+        const path = this._assetPath(uniqueId);
+        const file = this._files.get(path);
+        return file?.uniqueId === uniqueId;
+    }
+
+    collided() {
+        const result = new Map<string, number[]>();
+        for (const [uniqueId, path] of this._collided) {
+            const id = this._idUniqueId.getR(uniqueId);
+            if (!id) {
+                // Asset was deleted but collision not cleaned - skip gracefully
+                continue;
+            }
+            const array = result.get(path) ?? [];
+            array.push(id);
+            result.set(path, array);
+        }
+        return result;
     }
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
@@ -1031,12 +1068,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         files.sort(sortByPathDepth);
 
         const loadFileNext = await progressNotification('Loading Files', folders.length + files.length);
-        let skippedDirty = false;
+        let skipsDirty = false;
 
         // add all folders first
         for (const asset of folders) {
             if (!this._addFolder(asset.uniqueId)) {
-                skippedDirty = true;
+                skipsDirty = true;
             }
             loadFileNext();
         }
@@ -1060,15 +1097,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                 // add file to file system
                 if (!this._addFile(uniqueId, doc)) {
-                    skippedDirty = true;
+                    skipsDirty = true;
                 }
                 loadFileNext();
             }
         }
 
         // show collisions if dirty
-        if (skippedDirty) {
-            this._alertCollisions();
+        if (skipsDirty) {
+            this._updateCollisions();
         }
 
         // watchers
@@ -1088,8 +1125,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             this._files.clear();
             this._assets.clear();
-            this._idToUniqueId.clear();
-            this._skipped.clear();
+            this._idUniqueId.clear();
+            this._collided.clear();
+            this._collidedByPath.clear();
 
             this._projectId = undefined;
             this._branchId = undefined;

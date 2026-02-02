@@ -59,8 +59,8 @@
                 "title": "PlayCanvas: Switch Branch"
             },
             {
-                "command": "playcanvas.showCollidingAssets",
-                "title": "PlayCanvas: Show Colliding Assets"
+                "command": "playcanvas.showPathCollisions",
+                "title": "PlayCanvas: Show Path Collisions"
             }
         ],
         "typescriptServerPlugins": [

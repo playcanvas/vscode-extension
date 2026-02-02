@@ -190,6 +190,19 @@ export const activate = async (context: vscode.ExtensionContext) => {
         connectionStatusItem.text = `$(primitive-dot) ${enabled ? 'Connected' : 'Disconnected'}`;
     });
 
+    // collision status bar item
+    const collisionStatusColors = {
+        none: '',
+        found: '#e67e22'
+    };
+    const collisionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -9999);
+    context.subscriptions.push(collisionStatusItem);
+    collisionStatusItem.color = collisionStatusColors.none;
+    collisionStatusItem.command = `${NAME}.showPathCollisions`;
+    collisionStatusItem.text = `$(check) Path Collisions: 0`;
+    collisionStatusItem.tooltip = 'PlayCanvas Asset Path Collisions';
+    collisionStatusItem.show();
+
     // branch status bar item
     const branchStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10001);
     context.subscriptions.push(branchStatusBarItem);
@@ -378,7 +391,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // view collisions
     context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.showCollidingAssets`, async () => {
+        vscode.commands.registerCommand(`${NAME}.showPathCollisions`, async () => {
             if (!state.projectId) {
                 return;
             }
@@ -386,21 +399,42 @@ export const activate = async (context: vscode.ExtensionContext) => {
             if (!projectManager) {
                 return;
             }
-            if (projectManager.collisions.length === 0) {
+
+            const collisions = projectManager.collided();
+            if (collisions.size === 0) {
                 return;
             }
 
-            vscode.window.showQuickPick(
-                projectManager.collisions.map((c) => ({
-                    label: c.path,
-                    description: `(${c.id})`
-                })),
-                {
-                    title: 'Assets with colliding file paths',
-                    placeHolder: 'Filter assets',
-                    canPickMany: false
-                }
-            );
+            // show warning message
+            const options = ['Show Path Collisions', 'Reload project'];
+            vscode.window
+                .showWarningMessage(
+                    [
+                        `${collisions.size} asset path collision${collisions.size !== 1 ? 's' : ''} found.`,
+                        'Rename or move the colliding assets in the Editor to resolve.'
+                    ].join('\n'),
+                    ...options
+                )
+                .then((option) => {
+                    switch (option) {
+                        case options[0]: {
+                            const list = Array.from(collisions.entries()).map(([path, ids]) => ({
+                                label: path,
+                                description: `(${ids.join(', ')})`
+                            }));
+                            vscode.window.showQuickPick(list, {
+                                title: 'Asset Path Collisions',
+                                placeHolder: 'Filter paths',
+                                canPickMany: false
+                            });
+                            break;
+                        }
+                        case options[1]: {
+                            vscode.commands.executeCommand(`${NAME}.reloadProject`);
+                            break;
+                        }
+                    }
+                });
         })
     );
 
@@ -493,6 +527,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
             rest
         });
         effect(() => handleError(projectManager.error.get()));
+        effect(() => {
+            const count = projectManager.collisions.get();
+            collisionStatusItem.color = count > 0 ? collisionStatusColors.found : collisionStatusColors.none;
+            collisionStatusItem.text = `$(${count > 0 ? 'warning' : 'check'}) Path Collisions: ${count}`;
+        });
         await projectManager.link({
             projectId: project.id,
             branchId: branchId
