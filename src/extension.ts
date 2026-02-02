@@ -400,7 +400,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 return;
             }
 
-            const collisions = projectManager.collisions();
+            const collisions = projectManager.collided();
             if (collisions.size === 0) {
                 return;
             }
@@ -528,7 +528,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         });
         effect(() => handleError(projectManager.error.get()));
         effect(() => {
-            const count = projectManager.collided.get();
+            const count = projectManager.collisions.get();
             collisionStatusItem.color = count > 0 ? collisionStatusColors.found : collisionStatusColors.none;
             collisionStatusItem.text = `$(${count > 0 ? 'warning' : 'check'}) Path Collisions: ${count}`;
         });
