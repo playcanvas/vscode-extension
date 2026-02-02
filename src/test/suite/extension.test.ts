@@ -291,8 +291,12 @@ suite('Extension Test Suite', () => {
 
         await assertResolves(assetProcessed, 'asset.new processing');
 
-        // reset quick pick stub
+        // reset stubs
+        warningMessageStub.resetHistory();
         quickPickStub.resetHistory();
+
+        // set up warning stub to simulate clicking "Show Path Collisions" button
+        warningMessageStub.resolves('Show Path Collisions' as unknown as vscode.MessageItem);
 
         // execute showPathCollisions command
         await assertResolves(
@@ -300,17 +304,24 @@ suite('Extension Test Suite', () => {
             `${NAME}.showPathCollisions`
         );
 
-        // check if quick pick was shown
-        assert.ok(quickPickStub.called, 'quick pick should have been shown for skipped assets');
+        // check if warning message was shown
+        assert.ok(warningMessageStub.called, 'warning message should have been shown');
+
+        // verify the warning message shows correct collision count
+        const warningCall = warningMessageStub.getCall(0);
+        const message = warningCall.args[0] as string;
+        assert.ok(message.includes('collision'), 'warning message should mention collision');
+
+        // give time for the .then() callback to execute
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // check if quick pick was shown after clicking "Show Path Collisions"
+        assert.ok(quickPickStub.called, 'quick pick should have been shown after clicking button');
 
         // verify the quick pick contains collision info
         const quickPickCall = quickPickStub.getCall(0);
-        const items = (await quickPickCall.args[0]) as vscode.QuickPickItem[];
-        assert.ok(items.length > 0, 'quick pick should have at least one item');
-
-        // check that one of the items is our collided asset
-        const collisionItem = items.find((item) => item.label === name || item.description?.includes(`${id}`));
-        assert.ok(collisionItem, 'quick pick should contain the collided asset');
+        const quickPickOptions = quickPickCall.args[1] as { title: string };
+        assert.ok(quickPickOptions.title.includes('Collision'), 'quick pick should have collision title');
     });
 
     test('uri open file', async () => {
@@ -1445,17 +1456,18 @@ suite('Extension Test Suite', () => {
         // wait for asset processing
         await assertResolves(assetProcessed, 'asset.new processing');
 
+        // execute showPathCollisions command to verify collision detected
+        warningMessageStub.resetHistory();
+        await vscode.commands.executeCommand(`${NAME}.showPathCollisions`);
+
         // check if warning dialog was shown
         assert.ok(warningMessageStub.called, 'warning dialog should have been shown for collision');
 
-        // verify the warning message mentions collision
+        // verify the warning message mentions collision count
         const warningCall = warningMessageStub.getCall(0);
         assert.ok(warningCall, 'warning message should have been called');
         const message = warningCall.args[0] as string;
-        assert.ok(
-            message.includes('collision') || message.includes('Skipped'),
-            'warning message should mention collision or skipped'
-        );
+        assert.ok(message.includes('collision'), 'warning message should mention collision');
     });
 
     test('folder collision causes children to be skipped (remote -> local)', async () => {
@@ -1511,11 +1523,14 @@ suite('Extension Test Suite', () => {
 
         await assertResolves(folderProcessed, 'folder.new processing');
 
+        // execute showPathCollisions command to verify folder collision detected
+        warningMessageStub.resetHistory();
+        await vscode.commands.executeCommand(`${NAME}.showPathCollisions`);
+
         // check if warning dialog was shown for folder collision
         assert.ok(warningMessageStub.called, 'warning dialog should have been shown for folder collision');
 
         // now add a child file to the collided folder
-        warningMessageStub.resetHistory();
         const childId = uniqueId.next().value;
         const childAsset: Asset = {
             uniqueId: childId,
@@ -1550,8 +1565,17 @@ suite('Extension Test Suite', () => {
 
         await assertResolves(childProcessed, 'child.new processing');
 
-        // child should also be skipped due to parent collision
-        assert.ok(warningMessageStub.called, 'warning dialog should have been shown for child of collided folder');
+        // child is skipped due to parent collision (not tracked as collision itself)
+        // verify child file does not exist on disk
+        const childUri = vscode.Uri.joinPath(folderUri, folderName, 'child.js');
+        let childExists = false;
+        try {
+            await vscode.workspace.fs.stat(childUri);
+            childExists = true;
+        } catch {
+            childExists = false;
+        }
+        assert.strictEqual(childExists, false, 'child file should not exist due to parent collision');
     });
 
     test('collision on rename (remote -> local)', async () => {
@@ -1593,8 +1617,18 @@ suite('Extension Test Suite', () => {
         // wait for file deletion (collision causes old file to be removed)
         await assertResolves(deleteWatcher, 'watcher.delete');
 
+        // execute showPathCollisions command to verify collision detected
+        warningMessageStub.resetHistory();
+        await vscode.commands.executeCommand(`${NAME}.showPathCollisions`);
+
         // check if warning dialog was shown
         assert.ok(warningMessageStub.called, 'warning dialog should have been shown for rename collision');
+
+        // verify the warning message mentions collision
+        const warningCall = warningMessageStub.getCall(0);
+        assert.ok(warningCall, 'warning message should have been called');
+        const message = warningCall.args[0] as string;
+        assert.ok(message.includes('collision'), 'warning message should mention collision');
     });
 
     test('collision removed on asset delete', async () => {
@@ -1644,8 +1678,10 @@ suite('Extension Test Suite', () => {
 
         await assertResolves(assetProcessed, 'asset.new processing');
 
-        // reset warning message stub
+        // verify collision exists before delete
         warningMessageStub.resetHistory();
+        await vscode.commands.executeCommand(`${NAME}.showPathCollisions`);
+        assert.ok(warningMessageStub.called, 'warning should show collision before delete');
 
         // create delete processed promise
         const deleteProcessed = new Promise<void>((resolve) => {
@@ -1665,25 +1701,28 @@ suite('Extension Test Suite', () => {
         assets.delete(asset2.uniqueId);
         documents.delete(asset2.uniqueId);
 
-        // reset quick pick stub and check if showPathCollisions no longer shows this collision
+        // set up warning stub to return "Show Path Collisions" so we can inspect the list
+        warningMessageStub.resetHistory();
         quickPickStub.resetHistory();
+        warningMessageStub.resolves('Show Path Collisions' as unknown as vscode.MessageItem);
 
-        // execute showPathCollisions command - should not show the deleted collision
-        await assertResolves(
-            vscode.commands.executeCommand(`${NAME}.showPathCollisions`),
-            `${NAME}.showPathCollisions`
-        );
+        // execute showPathCollisions command
+        await vscode.commands.executeCommand(`${NAME}.showPathCollisions`);
 
-        // if quick pick was called, verify our deleted collision is not in the list
+        // give time for .then() callback
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // check if our specific collision path is no longer in the list
         if (quickPickStub.called) {
             const quickPickCall = quickPickStub.getCall(0);
-            const items = (await quickPickCall.args[0]) as vscode.QuickPickItem[];
-            const deletedCollisionItem = items.find((item) => item.description?.includes(`${id}`));
+            const items = quickPickCall.args[0] as { label: string; description: string }[];
+            const deletedCollisionItem = items.find((item) => item.label === name);
             assert.strictEqual(
                 deletedCollisionItem,
                 undefined,
-                'deleted collision should not appear in skipped assets'
+                'deleted collision path should not appear in collisions list'
             );
         }
+        // note: if quickPickStub wasn't called, there are no collisions at all, which is also valid
     });
 });

@@ -189,11 +189,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             counts.set(path, (counts.get(path) ?? 0) + 1);
         }
 
-        // remove entries where path has < 2 assets (no longer a collision)
+        // collect entries to remove (path has < 2 assets, no longer a collision)
+        const remove: number[] = [];
         for (const [uniqueId, path] of this._collided) {
             if ((counts.get(path) ?? 0) < 2) {
-                this._removeCollision(uniqueId);
+                remove.push(uniqueId);
             }
+        }
+
+        // remove after iteration to avoid modifying map during iteration
+        for (const uniqueId of remove) {
+            this._removeCollision(uniqueId);
         }
 
         // update signal
@@ -514,7 +520,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // unsubscribe from ShareDB documents in bulk
             await this._sharedb.bulkUnsubscribe(subscriptions);
 
-            // show collisions if dirty
+            // update collisions if any were modified
             if (skipsDirty) {
                 this._updateCollisions();
             }
