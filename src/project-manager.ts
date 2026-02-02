@@ -554,15 +554,19 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     if (this._checkForSkip(uniqueId, { [key]: after })) {
                         skipsDirty = true;
 
-                        // remove old file/folder and children from memory
+                        // collect paths to remove (don't modify map during iteration)
                         // note: children are not added to collisions - they are implicitly
                         // inaccessible because their parent is colliding. when the parent
                         // collision resolves, children will be reloaded via project reload.
+                        const remove: string[] = [];
                         for (const [path] of this._files) {
                             if (path === from || path.startsWith(from + '/')) {
-                                this._files.delete(path);
-                                this._events.emit('asset:file:delete', path);
+                                remove.push(path);
                             }
+                        }
+                        for (const path of remove) {
+                            this._files.delete(path);
+                            this._events.emit('asset:file:delete', path);
                         }
 
                         this._updateCollisions();
