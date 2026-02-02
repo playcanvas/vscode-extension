@@ -1,0 +1,41 @@
+---
+description: Core coding standards for PlayCanvas VS Code Extension
+alwaysApply: true
+---
+
+# Coding Standards
+
+## Minimal Changes
+- keep changes compact, modify only what's necessary
+- avoid refactoring unrelated code
+
+## Code Reuse
+- check `src/utils/` before creating new utilities
+- reuse: `signal()`, `guard()`, `tryCatch()`, `hash()`, `Linker<T>`
+- check `src/config.ts` for constants before hardcoding
+
+## Variable Naming
+- short, direct names: `doc`, `uri`, `path`, `file`, `op`
+- private members: `_` prefix (e.g., `_files`, `_log`)
+- constants: `UPPER_SNAKE_CASE`
+
+## Speed Over Complexity
+- prioritize performance, use early returns
+- use `Map`/`Set` for O(1) lookups
+- add brief comments explaining non-obvious logic
+
+## Comments
+- all comments lowercase
+- use markers: `// note:`, `// fixme:`, `// todo:`
+- keep brief, same line when possible
+
+```typescript
+// good
+const doc = this._sharedb.get(id);
+const [err, data] = await tryCatch(fetchData());
+// note: filter duplicates from path array
+
+// bad
+const shareDbDocument = this._shareDbConnection.getDocument(assetId);
+// This is a comment that should be lowercase
+```
