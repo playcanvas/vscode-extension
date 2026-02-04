@@ -105,21 +105,24 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = override.path ?? asset.path;
         const name = override.name ?? asset.name;
 
-        // NOTE: path can contain duplicate asset ids, so we need to filter them out
-        return Array.from(new Set(path))
-            .map((id) => {
-                const uniqueId = this._idUniqueId.getL(id);
-                if (!uniqueId) {
-                    throw this.error.set(() => new Error(`missing asset id mapping for ${id}`));
-                }
-                const asset = this._assets.get(uniqueId);
-                if (!asset) {
-                    throw this.error.set(() => new Error(`missing asset ${uniqueId}`));
-                }
-                return asset.name;
-            })
-            .concat(name)
-            .join('/');
+        // build full path by recursively following parent chain
+        const segments: string[] = [name];
+        let parent = path[path.length - 1];
+        while (parent) {
+            const parentUniqueId = this._idUniqueId.getL(parent);
+            if (!parentUniqueId) {
+                throw this.error.set(() => new Error(`missing parent asset id mapping for ${parent}`));
+            }
+            const parentAsset = this._assets.get(parentUniqueId);
+            if (!parentAsset) {
+                throw this.error.set(() => new Error(`missing parent asset ${parentUniqueId}`));
+            }
+            segments.unshift(parentAsset.name);
+
+            const parentPath = parentAsset.path ?? [];
+            parent = parentPath[parentPath.length - 1];
+        }
+        return segments.join('/');
     }
 
     private _addCollision(uniqueId: number, filePath: string) {
@@ -165,17 +168,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // ancestor has a collision - skip without adding to collisions
-        const asset = this._assets.get(uniqueId);
-        const assetPath = override.path ?? asset?.path;
-        if (assetPath) {
-            for (const id of assetPath) {
-                const parentUniqueId = this._idUniqueId.getL(id);
-                if (parentUniqueId && this._collided.has(parentUniqueId)) {
-                    this._log.warn(
-                        `skipping loading of asset ${uniqueId} as ancestor asset ${parentUniqueId} has a path collision`
-                    );
-                    return true;
-                }
+        // note: check if any collided path is a prefix of this asset's path
+        for (const collidedPath of this._collidedByPath.keys()) {
+            if (filePath.startsWith(collidedPath + '/')) {
+                this._log.warn(
+                    `skipping loading of asset ${uniqueId} as ancestor path ${collidedPath} has a collision`
+                );
+                return true;
             }
         }
 
@@ -1059,10 +1058,19 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // sort folders and files by path depth (parents before children)
         // this ensures parent collisions are detected before processing children
+        // note: use _assetPath to get true depth since path arrays can be corrupted
+        const depthCache = new Map<number, number>();
+        const getDepth = (uniqueId: number): number => {
+            if (depthCache.has(uniqueId)) {
+                return depthCache.get(uniqueId)!;
+            }
+            const path = this._assetPath(uniqueId);
+            const depth = (path.match(/\//g) || []).length;
+            depthCache.set(uniqueId, depth);
+            return depth;
+        };
         const sortByPathDepth = (a: (typeof ordered)[0], b: (typeof ordered)[0]) => {
-            const pathA = (a.data.path as number[] | undefined) ?? [];
-            const pathB = (b.data.path as number[] | undefined) ?? [];
-            return pathA.length - pathB.length;
+            return getDepth(a.uniqueId) - getDepth(b.uniqueId);
         };
         folders.sort(sortByPathDepth);
         files.sort(sortByPathDepth);
