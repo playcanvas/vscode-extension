@@ -170,7 +170,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // ancestor has a collision - skip without adding to collisions
         // note: check if any collided path is a prefix of this asset's path
         for (const collidedPath of this._collidedByPath.keys()) {
-            if (filePath.startsWith(collidedPath + '/')) {
+            if (filePath.startsWith(`${collidedPath}/`)) {
                 this._log.warn(
                     `skipping loading of asset ${uniqueId} as ancestor path ${collidedPath} has a collision`
                 );
