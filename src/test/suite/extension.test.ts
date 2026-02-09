@@ -955,8 +955,7 @@ suite('Extension Test Suite', () => {
         // create update promise
         const newContent = `// CLOSED LOCAL TEST COMMENT\n${document}`;
         const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [0, { d: document.length }], // delete existing content
-            [0, newContent] // add new content
+            [3, 'CLOSED LOCAL TEST COMMENT\n// '] // minimal diff insert at offset 3 (after common prefix "// ")
         ]);
 
         // make local change by writing to the file directly
