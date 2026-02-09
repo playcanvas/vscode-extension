@@ -628,8 +628,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         return;
                     }
 
-                    // mark as clean (sharedb content now synced with S3)
-                    file.dirty = false;
+                    // note: only mark clean if local content matches the saved hash,
+                    // otherwise local unsaved changes would be silently discarded
+                    const localHash = hash(file.doc.data);
+                    if (fileTo?.hash === localHash) {
+                        file.dirty = false;
+                    }
 
                     // add events for VS Code to clear dirty indicator
                     this._events.emit('asset:file:save', this._assetPath(uniqueId));
@@ -918,15 +922,42 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
-        // overwrite entire document content
-        // vscode -> shareDB
-        // FIXME: optimize to use ops instead of full replace
-        file.doc.submitOp([0, { d: file.doc.data.length }], {
-            source: ShareDb.SOURCE
-        });
-        file.doc.submitOp([0, buffer.toString(content)], {
-            source: ShareDb.SOURCE
-        });
+        // compute minimal diff and submit as single atomic op
+        // note: avoids two-step delete+insert which can lose concurrent remote edits
+        const oldText = file.doc.data as string;
+        const newText = buffer.toString(content);
+
+        if (oldText === newText) {
+            return;
+        }
+
+        // find common prefix
+        const minLen = Math.min(oldText.length, newText.length);
+        let prefix = 0;
+        while (prefix < minLen && oldText[prefix] === newText[prefix]) {
+            prefix++;
+        }
+
+        // find common suffix (avoid overlapping with prefix)
+        let suffix = 0;
+        while (
+            suffix < minLen - prefix &&
+            oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]
+        ) {
+            suffix++;
+        }
+
+        const delLen = oldText.length - prefix - suffix;
+        const insText = newText.substring(prefix, newText.length - suffix);
+
+        // submit single atomic op
+        if (delLen > 0 && insText.length > 0) {
+            file.doc.submitOp([prefix, insText, { d: delLen }], { source: ShareDb.SOURCE });
+        } else if (delLen > 0) {
+            file.doc.submitOp([prefix, { d: delLen }], { source: ShareDb.SOURCE });
+        } else if (insText.length > 0) {
+            file.doc.submitOp([prefix, insText], { source: ShareDb.SOURCE });
+        }
 
         // mark as dirty (ops submitted that aren't saved yet)
         file.dirty = true;
