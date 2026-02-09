@@ -56,20 +56,35 @@ export const parsePath = (path: string) => {
 
 export const vscode2sharedb = (changes: readonly vscode.TextDocumentContentChangeEvent[]) => {
     const list: [ShareDbTextOp, { source: string }][] = [];
+
+    // note: all contentChanges reference the original doc state, but submitOp
+    // mutates doc.data after each call, so we adjust subsequent offsets based
+    // on the net effect of previously processed changes.
+    const effects: { origOffset: number; deleteLen: number; delta: number }[] = [];
+
     for (const change of changes) {
-        const offset = change.rangeOffset;
-        const length = change.rangeLength;
+        const origOffset = change.rangeOffset;
+        const deleteLen = change.rangeLength;
         const text = change.text;
 
-        // delete
-        if (!change.range.isEmpty) {
-            list.push([[offset, { d: length }], { source: ShareDb.SOURCE }]);
+        // adjust offset based on previously processed changes
+        let adjusted = origOffset;
+        for (const e of effects) {
+            if (origOffset >= e.origOffset + e.deleteLen) {
+                adjusted += e.delta;
+            }
         }
 
-        // insert
-        if (text.length > 0) {
-            list.push([[offset, text], { source: ShareDb.SOURCE }]);
+        // atomic replace, delete, or insert
+        if (deleteLen > 0 && text.length > 0) {
+            list.push([[adjusted, text, { d: deleteLen }], { source: ShareDb.SOURCE }]);
+        } else if (deleteLen > 0) {
+            list.push([[adjusted, { d: deleteLen }], { source: ShareDb.SOURCE }]);
+        } else if (text.length > 0) {
+            list.push([[adjusted, text], { source: ShareDb.SOURCE }]);
         }
+
+        effects.push({ origOffset, deleteLen, delta: text.length - deleteLen });
     }
     return list;
 };
