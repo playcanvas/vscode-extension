@@ -15,8 +15,8 @@ import { signal } from './utils/signal';
 import {
     parsePath,
     sharedb2vscode,
-    relativePath,
     vscode2sharedb,
+    relativePath,
     uriStartsWith,
     fileExists,
     tryCatch,
@@ -152,6 +152,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _sync(uri: vscode.Uri, content: Uint8Array) {
         this._debouncer.debounce(`${uri}`, async () => {
+            // note: set echo hash at write time so it matches the actual
+            // file content, not a future debounced write
             this._echo.set(`${uri}:change`, hash(content));
             await vscode.workspace.fs.writeFile(uri, content);
         });
@@ -225,6 +227,19 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._locks.add(`${uri}`);
                 await vscode.workspace.applyEdit(workspaceEdit);
                 this._locks.delete(`${uri}`);
+
+                // reconcile any keystrokes dropped during lock
+                if (this._projectManager && this._folderUri) {
+                    const currentText = document.getText();
+                    const path = relativePath(uri, this._folderUri);
+                    const file = this._projectManager.files.get(path);
+                    if (file?.type === 'file' && file.doc.data !== currentText) {
+                        this._projectManager.write(path, buffer.from(currentText));
+                        this._sync(uri, buffer.from(currentText));
+                        this._log.debug(`reconcile.remote ${uri}`);
+                        return;
+                    }
+                }
             }
 
             // sync to disk (debounced)
@@ -449,7 +464,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // sync to disk (debounced)
             this._sync(document.uri, buffer.from(text));
 
-            // mark as dirty if any ops received (any unsaved changes)
+            // mark as dirty if any ops submitted (any unsaved changes)
             file.dirty ||= !!opOptions.length;
 
             this._log.debug(`document.change ${document.uri.path}`);
