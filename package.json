@@ -117,7 +117,7 @@
         "eslint-plugin-prettier": "^5.5.4",
         "globals": "^17.0.0",
         "jsonc-eslint-parser": "^2.4.2",
-        "playcanvas": "2.14.4",
+        "playcanvas": "2.16.1",
         "prettier": "^3.7.4",
         "rollup": "^4.55.1",
         "rollup-plugin-polyfill-node": "^0.13.0",
