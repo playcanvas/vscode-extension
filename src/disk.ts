@@ -151,10 +151,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _sync(uri: vscode.Uri, content: Uint8Array) {
-        // note: set echo hash synchronously to prevent disk watcher from
-        // treating the upcoming write as a local change (feedback loop)
-        this._echo.set(`${uri}:change`, hash(content));
         this._debouncer.debounce(`${uri}`, async () => {
+            // note: set echo hash at write time so it matches the actual
+            // file content, not a future debounced write
+            this._echo.set(`${uri}:change`, hash(content));
             await vscode.workspace.fs.writeFile(uri, content);
         });
     }
