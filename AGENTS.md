@@ -53,6 +53,8 @@ Local:  VS Code → Disk → ProjectManager → ShareDB
 ```bash
 npm run build    # Production build
 npm run compile  # TypeScript compile
-npm test         # Run tests
+npm run pretest  # Compile tests
 npm run lint     # Lint check
 ```
+
+Note: `npm test` requires a VS Code instance and network access; use `npm run lint` and `npm run pretest` to validate changes locally.
