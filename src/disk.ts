@@ -217,14 +217,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // update editor if file is open
             const viewing = this._opened.has(uri.path);
             if (viewing) {
+                // note: lock before any await so onDidChangeTextDocument can't
+                // submit ops with stale offsets while doc.data is ahead of the
+                // vscode buffer. mirrors the editor's synchronous ignoreLocalChanges.
+                this._locks.add(`${uri}`);
+
                 const document = await vscode.workspace.openTextDocument(uri);
                 const workspaceEdit = new vscode.WorkspaceEdit();
                 workspaceEdit.set(uri, sharedb2vscode(document, [op], this._log.warn.bind(this._log)));
-
-                // note: lock -> apply -> reconcile -> unlock mirrors the editor's
-                // ignoreLocalChanges bracket. lock must stay held through reconcile
-                // so onDidChangeTextDocument doesn't fire between apply and check.
-                this._locks.add(`${uri}`);
                 await vscode.workspace.applyEdit(workspaceEdit);
 
                 // note: reconcile dropped keystrokes using content snapshot (doc.data
