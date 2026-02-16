@@ -214,8 +214,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            console.log('disk op', uri.path, op);
-
             // update editor if file is open
             const viewing = this._opened.has(uri.path);
             if (viewing) {
