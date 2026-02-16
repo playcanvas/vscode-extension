@@ -128,6 +128,23 @@ export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[], w
                 add([index, ins]);
                 break;
             }
+            case 4: {
+                // note: line move ops (e.g. alt+up/down in monaco) produce
+                // 4-component ops like [skip, del, skip, ins] or [skip, ins, skip, del].
+                // walk components with a cursor tracking position in the original doc.
+                let cursor = 0;
+                for (const component of op) {
+                    if (typeof component === 'number') {
+                        cursor += component;
+                    } else if (typeof component === 'string') {
+                        add([cursor, component]);
+                    } else {
+                        add([cursor, component]);
+                        cursor += component.d;
+                    }
+                }
+                break;
+            }
             default: {
                 warn(`invalid ShareDB text op: ${JSON.stringify(op)}`);
                 break;
