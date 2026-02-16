@@ -4,6 +4,7 @@ on:
     push:
         tags:
             - 'v[0-9]+.[0-9]+.[0-9]+'
+            - 'v[0-9]+.[0-9]+.[0-9]+-*'
 
 permissions:
     contents: write
@@ -32,15 +33,27 @@ jobs:
                   npm install -g @vscode/vsce
                   npm install -g ovsx
 
-            - name: Build PlayCanvas VS Code Extension
+            - name: Check if this is a pre-release
+              id: version
               run: |
-                  npm run build
+                  VERSION_TAG=${GITHUB_REF#refs/tags/v}
+                  CLEAN_VERSION=${VERSION_TAG%%-*}
+                  if [[ "$VERSION_TAG" != "$CLEAN_VERSION" ]]; then
+                      echo "pre_release=true" >> $GITHUB_OUTPUT
+                      npm version "$CLEAN_VERSION" --no-git-tag-version --allow-same-version
+                  else
+                      echo "pre_release=false" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Build PlayCanvas VS Code Extension
+              run: npm run build -- ${{ steps.version.outputs.pre_release == 'true' && '--pre-release' || '' }}
 
             - name: Create GitHub Release
               uses: softprops/action-gh-release@v2
               with:
                   name: ${{ github.ref_name }}
                   generate_release_notes: true
+                  prerelease: ${{ steps.version.outputs.pre_release == 'true' }}
                   files: playcanvas*.vsix
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -49,10 +62,12 @@ jobs:
               run: |
                   vsce publish \
                     -p ${{ secrets.VSCE_TOKEN }} \
-                    -i playcanvas*.vsix
+                    -i playcanvas*.vsix \
+                    ${{ steps.version.outputs.pre_release == 'true' && '--pre-release' || '' }}
 
             - name: Publish Open VSX Extension
               run: |
                   ovsx publish \
                     -p ${{ secrets.OVSX_TOKEN }} \
-                    playcanvas*.vsix
+                    playcanvas*.vsix \
+                    ${{ steps.version.outputs.pre_release == 'true' && '--pre-release' || '' }}

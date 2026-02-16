@@ -6,13 +6,15 @@ const PRE = process.argv.includes('--pre-release') || false;
 
 const pkg = JSON.parse(fs.readFileSync('./plugin/package.json', 'utf8'));
 
-// check if we have unstaged changes
-try {
-    execSync('git diff --exit-code', { stdio: 'ignore' });
-    execSync('git diff --cached --exit-code', { stdio: 'ignore' });
-} catch {
-    console.error('You have unstaged changes. Please commit or stash them before building.');
-    process.exit(1);
+// check if we have unstaged changes (skip in ci where version is stripped)
+if (!process.env.CI) {
+    try {
+        execSync('git diff --exit-code', { stdio: 'ignore' });
+        execSync('git diff --cached --exit-code', { stdio: 'ignore' });
+    } catch {
+        console.error('You have unstaged changes. Please commit or stash them before building.');
+        process.exit(1);
+    }
 }
 
 const cleanup = () => {
