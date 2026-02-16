@@ -299,7 +299,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._files.set(path, file);
 
         // shareDB -> vscode
-        doc.on('op', (op: unknown, source) => {
+        doc.on('op', (op: ShareDbTextOp, source) => {
             // avoid echo
             if (source === ShareDb.SOURCE) {
                 return;
@@ -311,7 +311,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             file.dirty = true;
 
             // emit a change event to update editor and disk
-            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(doc.data));
+            this._events.emit('asset:file:update', path, op, buffer.from(doc.data));
         });
 
         // emit file created event with ShareDB content for disk
