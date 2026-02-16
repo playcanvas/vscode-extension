@@ -22,9 +22,16 @@ fi
 
 # npm version
 if [[ "$TYPE" == "prerelease" ]]; then
-    npm version prerelease --preid=beta
+    VERSION=$(npm version prerelease --preid=beta --no-git-tag-version)
 else
-    npm version $TYPE
+    VERSION=$(npm version $TYPE --no-git-tag-version)
+fi
+
+# ask for confirmation
+read -p "Are you sure you want to release version $VERSION? (y/n) " -n 1 -r
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborting..."
+    exit 1
 fi
 
 # push the changes and tags
