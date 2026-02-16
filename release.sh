@@ -29,10 +29,11 @@ fi
 
 # ask for confirmation
 read -p "Are you sure you want to release version $VERSION? (y/n) " -n 1 -r
+echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     echo "Aborting..."
     exit 1
 fi
 
-# push the changes and tags
-git push origin main --follow-tags
+# update version
+npm version $VERSION
