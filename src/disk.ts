@@ -214,8 +214,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // NOTE: do not need to check local echo as ShareDB op event can check source
-
             // update editor if file is open
             const viewing = this._opened.has(uri.path);
             if (viewing) {
@@ -223,26 +221,31 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const workspaceEdit = new vscode.WorkspaceEdit();
                 workspaceEdit.set(uri, sharedb2vscode(document, [op], this._log.warn.bind(this._log)));
 
-                // apply edit with lock to prevent local change handler from firing
+                // note: lock -> apply -> reconcile -> unlock mirrors the editor's
+                // ignoreLocalChanges bracket. lock must stay held through reconcile
+                // so onDidChangeTextDocument doesn't fire between apply and check.
                 this._locks.add(`${uri}`);
                 await vscode.workspace.applyEdit(workspaceEdit);
-                this._locks.delete(`${uri}`);
 
-                // reconcile any keystrokes dropped during lock
+                // note: reconcile dropped keystrokes using content snapshot (doc.data
+                // at op time), not live doc.data which races ahead when ops arrive
+                // faster than applyEdit can process them.
                 if (this._projectManager && this._folderUri) {
                     const currentText = document.getText();
-                    const path = relativePath(uri, this._folderUri);
-                    const file = this._projectManager.files.get(path);
-                    if (file?.type === 'file' && file.doc.data !== currentText) {
+                    const expected = buffer.toString(content);
+                    if (expected !== currentText) {
+                        const path = relativePath(uri, this._folderUri);
                         this._projectManager.write(path, buffer.from(currentText));
                         this._sync(uri, buffer.from(currentText));
+                        this._locks.delete(`${uri}`);
                         this._log.debug(`reconcile.remote ${uri}`);
                         return;
                     }
                 }
+                this._locks.delete(`${uri}`);
             }
 
-            // sync to disk (debounced)
+            // mirror to disk (debounced)
             this._sync(uri, content);
 
             this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri}`);
