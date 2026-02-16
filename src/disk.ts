@@ -214,6 +214,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            console.log('disk op', uri.path, op);
+
             // update editor if file is open
             const viewing = this._opened.has(uri.path);
             if (viewing) {
@@ -224,7 +226,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                 const document = await vscode.workspace.openTextDocument(uri);
                 const workspaceEdit = new vscode.WorkspaceEdit();
-                workspaceEdit.set(uri, sharedb2vscode(document, [op], this._log.warn.bind(this._log)));
+                workspaceEdit.set(uri, sharedb2vscode(document, [op]));
                 await vscode.workspace.applyEdit(workspaceEdit);
 
                 // note: reconcile dropped keystrokes using content snapshot (doc.data

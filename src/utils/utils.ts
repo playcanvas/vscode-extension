@@ -90,7 +90,7 @@ export const vscode2sharedb = (changes: readonly vscode.TextDocumentContentChang
 };
 
 // derived from custom ot-text
-export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[], warn: (message: string) => void) => {
+export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[]) => {
     const edits: vscode.TextEdit[] = [];
 
     const add = (cleanOp: [number, string | { d: number }]) => {
@@ -113,25 +113,19 @@ export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[], w
     for (const op of ops) {
         switch (op.length) {
             case 1: {
-                const [data] = op;
+                const [data] = op as [string | { d: number }];
                 add([0, data]);
                 break;
             }
             case 2: {
-                const [index, data] = op;
+                const [index, data] = op as [number, string | { d: number }];
                 add([index, data]);
                 break;
             }
-            case 3: {
-                const [index, ins, del] = op;
-                add([index, del]);
-                add([index, ins]);
-                break;
-            }
-            case 4: {
-                // note: line move ops (e.g. alt+up/down in monaco) produce
-                // 4-component ops like [skip, del, skip, ins] or [skip, ins, skip, del].
-                // walk components with a cursor tracking position in the original doc.
+            default: {
+                // note: walk components with a cursor tracking position in the
+                // original doc. handles atomic replaces, line moves, and any
+                // multi-component ot-text op regardless of element ordering.
                 let cursor = 0;
                 for (const component of op) {
                     if (typeof component === 'number') {
@@ -143,10 +137,6 @@ export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[], w
                         cursor += component.d;
                     }
                 }
-                break;
-            }
-            default: {
-                warn(`invalid ShareDB text op: ${JSON.stringify(op)}`);
                 break;
             }
         }
