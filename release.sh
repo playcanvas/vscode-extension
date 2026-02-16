@@ -1,10 +1,17 @@
 #!/bin/bash
 
 TYPE=$1
+PRE_RELEASE=${2:-false}
 
 # Check if type is valid
-if [[ "$TYPE" != "major" && "$TYPE" != "minor" && "$TYPE" != "patch" && "$TYPE" != "prerelease" ]]; then
-    echo "Usage: $0 <major|minor|patch|prerelease>"
+if [[ "$TYPE" != "major" && "$TYPE" != "minor" && "$TYPE" != "patch" ]]; then
+    echo "Usage: $0 <major|minor|patch> [pre-release]"
+    exit 1
+fi
+
+# Check if pre-release is valid
+if [[ $# -eq 2 && "$PRE_RELEASE" != "true" && "$PRE_RELEASE" != "false" ]]; then
+    echo "Usage: $0 <major|minor|patch> [pre-release]"
     exit 1
 fi
 
@@ -21,8 +28,8 @@ if [[ $(git status --porcelain) ]]; then
 fi
 
 # npm version
-if [[ "$TYPE" == "prerelease" ]]; then
-    VERSION=$(npm version prerelease --preid=beta --no-git-tag-version)
+if [[ "$PRE_RELEASE" == "true" ]]; then
+    VERSION=$(npm version pre$TYPE --preid=beta --no-git-tag-version)
 else
     VERSION=$(npm version $TYPE --no-git-tag-version)
 fi
