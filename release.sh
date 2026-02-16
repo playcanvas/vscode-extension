@@ -1,9 +1,17 @@
 #!/bin/bash
 
-PRE_RELEASE=$1
+TYPE=$1
 
-if [[ -z "$PRE_RELEASE" ]]; then
-    PRE_RELEASE=false
+# Check if type is valid
+if [[ "$TYPE" != "major" && "$TYPE" != "minor" && "$TYPE" != "patch" && "$TYPE" != "prerelease" ]]; then
+    echo "Usage: $0 <major|minor|patch|prerelease>"
+    exit 1
+fi
+
+# Check if on main branch
+if [[ $(git branch --show-current) != "main" ]]; then
+    echo "You are not on the main branch. Please switch to the main branch before running this script."
+    exit 1
 fi
 
 # Check for any uncommitted changes (unstaged or staged)
@@ -12,12 +20,12 @@ if [[ $(git status --porcelain) ]]; then
     exit 1
 fi
 
-# version
-if [[ "$PRE_RELEASE" == true ]]; then
-    VERSION=$(npm version prerelease --preid=beta)
+# npm version
+if [[ "$TYPE" == "prerelease" ]]; then
+    npm version prerelease --preid=beta
 else
-    VERSION=$(npm version)
+    npm version $TYPE
 fi
 
-# push the changes
+# push the changes and tags
 git push origin main --follow-tags
