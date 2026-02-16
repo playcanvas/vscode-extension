@@ -26,6 +26,7 @@ if [[ "$TYPE" == "prerelease" ]]; then
 else
     VERSION=$(npm version $TYPE --no-git-tag-version)
 fi
+git clean -fd
 
 # ask for confirmation
 read -p "Are you sure you want to release version $VERSION? (y/n) " -n 1 -r
