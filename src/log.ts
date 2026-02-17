@@ -21,15 +21,15 @@ class Log {
 
     warn(...args: unknown[]) {
         Log.channel.warn(`[${this._source}]`, ...args);
-        captureMessage(`[${this._source}] ${args.map(String).join(' ')}`, 'warning');
+        captureMessage(args.map(String).join(' '), 'warning', this._source);
     }
 
     error(...args: unknown[]) {
         Log.channel.error(`[${this._source}]`, ...args);
         if (args[0] instanceof Error) {
-            captureException(args[0]);
+            captureException(args[0], this._source);
         } else {
-            captureMessage(`[${this._source}] ${args.map(String).join(' ')}`, 'error');
+            captureMessage(args.map(String).join(' '), 'error', this._source);
         }
     }
 }

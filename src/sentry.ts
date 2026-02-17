@@ -48,12 +48,20 @@ scope.setClient(client);
 scope.setTag('page', 'vscode-extension');
 client.init();
 
-export const captureException = (error: Error) => {
-    scope.captureException(error);
+export const captureException = (error: Error, source?: string) => {
+    const s = source ? scope.clone() : scope;
+    if (source) {
+        s.setTag('source', source);
+    }
+    s.captureException(error);
 };
 
-export const captureMessage = (message: string, level: 'warning' | 'error' = 'error') => {
-    scope.captureMessage(message, level);
+export const captureMessage = (message: string, level: 'warning' | 'error' = 'error', source?: string) => {
+    const s = source ? scope.clone() : scope;
+    if (source) {
+        s.setTag('source', source);
+    }
+    s.captureMessage(message, level);
 };
 
 export const setSentryUser = (id: number) => {
