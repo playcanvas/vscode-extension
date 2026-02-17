@@ -27,6 +27,13 @@ if [[ $(git status --porcelain) ]]; then
     exit 1
 fi
 
+# strip prerelease tag before computing bump so patch goes 1.3.7-beta.0 -> 1.3.8
+CURRENT=$(npm pkg get version | tr -d '"')
+BASE=$(echo "$CURRENT" | sed 's/-.*//')
+if [[ "$CURRENT" != "$BASE" ]]; then
+    npm version "$BASE" --no-git-tag-version > /dev/null
+fi
+
 # npm version
 if [[ "$PRE_RELEASE" == "true" ]]; then
     VERSION=$(npm version pre$TYPE --preid=beta --no-git-tag-version)
