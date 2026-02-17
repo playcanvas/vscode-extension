@@ -2,9 +2,7 @@ import { BrowserClient, defaultStackParser, makeFetchTransport, Scope } from '@s
 
 import packageJson from '../package.json';
 
-import { DEBUG } from './config';
-
-const SENTRY_DSN = 'https://0defef72baf64d99bf53b92a23d5bd14@sentry.sc-prod.net/87';
+import { DEBUG, ENV, SENTRY_DSN } from './config';
 
 // note: sensitive keys to scrub from event data (matches monorepo sentry-utils.js)
 const SANITIZE_KEYS = /password|token|secret|passwd|authorization|api_key|apikey|sentry_dsn|access_token|credentials/i;
@@ -39,7 +37,7 @@ const client = new BrowserClient({
     dsn: DEBUG ? '' : SENTRY_DSN,
     transport: makeFetchTransport,
     stackParser: defaultStackParser,
-    environment: 'extension_live',
+    environment: `extension_${ENV === 'prod' ? 'live' : ENV}`,
     release: packageJson.version,
     integrations: [],
     beforeSend: (event) => sanitize(event) as typeof event

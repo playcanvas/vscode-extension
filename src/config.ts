@@ -17,6 +17,8 @@ export const MESSENGER_URL = process.env.MESSENGER_URL || 'wss://msg.playcanvas.
 export const REALTIME_URL = process.env.REALTIME_URL || 'wss://rt.playcanvas.com/realtime';
 export const RELAY_URL = process.env.RELAY_URL || 'wss://relay.playcanvas.com/relay';
 
+export const SENTRY_DSN = 'https://b1e400a0067c05fe7651dbc6cfe253d1@sentry.sc-prod.net/308';
+
 if (DEBUG) {
     console.table({
         NAME,
