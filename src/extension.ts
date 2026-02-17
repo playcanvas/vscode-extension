@@ -12,7 +12,7 @@ import { Log } from './log';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
-import { captureException, closeSentry, setSentryProject, setSentryUser } from './sentry';
+import { closeSentry, setSentryProject, setSentryUser } from './sentry';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { EventEmitter } from './utils/event-emitter';
