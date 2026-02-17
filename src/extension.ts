@@ -35,6 +35,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     }
     const log = new Log('Extension');
 
+    // todo: remove - test sentry integration
+    captureException(new Error('sentry test error from vscode extension'));
+
     // load config
     const config = vscode.workspace.getConfiguration(NAME);
     context.subscriptions.push(

@@ -1,5 +1,7 @@
 import { BrowserClient, defaultStackParser, makeFetchTransport, Scope } from '@sentry/browser';
+
 import packageJson from '../package.json';
+
 import { DEBUG } from './config';
 
 const SENTRY_DSN = 'https://0defef72baf64d99bf53b92a23d5bd14@sentry.sc-prod.net/87';
@@ -9,14 +11,18 @@ const SANITIZE_KEYS = /password|token|secret|passwd|authorization|api_key|apikey
 
 const sanitize = (obj: unknown, memo = new WeakSet()): unknown => {
     if (Array.isArray(obj)) {
-        if (memo.has(obj)) return obj;
+        if (memo.has(obj)) {
+            return obj;
+        }
         memo.add(obj);
         const result = obj.map((v) => sanitize(v, memo));
         memo.delete(obj);
         return result;
     }
     if (obj && typeof obj === 'object' && Object.getPrototypeOf(obj) === Object.prototype) {
-        if (memo.has(obj)) return obj;
+        if (memo.has(obj)) {
+            return obj;
+        }
         memo.add(obj);
         const record = obj as Record<string, unknown>;
         const result: Record<string, unknown> = {};
@@ -33,7 +39,7 @@ const client = new BrowserClient({
     dsn: DEBUG ? '' : SENTRY_DSN,
     transport: makeFetchTransport,
     stackParser: defaultStackParser,
-    environment: 'extension_prod',
+    environment: 'extension_live',
     release: packageJson.version,
     integrations: [],
     beforeSend: (event) => sanitize(event) as typeof event
