@@ -7,6 +7,7 @@ export default defineConfig({
         timeout: 5000
     },
     env: {
+        NODE_ENV: 'development',
         ROOT_FOLDER: `${import.meta.dirname}/.vscode-storage`
     }
 });
