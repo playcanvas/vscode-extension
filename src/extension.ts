@@ -12,6 +12,7 @@ import { Log } from './log';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
+import { captureException, closeSentry, setSentryProject, setSentryUser } from './sentry';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { EventEmitter } from './utils/event-emitter';
@@ -22,8 +23,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // register log channel for cleanup
+    // register log channel and sentry for cleanup
     context.subscriptions.push(Log.channel);
+    context.subscriptions.push(
+        new vscode.Disposable(() => {
+            closeSentry();
+        })
+    );
     if (DEBUG) {
         Log.channel.show(true);
     }
@@ -66,6 +72,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
         if (!error) {
             return;
         }
+
+        captureException(error);
 
         // log to output channel
         log.error(error.message);
@@ -118,6 +126,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // find user id
     const userId = await rest.id();
+    setSentryUser(userId);
 
     // state
     const state: {
@@ -532,6 +541,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             collisionStatusItem.color = count > 0 ? collisionStatusColors.found : collisionStatusColors.none;
             collisionStatusItem.text = `$(${count > 0 ? 'warning' : 'check'}) Path Collisions: ${count}`;
         });
+        setSentryProject(project.id, branchId);
         await projectManager.link({
             projectId: project.id,
             branchId: branchId
