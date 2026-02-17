@@ -76,9 +76,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             return;
         }
 
-        captureException(error);
-
-        // log to output channel
+        // log to output channel (also reports to sentry)
         log.error(error.message);
         if (error.stack) {
             log.error(error.stack);

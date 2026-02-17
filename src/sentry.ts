@@ -52,6 +52,10 @@ export const captureException = (error: Error) => {
     scope.captureException(error);
 };
 
+export const captureMessage = (message: string, level: 'warning' | 'error' = 'error') => {
+    scope.captureMessage(message, level);
+};
+
 export const setSentryUser = (id: number) => {
     scope.setUser({ id: String(id) });
 };
