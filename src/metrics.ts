@@ -23,7 +23,7 @@ const isStringRecord = (v: unknown): v is Record<string, string> =>
 
 // note: implements vscode.TelemetrySender to relay events to editor-server -> graphene
 class GrapheneSender implements vscode.TelemetrySender {
-    static readonly METRIC_PREFIX = 'vscode';
+    static readonly METRIC_PREFIX = 'vscode-extension';
 
     private _log = new Log('GrapheneSender');
 
