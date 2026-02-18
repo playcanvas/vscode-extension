@@ -9,6 +9,7 @@ import { ShareDb } from './connections/sharedb';
 import { Disk } from './disk';
 import { UriHandler } from './handlers/uri-handler';
 import { Log } from './log';
+import { Metrics } from './metrics';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
@@ -67,6 +68,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
     context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.login`, async () => auth.getAccessToken(true)));
     const accessToken = await auth.getAccessToken();
 
+    // metrics
+    const metrics = new Metrics(accessToken);
+    context.subscriptions.push(metrics.disposable);
+    metrics.increment('session.start');
+
     // error handler
     const handleError = async (error?: Error) => {
         if (!error) {
@@ -78,6 +84,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
         if (error.stack) {
             log.error(error.stack);
         }
+
+        metrics.logError(error);
 
         // handle auth errors
         if (/access token/.test(error.message)) {
@@ -195,6 +203,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         const enabled = connected.get();
         connectionStatusItem.color = enabled ? connectionStatusColors.connected : connectionStatusColors.disconnected;
         connectionStatusItem.text = `$(primitive-dot) ${enabled ? 'Connected' : 'Disconnected'}`;
+        metrics.increment('connection', { status: enabled ? 'connected' : 'disconnected' });
     });
 
     // collision status bar item
@@ -228,6 +237,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             return;
         }
 
+        metrics.increment('branch.switch');
         const branchSwitchDone = await simpleNotification(`Switching to branch ${name}...`);
 
         // reload project
@@ -309,6 +319,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // open project
     context.subscriptions.push(
         vscode.commands.registerCommand(`${NAME}.openProject`, async () => {
+            metrics.increment('command', { name: 'openProject' });
             // fetch all user projects
             const projects = await rest.userProjects(userId, 'profile');
 
@@ -332,6 +343,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // reload project
     context.subscriptions.push(
         vscode.commands.registerCommand(`${NAME}.reloadProject`, async () => {
+            metrics.increment('command', { name: 'reloadProject' });
             // check if we have an active editor
             if (!state.projectId) {
                 return;
@@ -355,6 +367,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // switch branch
     context.subscriptions.push(
         vscode.commands.registerCommand(`${NAME}.switchBranch`, async () => {
+            metrics.increment('command', { name: 'switchBranch' });
             // check if we have an active project
             if (!state.projectId) {
                 return;
@@ -584,6 +597,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 uriHandler.unlink();
             })
         );
+
+        metrics.increment('project.open');
 
         // store in cache
         cache.set(project.id, { branchId, projectManager });
