@@ -4,6 +4,11 @@ import { HOME_URL, NAME, PUBLISHER } from './config.js';
 import { Log } from './log';
 
 const FLUSH_INTERVAL = 5000;
+const MAX_BATCH_EVENTS = 50;
+const MAX_BUFFER_EVENTS = 500;
+const MAX_PAYLOAD_BYTES = 80 * 1024;
+const MAX_DIMENSION_VALUE_LENGTH = 200;
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
 const VALID_KINDS = new Set(['counter', 'timer', 'histogram']);
 
@@ -16,12 +21,47 @@ type MetricEvent = {
     value?: number;
 };
 
-const isMetricKind = (v: unknown): v is MetricKind => typeof v === 'string' && VALID_KINDS.has(v);
+type PostBatchResult = 'ok' | 'retry' | 'too-large' | 'drop';
 
-const isStringRecord = (v: unknown): v is Record<string, string> =>
-    typeof v === 'object' && v !== null && Object.values(v).every((val) => typeof val === 'string');
+const isStringRecord = (v: unknown): v is Record<string, string> => {
+    if (typeof v !== 'object' || v === null) {
+        return false;
+    }
+    for (const value of Object.values(v)) {
+        if (typeof value !== 'string') {
+            return false;
+        }
+    }
+    return true;
+};
 
-// note: implements vscode.TelemetrySender to relay events to editor-server -> graphene
+const trimAndTruncate = (value: string, maxLength: number) => {
+    const trimmed = value.trim();
+    return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+};
+
+// sanitize dimensions to avoid invalid keys and oversized payload values.
+const sanitizeDimensions = (dimensions?: Record<string, string>) => {
+    if (!dimensions) {
+        return undefined;
+    }
+    const sanitized: Record<string, string> = {};
+    for (const [rawKey, rawValue] of Object.entries(dimensions)) {
+        const key = rawKey.trim();
+        const value = trimAndTruncate(rawValue, MAX_DIMENSION_VALUE_LENGTH);
+        if (!key || !value) {
+            continue;
+        }
+        sanitized[key] = value;
+    }
+    return Object.keys(sanitized).length ? sanitized : undefined;
+};
+
+const payloadByteSize = (events: MetricEvent[]) => {
+    return new TextEncoder().encode(JSON.stringify({ events })).length;
+};
+
+// implements vscode.TelemetrySender to relay events to editor-server -> graphene.
 class GrapheneSender implements vscode.TelemetrySender {
     static readonly METRIC_PREFIX = 'vscode-extension';
 
@@ -31,19 +71,27 @@ class GrapheneSender implements vscode.TelemetrySender {
 
     private _timer: ReturnType<typeof setInterval> | undefined;
 
+    private _flushPromise: Promise<void> | undefined;
+
     private _url: string;
 
     constructor(accessToken: string) {
         this._url = `${HOME_URL}/editor/metrics?access_token=${accessToken}`;
-        this._timer = setInterval(() => this._flush(), FLUSH_INTERVAL);
+        this._timer = setInterval(() => {
+            void this._flush();
+        }, FLUSH_INTERVAL);
     }
 
     sendEventData(eventName: string, data?: Record<string, unknown>): void {
-        const kind = isMetricKind(data?.kind) ? data.kind : 'counter';
-        const dimensions = isStringRecord(data?.dimensions) ? data.dimensions : undefined;
+        let kind: MetricKind = 'counter';
+        const rawKind = data?.kind;
+        if (typeof rawKind === 'string' && VALID_KINDS.has(rawKind)) {
+            kind = rawKind as MetricKind;
+        }
+        const dimensions = sanitizeDimensions(isStringRecord(data?.dimensions) ? data.dimensions : undefined);
         const value = typeof data?.value === 'number' ? data.value : undefined;
         const type = eventName.toLowerCase().replace(`${PUBLISHER}.${NAME}/`, '');
-        this._buffer.push({
+        this._enqueue({
             type: `${GrapheneSender.METRIC_PREFIX}.${type}`,
             kind,
             dimensions,
@@ -52,26 +100,109 @@ class GrapheneSender implements vscode.TelemetrySender {
     }
 
     sendErrorData(error: Error, data?: Record<string, unknown>): void {
-        const dims = isStringRecord(data?.dimensions) ? data.dimensions : {};
-        this._buffer.push({
+        const dims = sanitizeDimensions(isStringRecord(data?.dimensions) ? data.dimensions : undefined);
+        const message =
+            trimAndTruncate(error.message || 'unknown error', MAX_DIMENSION_VALUE_LENGTH) || 'unknown error';
+        this._enqueue({
             type: `${GrapheneSender.METRIC_PREFIX}.error`,
             kind: 'counter',
-            dimensions: { message: error.message, ...dims }
+            dimensions: { ...(dims || {}), message }
         });
     }
 
     async flush(): Promise<void> {
-        clearInterval(this._timer);
+        if (this._timer) {
+            clearInterval(this._timer);
+        }
         this._timer = undefined;
         await this._flush();
     }
 
     private async _flush(): Promise<void> {
+        if (this._flushPromise) {
+            await this._flushPromise;
+            return;
+        }
         if (!this._buffer.length) {
             return;
         }
 
-        const events = this._buffer.splice(0);
+        this._flushPromise = new Promise<void>((resolve, reject) => {
+            const run = async () => {
+                // build bounded batches from the current buffer snapshot.
+                const queue: MetricEvent[][] = [];
+                let batch: MetricEvent[] = [];
+                for (const event of this._buffer.splice(0)) {
+                    if (payloadByteSize([event]) > MAX_PAYLOAD_BYTES) {
+                        this._log.warn(`dropping oversized metric event: ${event.type}`);
+                        continue;
+                    }
+
+                    const nextBatch = [...batch, event];
+                    if (batch.length >= MAX_BATCH_EVENTS || payloadByteSize(nextBatch) > MAX_PAYLOAD_BYTES) {
+                        if (batch.length) {
+                            queue.push(batch);
+                        }
+                        batch = [event];
+                        continue;
+                    }
+                    batch = nextBatch;
+                }
+                if (batch.length) {
+                    queue.push(batch);
+                }
+
+                let flushedEvents = 0;
+                for (let i = 0; i < queue.length; i++) {
+                    const events = queue[i];
+                    const result = await this._postBatch(events);
+
+                    // handle successful batch flush.
+                    if (result === 'ok') {
+                        flushedEvents += events.length;
+                        continue;
+                    }
+
+                    // handle oversized batch.
+                    if (result === 'too-large') {
+                        if (events.length === 1) {
+                            this._log.warn(`dropping oversized metric event: ${events[0].type}`);
+                            continue;
+                        }
+                        // split and retry progressively smaller chunks for 413 responses.
+                        const splitAt = Math.ceil(events.length / 2);
+                        queue.splice(i, 1, events.slice(0, splitAt), events.slice(splitAt));
+                        i--;
+                        continue;
+                    }
+
+                    // handle retryable error.
+                    if (result === 'retry') {
+                        const unsent = queue.slice(i).flat();
+                        this._buffer = [...unsent, ...this._buffer];
+                        if (this._buffer.length > MAX_BUFFER_EVENTS) {
+                            const dropped = this._buffer.length - MAX_BUFFER_EVENTS;
+                            this._buffer.splice(MAX_BUFFER_EVENTS);
+                            this._log.warn(`metrics retry overflow, dropped ${dropped} events`);
+                        }
+                        return;
+                    }
+                }
+
+                if (flushedEvents) {
+                    this._log.debug(`flushed ${flushedEvents} events`);
+                }
+            };
+
+            void run().then(resolve).catch(reject);
+        });
+
+        await this._flushPromise.finally(() => {
+            this._flushPromise = undefined;
+        });
+    }
+
+    private async _postBatch(events: MetricEvent[]): Promise<PostBatchResult> {
         const res = await fetch(this._url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -81,13 +212,32 @@ class GrapheneSender implements vscode.TelemetrySender {
             return null;
         });
         if (!res) {
-            return;
+            return 'retry';
         }
         if (!res.ok) {
+            if (res.status === 413) {
+                return 'too-large';
+            }
+            if (RETRYABLE_STATUS.has(res.status)) {
+                this._log.error(`flush failed: ${res.status} ${res.statusText}`);
+                return 'retry';
+            }
             this._log.error(`flush failed: ${res.status} ${res.statusText}`);
-            return;
+            return 'drop';
         }
-        this._log.debug(`flushed ${events.length} events`);
+        return 'ok';
+    }
+
+    private _enqueue(event: MetricEvent) {
+        this._buffer.push(event);
+        if (this._buffer.length > MAX_BUFFER_EVENTS) {
+            const dropped = this._buffer.length - MAX_BUFFER_EVENTS;
+            this._buffer.splice(0, dropped);
+            this._log.warn(`metrics buffer overflow, dropped ${dropped} oldest events`);
+        }
+        if (this._buffer.length >= MAX_BATCH_EVENTS) {
+            void this._flush();
+        }
     }
 }
 
