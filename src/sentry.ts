@@ -10,9 +10,7 @@ const URI_TOKEN = /\b[a-z][a-z0-9+.-]*:(?:\/\/)?[^\s'"`]+/gi;
 const PATH_TOKEN = /(?:[A-Za-z]:\\[^\s'"`]+|\/[^\s'"`]+|(?:\.\.?\/)?[^\s'"`]*\/[^\s'"`]+)/g;
 const UUID_TOKEN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const CONTEXT_ID_TOKEN = /\b(asset|document|project|branch|user|checkpoint)\s+\d+\b/gi;
-const KEY_ID_TOKEN = /\b([a-z_]*id)(\s*[:=]\s*)\d+\b/gi;
 const ASSET_ID_TOKEN = /\basset\s+(\d+)\b/gi;
-const ASSET_ID_KEY_TOKEN = /\basset[_\s-]?id\s*[:=]\s*(\d+)\b/gi;
 const ASSET_URI_ID_TOKEN = /\bassets\/(\d+)\b/gi;
 
 type SentryEventShape = {
@@ -86,7 +84,7 @@ const normalizeMessage = (message: string) => {
     }
 
     const assetIds = new Set<string>();
-    for (const pattern of [ASSET_ID_TOKEN, ASSET_ID_KEY_TOKEN, ASSET_URI_ID_TOKEN]) {
+    for (const pattern of [ASSET_ID_TOKEN, ASSET_URI_ID_TOKEN]) {
         const ids = collectMatches(message, pattern, (match) => match[1]);
         for (const id of ids) {
             assetIds.add(id);
@@ -98,7 +96,6 @@ const normalizeMessage = (message: string) => {
     normalized = replaceTokens(normalized, pathTokens, '{path}');
     normalized = normalized.replace(UUID_TOKEN, '{uuid}');
     normalized = normalized.replace(CONTEXT_ID_TOKEN, '$1 {id}');
-    normalized = normalized.replace(KEY_ID_TOKEN, '$1$2{id}');
 
     return {
         normalized,
