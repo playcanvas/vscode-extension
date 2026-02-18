@@ -9,7 +9,7 @@ import { ShareDb } from './connections/sharedb';
 import { Disk } from './disk';
 import { UriHandler } from './handlers/uri-handler';
 import { Log } from './log';
-import { GrapheneSender, Metrics } from './metrics';
+import { Metrics } from './metrics';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
@@ -69,8 +69,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const accessToken = await auth.getAccessToken();
 
     // metrics
-    const sender = new GrapheneSender(HOME_URL, accessToken);
-    const metrics = new Metrics(sender);
+    const metrics = new Metrics(accessToken);
     context.subscriptions.push(metrics.disposable);
     metrics.increment('session.start');
 
