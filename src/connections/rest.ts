@@ -2,8 +2,78 @@ import { Log } from '../log';
 import type { Asset, Branch, Project, User } from '../typings/models';
 import { summarize } from '../utils/utils';
 
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 1000;
+const MAX_DELAY_MS = 30000;
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+
+type CacheEntry<T> = {
+    data: T;
+    timestamp: number;
+    ttl: number;
+};
+
+class RequestCache {
+    private _cache: Map<string, CacheEntry<unknown>>;
+    private _maxSize: number;
+
+    constructor(maxSize = 1000) {
+        this._cache = new Map();
+        this._maxSize = maxSize;
+    }
+
+    get<T>(key: string) {
+        const entry = this._cache.get(key);
+        if (!entry) {
+            return undefined;
+        }
+
+        // check if expired
+        if (Date.now() - entry.timestamp > entry.ttl) {
+            this._cache.delete(key);
+            return undefined;
+        }
+
+        return entry.data as T;
+    }
+
+    set<T>(key: string, data: T, ttl: number) {
+        // evict oldest entry if cache is full
+        if (this._cache.size >= this._maxSize) {
+            const firstKey = this._cache.keys().next().value;
+            if (firstKey) {
+                this._cache.delete(firstKey);
+            }
+        }
+
+        this._cache.set(key, {
+            data,
+            timestamp: Date.now(),
+            ttl
+        });
+    }
+
+    invalidate(pattern?: RegExp) {
+        if (!pattern) {
+            this._cache.clear();
+            return;
+        }
+        for (const key of this._cache.keys()) {
+            if (pattern.test(key)) {
+                this._cache.delete(key);
+            }
+        }
+    }
+
+    clear() {
+        this._cache.clear();
+    }
+}
+
 class Rest {
     private _log = new Log(this.constructor.name);
+
+    private _cache = new RequestCache();
 
     url: string;
 
@@ -17,6 +87,52 @@ class Rest {
         this.accessToken = accessToken;
     }
 
+    private _backoff(attempt: number, retryAfter?: number) {
+        if (retryAfter) {
+            // respect server's Retry-After header
+            return Math.min(retryAfter * 1000, MAX_DELAY_MS);
+        }
+
+        // exponential backoff with jitter
+        const exponentialDelay = BASE_DELAY_MS * Math.pow(2, attempt);
+        const jitter = Math.random() * 0.1 * exponentialDelay; // 10% jitter
+        return Math.min(exponentialDelay + jitter, MAX_DELAY_MS);
+    }
+
+    private _retryAfter(response: Response) {
+        const retryAfter = response.headers.get('Retry-After');
+        if (!retryAfter) {
+            return undefined;
+        }
+
+        // try parsing as number (seconds)
+        const seconds = parseInt(retryAfter, 10);
+        if (!isNaN(seconds)) {
+            return seconds;
+        }
+
+        // try parsing as HTTP date
+        const date = new Date(retryAfter);
+        if (!isNaN(date.getTime())) {
+            const delayMs = date.getTime() - Date.now();
+            return Math.max(0, Math.ceil(delayMs / 1000));
+        }
+
+        return undefined;
+    }
+
+    private _ttl(path: string) {
+        // only cache user-related data (collaborators sidebar)
+        // asset content comes through ShareDB, not REST API
+        if (path.includes('users/') && path.includes('/thumbnail')) {
+            return 30 * 60 * 1000; // 30 min - thumbnails rarely change
+        }
+        if (path.match(/users\/\d+$/)) {
+            return 5 * 60 * 1000; // 5 min - user info rarely changes
+        }
+        return undefined; // not cacheable
+    }
+
     private async _request<T>(
         method: 'GET' | 'POST' | 'PUT' | 'DELETE',
         path: string,
@@ -24,32 +140,101 @@ class Rest {
         type: 'json' | 'buffer' = 'json',
         auth = true
     ): Promise<T> {
-        const headers: Record<string, string> = {
-            origin: this.origin
-        };
-        if (auth) {
-            headers['Authorization'] = `Bearer ${this.accessToken}`;
-        }
-        const res = await fetch(`${this.url}/${path}`, {
-            method,
-            headers,
-            body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined
-        });
-        if (!res.ok) {
-            throw new Error(`HTTP ${res.status} ${res.statusText}: ${await res.text()}`);
-        }
-        switch (type) {
-            case 'buffer': {
-                const buf = await res.arrayBuffer();
-                this._log.debug(res.status, method, path, summarize(buf));
-                return buf as T;
-            }
-            case 'json': {
-                const json = await res.json();
-                this._log.debug(res.status, method, path, summarize(json));
-                return json as T;
+        // check cache for GET requests
+        if (method === 'GET') {
+            const cached = this._cache.get<T>(`${method}:${path}`);
+            if (cached) {
+                this._log.debug('cache hit', method, path);
+                return cached;
             }
         }
+
+        // retry loop
+        let lastError: Error | null = null;
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                const headers: Record<string, string> = {
+                    origin: this.origin
+                };
+                if (auth) {
+                    headers['Authorization'] = `Bearer ${this.accessToken}`;
+                }
+
+                const res = await fetch(`${this.url}/${path}`, {
+                    method,
+                    headers,
+                    body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined
+                });
+
+                // check for HTTP errors
+                if (!res.ok) {
+                    const statusText = res.statusText;
+                    const errorBody = await res.text();
+                    const error = new Error(`HTTP ${res.status} ${statusText}: ${errorBody}`);
+
+                    // check if retryable
+                    if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_RETRIES) {
+                        lastError = error;
+
+                        // calculate backoff delay
+                        const retryAfter = this._retryAfter(res);
+                        const delayMs = this._backoff(attempt, retryAfter);
+
+                        // log retry attempt
+                        this._log.warn(
+                            `Request failed with ${res.status}, retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${method} ${path}`
+                        );
+
+                        // wait before retry
+                        await new Promise((resolve) => setTimeout(resolve, delayMs));
+                        continue;
+                    }
+
+                    // not retryable or max retries exceeded
+                    throw error;
+                }
+
+                // success - parse response
+                let result: T;
+                switch (type) {
+                    case 'buffer': {
+                        const buf = await res.arrayBuffer();
+                        this._log.debug(res.status, method, path, summarize(buf));
+                        result = buf as T;
+                        break;
+                    }
+                    case 'json': {
+                        const json = await res.json();
+                        this._log.debug(res.status, method, path, summarize(json));
+                        result = json as T;
+                        break;
+                    }
+                }
+
+                // cache successful GET requests
+                const ttl = this._ttl(path);
+                if (ttl && method === 'GET') {
+                    this._cache.set(`${method}:${path}`, result, ttl);
+                }
+
+                return result;
+            } catch (error) {
+                // network errors or fetch failures
+                if (attempt < MAX_RETRIES && error instanceof Error) {
+                    lastError = error;
+                    const delayMs = this._backoff(attempt);
+                    this._log.warn(
+                        `Request failed with network error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${method} ${path}`
+                    );
+                    await new Promise((resolve) => setTimeout(resolve, delayMs));
+                    continue;
+                }
+                throw error;
+            }
+        }
+
+        // all retries exhausted
+        throw lastError || new Error(`Request failed after ${MAX_RETRIES} retries`);
     }
 
     async assetCreate(
@@ -79,7 +264,10 @@ class Rest {
         if (data.file && data.file.size) {
             form.append('file', data.file, data.filename || data.name);
         }
-        return this._request<Asset>('POST', `assets`, form);
+        const result = await this._request<Asset>('POST', `assets`, form);
+        // invalidate asset-related cache entries
+        this._cache.invalidate(/assets/);
+        return result;
     }
 
     async assetRename(projectId: number, branchId: string, assetId: number, name: string) {
@@ -87,7 +275,10 @@ class Rest {
         form.append('projectId', `${projectId}`);
         form.append('branchId', branchId);
         form.append('name', name);
-        return this._request<Asset>('PUT', `assets/${assetId}`, form);
+        const result = await this._request<Asset>('PUT', `assets/${assetId}`, form);
+        // invalidate asset-related cache entries
+        this._cache.invalidate(/assets/);
+        return result;
     }
 
     async assetFile(assetId: number, branchId: string, filename: string) {
