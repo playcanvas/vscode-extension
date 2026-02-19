@@ -812,6 +812,79 @@ suite('Extension Test Suite', () => {
         assert.ok(folderABIndex !== -1, 'folder AB should be created');
     });
 
+    test('folder create (copy directory tree ensures ancestors local -> remote)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // build a nested source structure outside the workspace so the watcher doesn't see it
+        const tmpBase = vscode.Uri.file('/tmp/claude/race_test_src');
+        try {
+            await vscode.workspace.fs.delete(tmpBase, { recursive: true });
+        } catch {
+            // ignore if doesn't exist
+        }
+        const srcSub = vscode.Uri.joinPath(tmpBase, 'race_sub');
+        await vscode.workspace.fs.createDirectory(srcSub);
+        await vscode.workspace.fs.writeFile(
+            vscode.Uri.joinPath(srcSub, 'race_child.js'),
+            buffer.from('// RACE CONDITION TEST')
+        );
+
+        // define expected asset names
+        const topName = 'test_race_copy';
+        const subfolderName = 'race_sub';
+        const fileName = 'race_child.js';
+
+        // track creation order
+        const creationOrder: string[] = [];
+
+        // create promise that resolves when all 3 assets are created
+        const created = new Promise<void>((resolve) => {
+            let count = 3;
+            const onnew = messenger.on('asset.new', (data) => {
+                const name = data.data.asset.name;
+                if ([topName, subfolderName, fileName].includes(name)) {
+                    creationOrder.push(name);
+                    count--;
+                    if (count === 0) {
+                        messenger.off('asset.new', onnew);
+                        resolve();
+                    }
+                }
+            });
+        });
+
+        // reset asset create spy call history
+        rest.assetCreate.resetHistory();
+
+        // copy entire tree into workspace in one operation
+        // this fires watcher events for all files/folders at once, where event order is
+        // not guaranteed by the OS — exercises the ancestor-ensure fix in disk.ts
+        const targetUri = vscode.Uri.joinPath(folderUri, topName);
+        await vscode.workspace.fs.copy(tmpBase, targetUri, { overwrite: true });
+
+        // wait for all remote creations
+        await assertResolves(created, 'asset.new');
+
+        // verify creation order: parents must come before children regardless of event order
+        const topIndex = creationOrder.indexOf(topName);
+        const subIndex = creationOrder.indexOf(subfolderName);
+        const fileIndex = creationOrder.indexOf(fileName);
+
+        assert.ok(
+            topIndex < subIndex,
+            `Top folder should be created before subfolder. Order: ${creationOrder.join(' -> ')}`
+        );
+        assert.ok(
+            subIndex < fileIndex,
+            `Subfolder should be created before file. Order: ${creationOrder.join(' -> ')}`
+        );
+
+        // verify all 3 assets were created successfully (no missing-parent errors)
+        assert.strictEqual(creationOrder.length, 3, 'all 3 assets should be created');
+    });
+
     test('file changes (opened remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
