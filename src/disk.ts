@@ -180,11 +180,23 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 }
             }
 
-            // check if parent folder exists
-            const parentUri = vscode.Uri.joinPath(uri, '..');
-            const parentExists = await fileExists(parentUri);
-            if (!parentExists) {
-                throw this.error.set(() => new Error(`parent folder does not exist: ${parentUri.path}`));
+            // ensure parent folder exists on disk
+            // handles race condition where child creation event is processed before parent's disk write completes
+            if (!exists) {
+                const parentUri = vscode.Uri.joinPath(uri, '..');
+                if (!(await fileExists(parentUri))) {
+                    const folderUri = this._folderUri;
+                    if (!folderUri) {
+                        throw this.error.set(() => new Error(`parent folder does not exist: ${parentUri.path}`));
+                    }
+                    // set echo for all missing ancestors to prevent disk watcher from re-processing
+                    let ancestor = parentUri;
+                    while (ancestor.path !== folderUri.path && !(await fileExists(ancestor))) {
+                        this._echo.set(`${ancestor}:create`, '');
+                        ancestor = vscode.Uri.joinPath(ancestor, '..');
+                    }
+                    await vscode.workspace.fs.createDirectory(parentUri);
+                }
             }
 
             // create on disk
