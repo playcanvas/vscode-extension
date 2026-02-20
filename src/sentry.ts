@@ -12,6 +12,7 @@ const PATH_TOKEN =
     /(?:[A-Za-z]:\\[^\s'"`]+|\/(?=[^\s'"`]*[A-Za-z])[^\s'"`]+|(?:\.\.?\/)?(?=[^\s'"`]*[A-Za-z])[^\s'"`]*\/[^\s'"`]+)/g;
 const UUID_TOKEN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const CONTEXT_ID_TOKEN = /\b(asset|document|project|branch|user|checkpoint)\s+\d+\b/gi;
+const DOCUMENT_ROOM_ID_TOKEN = /\bdocument-(\d+)\b/gi;
 const ASSET_ID_TOKEN = /\basset\s+(\d+)\b/gi;
 const ASSET_URI_ID_TOKEN = /\bassets\/(\d+)\b/gi;
 const TIMESTAMP_TOKEN = /\b\d+(?:\.\d+)?(?:ms|s|m|h)\b/gi;
@@ -20,6 +21,7 @@ type SentryMetadata = {
     message: string;
     paths: string[];
     assetIds: string[];
+    documentIds: string[];
     timestamps: string[];
 };
 
@@ -103,6 +105,13 @@ const normalizeMessage = (message: string) => {
         }
     }
 
+    const documentRoomTokens = collectMatches(DOCUMENT_ROOM_ID_TOKEN, (match) => {
+        return trimToken(match[0]);
+    });
+    const documentIds = collectMatches(DOCUMENT_ROOM_ID_TOKEN, (match) => {
+        return match[1];
+    });
+
     // collect timing values to reduce retry/backoff cardinality while preserving raw values in metadata
     const timestamps = collectMatches(TIMESTAMP_TOKEN, (match) => {
         return trimToken(match[0]);
@@ -125,6 +134,7 @@ const normalizeMessage = (message: string) => {
     let normalized = message;
     normalized = replaceTokens(normalized, uriTokens, '{path}');
     normalized = replaceTokens(normalized, pathTokens, '{path}');
+    normalized = replaceTokens(normalized, documentRoomTokens, 'document-{id}');
     normalized = replaceTokens(normalized, timestamps, '{timestamp}');
     normalized = normalized.replace(UUID_TOKEN, '{uuid}');
     normalized = normalized.replace(CONTEXT_ID_TOKEN, '$1 {id}');
@@ -133,6 +143,7 @@ const normalizeMessage = (message: string) => {
         normalized,
         paths: Array.from(paths),
         assetIds: Array.from(assetIds),
+        documentIds: Array.from(documentIds),
         timestamps: Array.from(timestamps)
     };
 };
@@ -149,7 +160,7 @@ const client = new BrowserClient({
         const typedEvent = event as typeof event & GroupingEvent;
         if (typedEvent.message) {
             // note: group by normalized message template while retaining raw debug context
-            const { normalized, paths, assetIds, timestamps } = normalizeMessage(typedEvent.message);
+            const { normalized, paths, assetIds, documentIds, timestamps } = normalizeMessage(typedEvent.message);
             typedEvent.extra = {
                 // previous extra data is preserved
                 ...(typedEvent.extra || {}),
@@ -159,6 +170,7 @@ const client = new BrowserClient({
                     message: typedEvent.message,
                     paths,
                     assetIds,
+                    documentIds,
                     timestamps
                 }
             };
