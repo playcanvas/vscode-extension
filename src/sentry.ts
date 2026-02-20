@@ -9,7 +9,7 @@ const SANITIZE_KEYS = /password|token|secret|passwd|authorization|api_key|apikey
 
 const URI_TOKEN = /\b[a-z][a-z0-9+.-]*:(?:\/\/)?[^\s'"`]+/gi;
 const PATH_TOKEN =
-    /(?:[A-Za-z]:\\[^\s'"`]+|\/(?=[^\s'"`]*[A-Za-z])[^\s'"`]+|(?:\.\.?\/)?(?=[^\s'"`]*[A-Za-z])[^\s'"`]*\/[^\s'"`]+)/g;
+    /(?:[A-Za-z]:\\[^\s'"`]+|\/(?=[^\s'"`]*[A-Za-z])[^\s'"`]+|(?:\.\.?\/)?(?=[^\s'"`]*[A-Za-z])[^\s'"`]*\/[^\s'"`]+|\b(?=[^\s'"`]*[A-Za-z])[A-Za-z0-9.-]*_[A-Za-z0-9._-]*\b)/g;
 const UUID_TOKEN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const CONTEXT_ID_TOKEN = /\b(asset|document|project|branch|user|checkpoint)\s+\d+\b/gi;
 const DOCUMENT_ROOM_ID_TOKEN = /\bdocument-(\d+)\b/gi;
