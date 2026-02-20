@@ -13,3 +13,5 @@ TODO.md
 **/*.config.mjs
 **/*.map
 **/.vscode-test.*
+AGENTS.md
+CLAUDE.md
