@@ -7,6 +7,7 @@ user_invocable: true
 # Detect PR/Issue Labels
 
 ## 1. Gather data (parallel)
+
 - `git diff main...HEAD --name-only` — changed files
 - `GIT_SSL_NO_VERIFY=1 GH_HOST=github.sc-corp.net GH_REPO=Snapchat/playcanvas-monorepo gh label list --limit 200 --json name` — available labels
 
@@ -32,6 +33,7 @@ Label applies if **any** changed file matches. Only use labels that exist in the
 - Do NOT use `job:all`/`cron:all`/`service:all` unless module is truly used by every item in that category (e.g. `task-handler.js`, `error.js`).
 
 ### Infra (no label, just note)
+
 - `kubernetes/` (non-ingress), `snapci/`, `snapc_configs/` — mention in output
 
 ## 3. Output

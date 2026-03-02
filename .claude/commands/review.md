@@ -9,6 +9,7 @@ user_invocable: true
 Priorities: **performance** > **minimal diff** > **consistent style**
 
 ## 1. Gather context (parallel)
+
 - `git log --oneline main...HEAD`
 - `git diff main...HEAD --stat`
 - Lint (find command in `package.json` or CLAUDE.md)
@@ -30,6 +31,7 @@ Check for:
 Return per finding: file path, line, severity (error/warning/nit), description. Return "No issues" if clean.
 
 ## 3. Compile report
+
 - Lint/type errors first
 - Group by severity: errors → warnings → nits
 - Include commit hash + title per finding
