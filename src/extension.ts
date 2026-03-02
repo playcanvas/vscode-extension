@@ -485,7 +485,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // connect sharedb, messenger, relay if not connected
         if (!sharedb.connected.get()) {
-            await sharedb.connect(accessToken);
+            await sharedb.connect(() => accessToken);
             context.subscriptions.push(
                 new vscode.Disposable(() => {
                     sharedb.disconnect();
@@ -493,7 +493,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             );
         }
         if (!messenger.connected.get()) {
-            await messenger.connect(accessToken);
+            await messenger.connect(() => accessToken);
             context.subscriptions.push(
                 new vscode.Disposable(() => {
                     messenger.disconnect();
@@ -501,7 +501,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             );
         }
         if (!relay.connected.get()) {
-            await relay.connect(accessToken);
+            await relay.connect(() => accessToken);
             context.subscriptions.push(
                 new vscode.Disposable(() => {
                     relay.disconnect();

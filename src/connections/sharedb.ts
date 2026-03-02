@@ -9,6 +9,8 @@ import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
 
+import { PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+
 // register text type
 sharedb.types.register(type);
 
@@ -35,6 +37,16 @@ class ShareDb extends EventEmitter<EventMap> {
 
     private _alive: ReturnType<typeof setInterval> | null = null;
 
+    private _reconnectAttempt = 0;
+
+    private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    private _disconnecting = false;
+
+    private _getToken: (() => string) | null = null;
+
+    private _lastPong = 0;
+
     url: string;
 
     origin: string;
@@ -52,7 +64,10 @@ class ShareDb extends EventEmitter<EventMap> {
         this.origin = origin;
     }
 
-    private _connect(accessToken: string) {
+    private _connect() {
+        this._disconnecting = false;
+
+        const accessToken = this._getToken!();
         const options = WEB
             ? undefined
             : {
@@ -114,18 +129,23 @@ class ShareDb extends EventEmitter<EventMap> {
                 this._log.debug('paused', key);
             }
 
-            // if not unauthorized error,try to reconnect
-            if (code !== 3000) {
-                setTimeout(() => {
-                    this._socket = this._connect(accessToken);
-                }, 1000);
+            // skip reconnect if intentionally disconnected
+            if (this._disconnecting) {
+                return;
             }
+
+            // schedule reconnection with backoff
+            this._scheduleReconnect();
         });
 
         return socket;
     }
 
     private async _onauth(socket: WebSocket) {
+        // reset backoff on successful auth
+        this._reconnectAttempt = 0;
+        this._lastPong = Date.now();
+
         if (this._connection) {
             this._connection.bindToSocket(socket as Socket);
         } else {
@@ -140,12 +160,21 @@ class ShareDb extends EventEmitter<EventMap> {
             clearInterval(this._alive);
         }
         this._alive = setInterval(() => {
+            // check for pong timeout — server pings every 1s so we should always receive data
+            if (Date.now() - this._lastPong > PONG_TIMEOUT_MS) {
+                this._log.warn('pong timeout, closing socket');
+                socket.close(4001, 'pong timeout');
+                return;
+            }
             this._connection?.ping();
-        }, 1000);
+        }, PING_INTERVAL_MS);
 
         // intercept for custom messages
         const onmessage = socket.onmessage?.bind(socket);
         socket.onmessage = (msg) => {
+            // update last pong on any incoming message
+            this._lastPong = Date.now();
+
             // intercept custom messages
             const str = msg.data.toString();
             if (/^(\w+):/.test(str)) {
@@ -279,12 +308,43 @@ class ShareDb extends EventEmitter<EventMap> {
         socket.send(data);
     }
 
-    async connect(accessToken: string) {
-        this._socket = this._connect(accessToken);
+    private _scheduleReconnect() {
+        const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, this._reconnectAttempt), RECONNECT_MAX_MS);
+        this._log.info(`reconnecting in ${delay}ms (attempt ${this._reconnectAttempt + 1})`);
+        this._reconnectAttempt++;
+        this._reconnectTimer = setTimeout(() => {
+            if (this._disconnecting) {
+                return;
+            }
+            this._socket = this._connect();
+        }, delay);
+    }
+
+    private _cancelReconnect() {
+        this._reconnectAttempt = 0;
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
+    }
+
+    async connect(getToken: () => string) {
+        this._getToken = getToken;
+        this._socket = this._connect();
         await this._active.promise;
     }
 
     disconnect() {
+        // mark as intentional disconnect
+        this._disconnecting = true;
+        this._cancelReconnect();
+
+        // clear keep alive
+        if (this._alive) {
+            clearInterval(this._alive);
+            this._alive = null;
+        }
+
         // close all docs
         for (const [_key, doc] of this.subscriptions) {
             doc.destroy();

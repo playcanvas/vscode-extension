@@ -6,6 +6,8 @@ import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
 
+import { PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+
 type EventMap = {
     'asset.new': [
         {
@@ -75,6 +77,16 @@ class Messenger extends EventEmitter<EventMap> {
 
     private _alive: ReturnType<typeof setInterval> | null = null;
 
+    private _reconnectAttempt = 0;
+
+    private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    private _disconnecting = false;
+
+    private _getToken: (() => string) | null = null;
+
+    private _lastPong = 0;
+
     url: string;
 
     origin: string;
@@ -90,7 +102,10 @@ class Messenger extends EventEmitter<EventMap> {
         this.origin = origin;
     }
 
-    private _connect(accessToken: string) {
+    private _connect() {
+        this._disconnecting = false;
+
+        const accessToken = this._getToken!();
         const options = WEB
             ? undefined
             : {
@@ -114,14 +129,14 @@ class Messenger extends EventEmitter<EventMap> {
         });
 
         // wait for auth response
-        const onmessage = async ({ data }: { data: Data }) => {
+        const onmessage = ({ data }: { data: Data }) => {
             try {
                 const json = JSON.parse(data.toString());
                 if (json.name === 'welcome') {
                     socket.removeEventListener('message', onmessage);
 
                     // authenticated
-                    await this._onauth(socket);
+                    this._onauth(socket);
                 }
             } catch (e) {
                 this._log.debug('messenger.message', e);
@@ -148,29 +163,42 @@ class Messenger extends EventEmitter<EventMap> {
                 this._alive = null;
             }
 
-            // if not internal error,try to reconnect
-            if (code !== 1011) {
-                setTimeout(() => {
-                    this._socket = this._connect(accessToken);
-                }, 1000);
+            // skip reconnect if intentionally disconnected
+            if (this._disconnecting) {
+                return;
             }
+
+            // schedule reconnection with backoff
+            this._scheduleReconnect();
         });
 
         return socket;
     }
 
     private _onauth(socket: WebSocket) {
+        // reset backoff on successful auth
+        this._reconnectAttempt = 0;
+        this._lastPong = Date.now();
+
         // reset keep alive
         if (this._alive) {
             clearInterval(this._alive);
         }
         this._alive = setInterval(() => {
+            // check for pong timeout
+            if (Date.now() - this._lastPong > PONG_TIMEOUT_MS) {
+                this._log.warn('pong timeout, closing socket');
+                socket.close(4001, 'pong timeout');
+                return;
+            }
+            // app-level ping — server responds with bare "pong" (not JSON-encoded)
             socket.send(JSON.stringify('ping'));
-        }, 1000);
+        }, PING_INTERVAL_MS);
 
         // on message handler
         socket.addEventListener('message', ({ data: raw }: { data: Data }) => {
             if (raw.toString() === 'pong') {
+                this._lastPong = Date.now();
                 return;
             }
             try {
@@ -181,6 +209,19 @@ class Messenger extends EventEmitter<EventMap> {
                 this._log.debug('socket.message', e);
             }
         });
+
+        // re-watch all tracked projects
+        for (const projectId of this.watchers) {
+            socket.send(
+                JSON.stringify({
+                    name: 'project.watch',
+                    target: { type: 'general' },
+                    env: ['*'],
+                    data: { id: projectId }
+                })
+            );
+            this._log.debug(`re-watching project ${projectId}`);
+        }
 
         // resolve active
         this._active.resolve(socket);
@@ -236,12 +277,43 @@ class Messenger extends EventEmitter<EventMap> {
         socket.send(JSON.stringify(data));
     }
 
-    async connect(accessToken: string) {
-        this._socket = this._connect(accessToken);
+    private _scheduleReconnect() {
+        const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, this._reconnectAttempt), RECONNECT_MAX_MS);
+        this._log.info(`reconnecting in ${delay}ms (attempt ${this._reconnectAttempt + 1})`);
+        this._reconnectAttempt++;
+        this._reconnectTimer = setTimeout(() => {
+            if (this._disconnecting) {
+                return;
+            }
+            this._socket = this._connect();
+        }, delay);
+    }
+
+    private _cancelReconnect() {
+        this._reconnectAttempt = 0;
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
+    }
+
+    async connect(getToken: () => string) {
+        this._getToken = getToken;
+        this._socket = this._connect();
         await this._active.promise;
     }
 
     disconnect() {
+        // mark as intentional disconnect
+        this._disconnecting = true;
+        this._cancelReconnect();
+
+        // clear keep alive
+        if (this._alive) {
+            clearInterval(this._alive);
+            this._alive = null;
+        }
+
         // close socket
         this._socket?.close();
 

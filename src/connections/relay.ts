@@ -6,6 +6,8 @@ import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
 
+import { PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+
 type EventMap = {
     'room:join': [{ name: string; userId: number; users?: number[] }];
     'room:leave': [{ name: string; userId: number }];
@@ -19,6 +21,18 @@ class Relay extends EventEmitter<EventMap> {
     private _socket: WebSocket | null = null;
 
     private _alive: ReturnType<typeof setInterval> | null = null;
+
+    private _authTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    private _reconnectAttempt = 0;
+
+    private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    private _disconnecting = false;
+
+    private _getToken: (() => string) | null = null;
+
+    private _lastPong = 0;
 
     url: string;
 
@@ -37,7 +51,10 @@ class Relay extends EventEmitter<EventMap> {
         this.origin = origin;
     }
 
-    private _connect(accessToken: string) {
+    private _connect() {
+        this._disconnecting = false;
+
+        const accessToken = this._getToken!();
         const options = WEB
             ? undefined
             : {
@@ -51,7 +68,8 @@ class Relay extends EventEmitter<EventMap> {
 
         // send request for auth
         // ! Invalid access tokens will hang here
-        const timeout = setTimeout(() => {
+        this._authTimeout = setTimeout(() => {
+            this._authTimeout = null;
             const reason = `[${this.constructor.name}] invalid access token`;
             // TODO: figure out why this triggers 1006 not 3000
             socket.close(3000, reason);
@@ -59,7 +77,10 @@ class Relay extends EventEmitter<EventMap> {
         }, 5000);
         socket.addEventListener('open', () => {
             this._log.debug('socket.open');
-            clearTimeout(timeout);
+            if (this._authTimeout) {
+                clearTimeout(this._authTimeout);
+                this._authTimeout = null;
+            }
 
             this._onauth(socket);
         });
@@ -73,6 +94,12 @@ class Relay extends EventEmitter<EventMap> {
         socket.addEventListener('close', ({ code, reason }: { code: number; reason: string }) => {
             this._log.debug('socket.close', code, reason.toString());
 
+            // clear auth timeout if still pending
+            if (this._authTimeout) {
+                clearTimeout(this._authTimeout);
+                this._authTimeout = null;
+            }
+
             // reset connected
             this._active = new Deferred();
             this.connected.set(() => false);
@@ -83,27 +110,42 @@ class Relay extends EventEmitter<EventMap> {
                 this._alive = null;
             }
 
-            // if closed abnormally, try to reconnect
-            setTimeout(() => {
-                this._socket = this._connect(accessToken);
-            }, 1000);
+            // skip reconnect if intentionally disconnected
+            if (this._disconnecting) {
+                return;
+            }
+
+            // schedule reconnection with backoff
+            this._scheduleReconnect();
         });
 
         return socket;
     }
 
     private _onauth(socket: WebSocket) {
+        // reset backoff on successful auth
+        this._reconnectAttempt = 0;
+        this._lastPong = Date.now();
+
         // reset keep alive
         if (this._alive) {
             clearInterval(this._alive);
         }
         this._alive = setInterval(() => {
+            // check for pong timeout
+            if (Date.now() - this._lastPong > PONG_TIMEOUT_MS) {
+                this._log.warn('pong timeout, closing socket');
+                socket.close(4001, 'pong timeout');
+                return;
+            }
+            // app-level ping — server responds with bare "pong" (not JSON-encoded)
             socket.send(JSON.stringify('ping'));
-        }, 1000);
+        }, PING_INTERVAL_MS);
 
         // on message handler
         socket.addEventListener('message', ({ data: raw }: { data: Data }) => {
             if (raw.toString() === 'pong') {
+                this._lastPong = Date.now();
                 return;
             }
             try {
@@ -119,6 +161,23 @@ class Relay extends EventEmitter<EventMap> {
                 this._log.debug('socket.message', e);
             }
         });
+
+        // re-join all tracked rooms
+        for (const [projectId, roomNames] of this.rooms) {
+            for (const name of roomNames) {
+                socket.send(
+                    JSON.stringify({
+                        t: 'room:join',
+                        name,
+                        authentication: {
+                            type: 'project',
+                            id: projectId
+                        }
+                    })
+                );
+                this._log.debug(`re-joining room ${name}`);
+            }
+        }
 
         // resolve active
         this._active.resolve(socket);
@@ -188,12 +247,49 @@ class Relay extends EventEmitter<EventMap> {
         socket.send(JSON.stringify(data));
     }
 
-    async connect(accessToken: string) {
-        this._socket = this._connect(accessToken);
+    private _scheduleReconnect() {
+        const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, this._reconnectAttempt), RECONNECT_MAX_MS);
+        this._log.info(`reconnecting in ${delay}ms (attempt ${this._reconnectAttempt + 1})`);
+        this._reconnectAttempt++;
+        this._reconnectTimer = setTimeout(() => {
+            if (this._disconnecting) {
+                return;
+            }
+            this._socket = this._connect();
+        }, delay);
+    }
+
+    private _cancelReconnect() {
+        this._reconnectAttempt = 0;
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
+    }
+
+    async connect(getToken: () => string) {
+        this._getToken = getToken;
+        this._socket = this._connect();
         await this._active.promise;
     }
 
     disconnect() {
+        // mark as intentional disconnect
+        this._disconnecting = true;
+        this._cancelReconnect();
+
+        // clear auth timeout
+        if (this._authTimeout) {
+            clearTimeout(this._authTimeout);
+            this._authTimeout = null;
+        }
+
+        // clear keep alive
+        if (this._alive) {
+            clearInterval(this._alive);
+            this._alive = null;
+        }
+
         // close socket
         this._socket?.close();
 
