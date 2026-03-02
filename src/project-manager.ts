@@ -1035,23 +1035,22 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
-        const doSave = () => {
-            this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
-            this._log.debug(`saved file ${path}`);
-        };
-
         // wait for pending ops to be acknowledged before saving,
         // matching the Code Editor's behavior (save.ts:144-150).
         // prevents saving stale content while ops are in-flight.
+        const save = () => {
+            this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
+            this._log.debug(`saved file ${path}`);
+        };
         if (file.doc.hasPending()) {
-            file.doc.once('nothing pending', doSave);
+            file.doc.once('nothing pending', save);
             // re-check: event may have fired between hasPending() and once()
             if (!file.doc.hasPending()) {
-                file.doc.off('nothing pending', doSave);
-                doSave();
+                file.doc.off('nothing pending', save);
+                save();
             }
         } else {
-            doSave();
+            save();
         }
     }
 
