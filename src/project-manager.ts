@@ -366,7 +366,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         if (attempt > ProjectManager.MAX_RETRIES) {
-            this._log.warn(`giving up subscribing to document ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
+            this._log.error(
+                `giving up subscribing to document ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`
+            );
             return;
         }
 
@@ -420,7 +422,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // enforce retry limit
         const attempt = (this._saveRetryCounts.get(uniqueId) ?? 0) + 1;
         if (attempt > ProjectManager.MAX_RETRIES) {
-            this._log.warn(`giving up saving document ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
+            this._log.error(`giving up saving document ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
             this._saveRetryCounts.delete(uniqueId);
             return;
         }
