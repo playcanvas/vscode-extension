@@ -28,7 +28,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     context.subscriptions.push(Log.channel);
     context.subscriptions.push(
         new vscode.Disposable(() => {
-            closeSentry();
+            void closeSentry();
         })
     );
     if (DEBUG) {
