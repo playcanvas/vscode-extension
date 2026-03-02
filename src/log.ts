@@ -21,7 +21,6 @@ class Log {
 
     warn(...args: unknown[]) {
         Log.channel.warn(`[${this._source}]`, ...args);
-        captureMessage(args.map(String).join(' '), 'warning', this._source);
     }
 
     error(...args: unknown[]) {
