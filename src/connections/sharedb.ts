@@ -206,21 +206,36 @@ class ShareDb extends EventEmitter<EventMap> {
             const doc = connection.get(type, key);
             doc.on('load', () => {
                 this._log.debug('doc.load', type, key);
+                this.subscriptions.set(`${type}:${key}`, doc);
                 resolve(doc);
             });
             doc.on('error', (err) => {
                 this._log.debug('doc.error', err);
+                this.subscriptions.delete(`${type}:${key}`);
+                doc.destroy();
                 resolve(undefined);
             });
             doc.on('destroy', () => {
                 this._log.debug('doc.destroy', type, key);
+                this.subscriptions.delete(`${type}:${key}`);
             });
             doc.subscribe();
             this._log.debug('doc.subscribe', type, key);
-
-            // track subscription
-            this.subscriptions.set(`${type}:${key}`, doc);
         });
+    }
+
+    /**
+     * Destroy an existing subscription (if any) and re-subscribe from scratch.
+     * Any ops delivered between destroy and the new subscribe completing will be
+     * lost. Only use when the prior subscription is known to be broken.
+     */
+    async resubscribe(type: string, key: string): Promise<sharedb.Doc | undefined> {
+        const existing = this.subscriptions.get(`${type}:${key}`);
+        if (existing) {
+            existing.destroy();
+            this.subscriptions.delete(`${type}:${key}`);
+        }
+        return this.subscribe(type, key);
     }
 
     async bulkSubscribe(subscriptions: [string, string][]) {

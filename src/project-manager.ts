@@ -42,6 +42,12 @@ type VirtualFile = {
 );
 
 class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
+    private static readonly MAX_RETRIES = 3;
+
+    private static readonly RETRY_BASE_MS = 1000;
+
+    private _pendingRetries = new Map<number, NodeJS.Timeout>();
+
     private _events: EventEmitter<EventMap>;
 
     private _sharedb: ShareDb;
@@ -345,6 +351,57 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return true;
     }
 
+    private _retryDocSubscription(uniqueId: number, attempt = 1) {
+        // cancel any existing retry for this uniqueId
+        const existing = this._pendingRetries.get(uniqueId);
+        if (existing) {
+            clearTimeout(existing);
+            this._pendingRetries.delete(uniqueId);
+        }
+
+        if (attempt > ProjectManager.MAX_RETRIES) {
+            this._log.warn(`giving up subscribing to document ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
+            return;
+        }
+
+        const delay = ProjectManager.RETRY_BASE_MS * Math.pow(2, attempt - 1);
+        this._log.debug(`retrying subscription to document ${uniqueId} in ${delay}ms (attempt ${attempt})`);
+
+        const timeout = setTimeout(async () => {
+            this._pendingRetries.delete(uniqueId);
+
+            // bail out if project was unlinked while waiting
+            if (!this._projectId || !this._branchId) {
+                return;
+            }
+
+            const doc = await this._sharedb.resubscribe('documents', `${uniqueId}`);
+
+            // re-check after await — unlink may have happened during resubscribe
+            if (!this._projectId || !this._branchId) {
+                if (doc) {
+                    doc.destroy();
+                }
+                return;
+            }
+
+            if (!doc) {
+                this._retryDocSubscription(uniqueId, attempt + 1);
+                return;
+            }
+
+            this._cleanup.push(async () => {
+                await this._sharedb.unsubscribe('documents', `${uniqueId}`);
+            });
+
+            if (this._addFile(uniqueId, doc)) {
+                this._log.info(`retry succeeded for document ${uniqueId} on attempt ${attempt}`);
+            }
+        }, delay);
+
+        this._pendingRetries.set(uniqueId, timeout);
+    }
+
     private _watchSharedb() {
         const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
             if (state !== 'success') {
@@ -429,7 +486,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 // subscribe to asset document
                 const doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
                 if (!doc2) {
-                    this.error.set(() => new Error(`failed to subscribe to new document ${uniqueId}`));
+                    this._log.warn(`failed to subscribe to new document ${uniqueId}, scheduling retry`);
+                    this._retryDocSubscription(uniqueId);
                     return;
                 }
                 this._cleanup.push(async () => {
@@ -977,10 +1035,23 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
-        // notify ShareDB to save the document
-        this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
-
-        this._log.debug(`saved file ${path}`);
+        // wait for pending ops to be acknowledged before saving,
+        // matching the Code Editor's behavior (save.ts:144-150).
+        // prevents saving stale content while ops are in-flight.
+        const save = () => {
+            this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
+            this._log.debug(`saved file ${path}`);
+        };
+        if (file.doc.hasPending()) {
+            file.doc.once('nothing pending', save);
+            // re-check: event may have fired between hasPending() and once()
+            if (!file.doc.hasPending()) {
+                file.doc.off('nothing pending', save);
+                save();
+            }
+        } else {
+            save();
+        }
     }
 
     path(assetId: number) {
@@ -1129,7 +1200,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 const doc = docs[j];
                 const { uniqueId } = batch[j];
                 if (!doc) {
-                    this.error.set(() => new Error(`failed to subscribe to document ${uniqueId}`));
+                    this._log.warn(`failed to subscribe to document ${uniqueId}, scheduling retry`);
+                    this._retryDocSubscription(uniqueId);
                     loadFileNext();
                     continue;
                 }
@@ -1161,6 +1233,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchEvents();
             unwatchSharedb();
             unwatchMessenger();
+
+            // cancel pending retries
+            for (const timeout of this._pendingRetries.values()) {
+                clearTimeout(timeout);
+            }
+            this._pendingRetries.clear();
 
             this._files.clear();
             this._assets.clear();
