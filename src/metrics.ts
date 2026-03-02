@@ -73,6 +73,8 @@ class GrapheneSender implements vscode.TelemetrySender {
 
     private _flushPromise: Promise<void> | undefined;
 
+    private _closing = false;
+
     private _url: string;
 
     constructor(accessToken: string) {
@@ -111,6 +113,7 @@ class GrapheneSender implements vscode.TelemetrySender {
     }
 
     async flush(): Promise<void> {
+        this._closing = true;
         if (this._timer) {
             clearInterval(this._timer);
         }
@@ -208,7 +211,7 @@ class GrapheneSender implements vscode.TelemetrySender {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ events })
         }).catch((err) => {
-            this._log.error(`flush failed: ${err.message}`);
+            this._log.debug(`flush failed: ${err.message}`);
             return null;
         });
         if (!res) {
@@ -219,10 +222,12 @@ class GrapheneSender implements vscode.TelemetrySender {
                 return 'too-large';
             }
             if (RETRYABLE_STATUS.has(res.status)) {
-                this._log.error(`flush failed: ${res.status} ${res.statusText}`);
+                this._log.debug(`flush failed: ${res.status} ${res.statusText}`);
                 return 'retry';
             }
-            this._log.error(`flush failed: ${res.status} ${res.statusText}`);
+            if (!this._closing) {
+                this._log.warn(`flush failed: ${res.status} ${res.statusText}`);
+            }
             return 'drop';
         }
         return 'ok';
