@@ -237,7 +237,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const document = await vscode.workspace.openTextDocument(uri);
                 const workspaceEdit = new vscode.WorkspaceEdit();
                 workspaceEdit.set(uri, sharedb2vscode(document, [op]));
-                await vscode.workspace.applyEdit(workspaceEdit);
+                const applied = await vscode.workspace.applyEdit(workspaceEdit);
 
                 // note: reconcile dropped keystrokes using content snapshot (doc.data
                 // at op time), not live doc.data which races ahead when ops arrive
@@ -247,6 +247,30 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const expected = buffer.toString(content);
                     if (expected !== currentText) {
                         const path = relativePath(uri, this._folderUri);
+
+                        if (!applied) {
+                            // applyEdit failed — replace VS Code buffer with ShareDB state
+                            const file = this._projectManager.files.get(path);
+                            if (file?.type === 'file') {
+                                const docData = file.doc.data as string;
+                                const fullReplace = new vscode.WorkspaceEdit();
+                                fullReplace.replace(
+                                    uri,
+                                    new vscode.Range(document.positionAt(0), document.positionAt(currentText.length)),
+                                    docData
+                                );
+                                const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
+                                if (!resyncApplied) {
+                                    this._log.error(`reconcile.remote.resync also failed for ${uri}`);
+                                }
+                                this._sync(uri, buffer.from(docData));
+                                this._locks.delete(`${uri}`);
+                                this._log.warn(`reconcile.remote.resync ${uri}`);
+                                return;
+                            }
+                        }
+
+                        // applyEdit succeeded but text differs — user typed during lock
                         this._projectManager.write(path, buffer.from(currentText));
                         this._sync(uri, buffer.from(currentText));
                         this._locks.delete(`${uri}`);
@@ -338,7 +362,27 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                     this._log.debug(`save.remote.open.empty ${uri}`);
                 } else {
-                    await document.save();
+                    // cancel pending debounced sync to prevent mtime race
+                    this._debouncer.cancel(`${uri}`);
+
+                    // write ShareDB content to disk first so that document.save() sees
+                    // consistent mtime and doesn't prompt "file on disk is newer".
+                    // note: if the user types between writeFile and save, document.save()
+                    // will write the buffer (including the keystroke) which is correct.
+                    const folderUri = this._folderUri;
+                    const path = folderUri ? relativePath(uri, folderUri) : undefined;
+                    const file = path ? this._projectManager?.files.get(path) : undefined;
+                    if (file?.type === 'file') {
+                        const content = buffer.from(file.doc.data);
+                        this._echo.set(`${uri}:change`, hash(content));
+                        await vscode.workspace.fs.writeFile(uri, content);
+                    }
+
+                    try {
+                        await document.save();
+                    } catch (err) {
+                        this._log.warn(`save failed for ${uri}`, err);
+                    }
                     this._log.debug(`save.remote.open ${uri}`);
                 }
             } else {
