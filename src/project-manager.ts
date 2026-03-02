@@ -42,11 +42,17 @@ type VirtualFile = {
 );
 
 class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
-    private static readonly MAX_RETRIES = 3;
+    private static readonly MAX_RETRIES = 5;
 
     private static readonly RETRY_BASE_MS = 1000;
 
+    private static readonly SAVE_RETRY_DELAY_MS = 2000;
+
     private _pendingRetries = new Map<number, NodeJS.Timeout>();
+
+    private _pendingSaveRetries = new Map<number, NodeJS.Timeout>();
+
+    private _saveRetryCounts = new Map<number, number>();
 
     private _events: EventEmitter<EventMap>;
 
@@ -375,6 +381,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 return;
             }
 
+            // re-open the document on the server before resubscribing
+            await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
+
             const doc = await this._sharedb.resubscribe('documents', `${uniqueId}`);
 
             // re-check after await — unlink may have happened during resubscribe
@@ -402,12 +411,64 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._pendingRetries.set(uniqueId, timeout);
     }
 
-    private _watchSharedb() {
-        const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
-            if (state !== 'success') {
-                this._log.warn(`failed to save document ${uniqueId}: ${state}`);
+    private _retrySave(uniqueId: number) {
+        // skip if already retrying this doc
+        if (this._pendingSaveRetries.has(uniqueId)) {
+            return;
+        }
+
+        // enforce retry limit
+        const attempt = (this._saveRetryCounts.get(uniqueId) ?? 0) + 1;
+        if (attempt > ProjectManager.MAX_RETRIES) {
+            this._log.warn(`giving up saving document ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
+            this._saveRetryCounts.delete(uniqueId);
+            return;
+        }
+        this._saveRetryCounts.set(uniqueId, attempt);
+
+        const timeout = setTimeout(async () => {
+            this._pendingSaveRetries.delete(uniqueId);
+
+            // bail out if project was unlinked while waiting
+            if (!this._projectId) {
                 return;
             }
+
+            // re-open the document on the server via doc:reconnect
+            await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
+
+            // re-check after await — unlink may have happened during sendRaw
+            if (!this._projectId) {
+                return;
+            }
+
+            this._sharedb.sendRaw(`doc:save:${uniqueId}`);
+            this._log.debug(`retried save for document ${uniqueId} (attempt ${attempt})`);
+        }, ProjectManager.SAVE_RETRY_DELAY_MS);
+
+        this._pendingSaveRetries.set(uniqueId, timeout);
+    }
+
+    private _watchSharedb() {
+        const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
+            // skip if asset was deleted while save was in-flight
+            if (!this._assets.has(uniqueId)) {
+                return;
+            }
+
+            if (state !== 'success') {
+                this._log.warn(`failed to save document ${uniqueId}: ${state}`);
+                this._retrySave(uniqueId);
+                return;
+            }
+
+            // clear retry state on success
+            const pending = this._pendingSaveRetries.get(uniqueId);
+            if (pending) {
+                clearTimeout(pending);
+                this._pendingSaveRetries.delete(uniqueId);
+            }
+            this._saveRetryCounts.delete(uniqueId);
 
             // find file by uniqueId
             const path = this._assetPath(uniqueId);
@@ -1239,6 +1300,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 clearTimeout(timeout);
             }
             this._pendingRetries.clear();
+
+            // cancel pending save retries
+            for (const timeout of this._pendingSaveRetries.values()) {
+                clearTimeout(timeout);
+            }
+            this._pendingSaveRetries.clear();
+            this._saveRetryCounts.clear();
 
             this._files.clear();
             this._assets.clear();
