@@ -3,7 +3,7 @@ import type sinon from 'sinon';
 import { Relay } from '../../connections/relay';
 
 class MockRelay extends Relay {
-    connect: sinon.SinonSpy<[], Promise<void>>;
+    connect: sinon.SinonSpy<[() => string], Promise<void>>;
 
     disconnect: sinon.SinonSpy<[], void>;
 
@@ -19,7 +19,7 @@ class MockRelay extends Relay {
             origin: ''
         });
 
-        this.connect = sandbox.spy(async () => {
+        this.connect = sandbox.spy(async (_getToken: () => string) => {
             this.connected.set(() => true);
         });
         this.disconnect = sandbox.spy(() => {

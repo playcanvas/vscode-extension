@@ -258,7 +258,7 @@ class MockDoc extends Doc {
 class MockShareDb extends ShareDb {
     subscriptions = new Map<string, MockDoc>();
 
-    connect: sinon.SinonSpy<[string], Promise<void>>;
+    connect: sinon.SinonSpy<[() => string], Promise<void>>;
 
     disconnect: sinon.SinonSpy<[], void>;
 
@@ -275,7 +275,7 @@ class MockShareDb extends ShareDb {
     constructor(sandbox: sinon.SinonSandbox, messenger: MockMessenger) {
         super({ url: '', origin: '' });
 
-        this.connect = sandbox.spy(async (_accessToken: string) => {
+        this.connect = sandbox.spy(async (_getToken: () => string) => {
             this.connected.set(() => true);
         });
         this.disconnect = sandbox.spy(() => {
