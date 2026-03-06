@@ -5,10 +5,15 @@ import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
-
 import { withTimeout } from '../utils/utils';
 
-import { CONNECT_TIMEOUT_MS, PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+import {
+    CONNECT_TIMEOUT_MS,
+    PING_INTERVAL_MS,
+    PONG_TIMEOUT_MS,
+    RECONNECT_BASE_MS,
+    RECONNECT_MAX_MS
+} from './constants';
 
 type EventMap = {
     'room:join': [{ name: string; userId: number; users?: number[] }];
@@ -203,9 +208,13 @@ class Relay extends EventEmitter<EventMap> {
                 type: 'project',
                 id: projectId
             }
-        }).then(() => {
-            this._log.debug(`joined room ${name}`);
-        });
+        })
+            .then(() => {
+                this._log.debug(`joined room ${name}`);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send room message', err);
+            });
 
         // track joined rooms
         if (!this.rooms.has(projectId)) {
@@ -225,9 +234,13 @@ class Relay extends EventEmitter<EventMap> {
         this.send({
             t: 'room:leave',
             name: name
-        }).then(() => {
-            this._log.debug(`left room ${name}`);
-        });
+        })
+            .then(() => {
+                this._log.debug(`left room ${name}`);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send room message', err);
+            });
 
         // track left rooms
         this.rooms.get(projectId)?.delete(name);
@@ -239,9 +252,13 @@ class Relay extends EventEmitter<EventMap> {
             msg: msg,
             name: name,
             to: userId
-        }).then(() => {
-            this._log.debug(`sent message to room ${name}`, msg);
-        });
+        })
+            .then(() => {
+                this._log.debug(`sent message to room ${name}`, msg);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send room message', err);
+            });
     }
 
     async send(data: object) {

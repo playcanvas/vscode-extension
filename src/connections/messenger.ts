@@ -5,10 +5,15 @@ import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
-
 import { withTimeout } from '../utils/utils';
 
-import { CONNECT_TIMEOUT_MS, PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+import {
+    CONNECT_TIMEOUT_MS,
+    PING_INTERVAL_MS,
+    PONG_TIMEOUT_MS,
+    RECONNECT_BASE_MS,
+    RECONNECT_MAX_MS
+} from './constants';
 
 type EventMap = {
     'asset.new': [
@@ -245,9 +250,13 @@ class Messenger extends EventEmitter<EventMap> {
             target: { type: 'general' },
             env: ['*'],
             data: { id: projectId }
-        }).then(() => {
-            this._log.info(`watching project ${projectId}`);
-        });
+        })
+            .then(() => {
+                this._log.info(`watching project ${projectId}`);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send watch request', err);
+            });
 
         // track watchers
         this.watchers.add(projectId);
@@ -266,9 +275,13 @@ class Messenger extends EventEmitter<EventMap> {
             target: { type: 'general' },
             env: ['*'],
             data: { id: projectId }
-        }).then(() => {
-            this._log.info(`unwatched project ${projectId}`);
-        });
+        })
+            .then(() => {
+                this._log.info(`unwatched project ${projectId}`);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send watch request', err);
+            });
 
         // remove from watchers
         this.watchers.delete(projectId);
