@@ -30,10 +30,11 @@ class EventEmitter<T extends EventMap = Record<string, any[]>> {
     }
 
     emit<K extends Key<T>>(event: K, ...args: T[K]) {
-        if (!this._listeners.has(event)) {
+        const listeners = this._listeners.get(event);
+        if (!listeners) {
             return false;
         }
-        for (const listener of this._listeners.get(event)!) {
+        for (const listener of [...listeners]) {
             listener(...args);
         }
         return true;
