@@ -42,7 +42,9 @@ class Auth {
 
         // FIXME: Improve server side OAuth flow to avoid opening a local server and parsing HTML
         return new Promise<string>((resolve, reject) => {
+            const ctrl = new AbortController();
             const timeout = setTimeout(() => {
+                ctrl.abort();
                 server.close();
                 reject(new Error('Authentication timed out. Please try again.'));
             }, AUTH_TIMEOUT_MS);
@@ -65,7 +67,8 @@ class Auth {
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({ code })
+                        body: JSON.stringify({ code }),
+                        signal: ctrl.signal
                     });
                     if (!res2.ok) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -81,7 +84,8 @@ class Auth {
                     const res3 = await fetch(`${HOME_URL}/editor`, {
                         headers: {
                             Cookie: cookie
-                        }
+                        },
+                        signal: ctrl.signal
                     });
                     if (!res3.ok) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
