@@ -1,7 +1,10 @@
 class Mutex<T> {
     private _chains = new Map<string, Promise<T | undefined>>();
 
-    constructor(private readonly _match: (key1: string, key2: string) => boolean) {}
+    constructor(
+        private readonly _match: (key1: string, key2: string) => boolean,
+        private readonly _onError?: (err: unknown) => void
+    ) {}
 
     async atomic(keys: string[], fn: () => Promise<T>): Promise<T | undefined> {
         // wait for all matching chains to complete
@@ -19,7 +22,12 @@ class Mutex<T> {
 
         // schedule the new operation
         const chain = wait
-            .then(() => fn().catch(() => undefined))
+            .then(() =>
+                fn().catch((err) => {
+                    this._onError?.(err);
+                    return undefined;
+                })
+            )
             .finally(() => {
                 // remove the chain when done
                 for (const key of keys) {
