@@ -7,7 +7,9 @@ class Mutex<T> {
     ) {}
 
     async atomic(keys: string[], fn: () => Promise<T>): Promise<T | undefined> {
-        const chain = (async () => {
+        /* eslint-disable prefer-const -- let avoids TDZ; const throws inside IIFE */
+        let chain: Promise<T | undefined>;
+        chain = (async () => {
             // wait until no overlapping chains remain
             let deps: Promise<T | undefined>[];
             do {
