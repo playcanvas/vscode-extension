@@ -1,5 +1,6 @@
 import type { Doc } from 'sharedb';
 
+import { EVENT_TIMEOUT_MS } from './connections/constants';
 import type { Messenger } from './connections/messenger';
 import type { Relay } from './connections/relay';
 import type { Rest } from './connections/rest';
@@ -14,7 +15,7 @@ import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
-import { hash, parsePath, guard } from './utils/utils';
+import { hash, parsePath, guard, withTimeout, tryCatch } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -765,13 +766,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         const docOpenHandle = this._events.on('asset:doc:open', (path: string) => {
             // wait for file to be available
-            this.waitForFile(path, 'file').then((file) => {
-                // join relay room
-                this._relay.join(`document-${file.uniqueId}`, projectId);
-                this._cleanup.push(async () => {
-                    this._relay.leave(`document-${file.uniqueId}`, projectId);
+            this.waitForFile(path, 'file')
+                .then((file) => {
+                    // join relay room
+                    this._relay.join(`document-${file.uniqueId}`, projectId);
+                    this._cleanup.push(async () => {
+                        this._relay.leave(`document-${file.uniqueId}`, projectId);
+                    });
+                })
+                .catch((err: Error) => {
+                    this._log.warn(`waitForFile failed for ${path}: ${err.message}`);
                 });
-            });
         });
         const docCloseHandle = this._events.on('asset:doc:close', (path: string) => {
             // check if in project
@@ -800,20 +805,31 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // creation promise
-        return new Promise<VirtualFile>((resolve) => {
-            const oncreate = (uniqueId: number) => {
+        let oncreate: ((uniqueId: number) => void) | undefined;
+        const pending = new Promise<VirtualFile>((resolve) => {
+            oncreate = (uniqueId: number) => {
                 const assetPath = this._assetPath(uniqueId);
                 if (assetPath === path) {
                     const file = this._files.get(path);
                     if (!file || file.type !== type) {
                         return;
                     }
-                    this._events.off('asset:create', oncreate);
+                    this._events.off('asset:create', oncreate!);
                     resolve(file);
                 }
             };
             this._events.on('asset:create', oncreate);
         });
+        const [err, value] = await tryCatch(
+            withTimeout(pending, EVENT_TIMEOUT_MS, `waitForFile timed out for ${path}`)
+        );
+        if (err) {
+            if (oncreate) {
+                this._events.off('asset:create', oncreate);
+            }
+            throw err;
+        }
+        return value!;
     }
 
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
@@ -848,11 +864,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const rest = new Deferred<Asset>();
 
         // wait for messenger to notify of asset load
+        let oncreate: ((uniqueId: number) => void) | undefined;
         const created = new Promise<void>((resolve) => {
-            const oncreate = async (uniqueId: number) => {
+            oncreate = async (uniqueId: number) => {
                 const asset = await rest.promise;
                 if (uniqueId === asset.uniqueId) {
-                    this._events.off('asset:create', oncreate);
+                    this._events.off('asset:create', oncreate!);
                     resolve();
                 }
             };
@@ -900,7 +917,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         rest.resolve(asset);
 
         // wait for asset to be created
-        await created;
+        const [err] = await tryCatch(withTimeout(created, EVENT_TIMEOUT_MS, `create timed out for ${path}`));
+        if (err) {
+            if (oncreate) {
+                this._events.off('asset:create', oncreate);
+            }
+            this._log.warn(err.message);
+        }
     }
 
     async delete(path: string, type: 'file' | 'folder') {
@@ -913,10 +936,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // create delete promise listening on asset:delete event
         const fileUniqueId = file.uniqueId;
+        let ondelete: ((uniqueId: number) => void) | undefined;
         const delete_ = new Promise<void>((resolve) => {
-            const ondelete = (uniqueId: number) => {
+            ondelete = (uniqueId: number) => {
                 if (uniqueId === fileUniqueId) {
-                    this._events.off('asset:delete', ondelete);
+                    this._events.off('asset:delete', ondelete!);
                     resolve();
                 }
             };
@@ -932,7 +956,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         );
 
         // wait for delete promise to resolve
-        await delete_;
+        const [err] = await tryCatch(withTimeout(delete_, EVENT_TIMEOUT_MS, `delete timed out for ${path}`));
+        if (err) {
+            if (ondelete) {
+                this._events.off('asset:delete', ondelete);
+            }
+            this._log.warn(err.message);
+        }
 
         this._log.debug(`deleted ${path}`);
     }
@@ -975,10 +1005,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
 
             // file update
+            let onupdate: ((uniqueId: number, key: string) => void) | undefined;
             const updated = new Promise<void>((resolve) => {
-                const onupdate = (uniqueId: number, key: string) => {
+                onupdate = (uniqueId: number, key: string) => {
                     if (uniqueId === file.uniqueId && key === 'name') {
-                        this._events.off('asset:update', onupdate);
+                        this._events.off('asset:update', onupdate!);
                         resolve();
                     }
                 };
@@ -992,7 +1023,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             );
 
             // wait for rename and file update to complete
-            await Promise.all([renamed, updated]);
+            const [err] = await tryCatch(
+                withTimeout(Promise.all([renamed, updated]), EVENT_TIMEOUT_MS, `rename timed out for ${oldPath}`)
+            );
+            if (err) {
+                if (onupdate) {
+                    this._events.off('asset:update', onupdate);
+                }
+                this._log.warn(err.message);
+            }
 
             this._log.debug(`renamed ${oldPath} to ${newPath}`);
             return;
@@ -1011,10 +1050,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // file updated
+        let onupdate: ((uniqueId: number, key: string) => void) | undefined;
         const updated = new Promise<void>((resolve) => {
-            const onupdate = (uniqueId: number, key: string) => {
+            onupdate = (uniqueId: number, key: string) => {
                 if (uniqueId === srcFile.uniqueId && key === 'path') {
-                    this._events.off('asset:update', onupdate);
+                    this._events.off('asset:update', onupdate!);
                     resolve();
                 }
             };
@@ -1031,7 +1071,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         );
 
         // wait for file update to complete
-        await updated;
+        const [err] = await tryCatch(withTimeout(updated, EVENT_TIMEOUT_MS, `move timed out for ${oldPath}`));
+        if (err) {
+            if (onupdate) {
+                this._events.off('asset:update', onupdate);
+            }
+            this._log.warn(err.message);
+        }
 
         this._log.debug(`moved ${oldPath} to ${newPath}`);
     }
@@ -1148,6 +1194,36 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             result.set(path, array);
         }
         return result;
+    }
+
+    async flushPending(timeoutMs = 5000) {
+        const pending = Array.from(this._files.values()).filter(
+            (f): f is VirtualFile & { type: 'file' } => f.type === 'file' && f.doc.hasPending()
+        );
+        if (!pending.length) {
+            return;
+        }
+
+        this._log.info(`flushing ${pending.length} pending ops before unlink`);
+        const waits = pending.map(
+            (f) =>
+                new Promise<void>((resolve) => {
+                    if (!f.doc.hasPending()) {
+                        resolve();
+                        return;
+                    }
+                    const done = () => resolve();
+                    f.doc.once('nothing pending', done);
+                    if (!f.doc.hasPending()) {
+                        f.doc.off('nothing pending', done);
+                        resolve();
+                    }
+                })
+        );
+        const [err] = await tryCatch(withTimeout(Promise.all(waits), timeoutMs, 'flush pending ops timed out'));
+        if (err) {
+            this._log.warn(err.message);
+        }
     }
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
