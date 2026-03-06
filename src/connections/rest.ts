@@ -9,73 +9,8 @@ const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
-type CacheEntry<T> = {
-    data: T;
-    timestamp: number;
-    ttl: number;
-};
-
-class RequestCache {
-    private _cache: Map<string, CacheEntry<unknown>>;
-    private _maxSize: number;
-
-    constructor(maxSize = 1000) {
-        this._cache = new Map();
-        this._maxSize = maxSize;
-    }
-
-    get<T>(key: string) {
-        const entry = this._cache.get(key);
-        if (!entry) {
-            return undefined;
-        }
-
-        // check if expired
-        if (Date.now() - entry.timestamp > entry.ttl) {
-            this._cache.delete(key);
-            return undefined;
-        }
-
-        return entry.data as T;
-    }
-
-    set<T>(key: string, data: T, ttl: number) {
-        // evict oldest entry if cache is full
-        if (this._cache.size >= this._maxSize) {
-            const firstKey = this._cache.keys().next().value;
-            if (firstKey) {
-                this._cache.delete(firstKey);
-            }
-        }
-
-        this._cache.set(key, {
-            data,
-            timestamp: Date.now(),
-            ttl
-        });
-    }
-
-    invalidate(pattern?: RegExp) {
-        if (!pattern) {
-            this._cache.clear();
-            return;
-        }
-        for (const key of this._cache.keys()) {
-            if (pattern.test(key)) {
-                this._cache.delete(key);
-            }
-        }
-    }
-
-    clear() {
-        this._cache.clear();
-    }
-}
-
 class Rest {
     private _log = new Log(this.constructor.name);
-
-    private _cache = new RequestCache();
 
     url: string;
 
@@ -123,18 +58,6 @@ class Rest {
         return undefined;
     }
 
-    private _ttl(path: string) {
-        // only cache user-related data (collaborators sidebar)
-        // asset content comes through ShareDB, not REST API
-        if (path.includes('users/') && path.includes('/thumbnail')) {
-            return 30 * 60 * 1000; // 30 min - thumbnails rarely change
-        }
-        if (path.match(/users\/\d+$/)) {
-            return 5 * 60 * 1000; // 5 min - user info rarely changes
-        }
-        return undefined; // not cacheable
-    }
-
     private async _request<T>(
         method: 'GET' | 'POST' | 'PUT' | 'DELETE',
         path: string,
@@ -142,16 +65,6 @@ class Rest {
         type: 'json' | 'buffer' = 'json',
         auth = true
     ): Promise<T> {
-        // check cache for GET requests
-        if (method === 'GET') {
-            const cached = this._cache.get<T>(`${method}:${path}`);
-            if (cached) {
-                this._log.debug('cache hit', method, path);
-                return cached;
-            }
-        }
-
-        // retry loop
         let lastError: Error | null = null;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             const headers: Record<string, string> = { origin: this.origin };
@@ -204,10 +117,6 @@ class Rest {
             // success
             const result = (type === 'buffer' ? await res.arrayBuffer() : await res.json()) as T;
             this._log.debug(res.status, method, path, summarize(result));
-            const ttl = this._ttl(path);
-            if (ttl && method === 'GET') {
-                this._cache.set(`${method}:${path}`, result, ttl);
-            }
             return result;
         }
 
@@ -241,10 +150,7 @@ class Rest {
         if (data.file && data.file.size) {
             form.append('file', data.file, data.filename || data.name);
         }
-        const result = await this._request<Asset>('POST', `assets`, form);
-        // invalidate asset-related cache entries
-        this._cache.invalidate(/assets/);
-        return result;
+        return this._request<Asset>('POST', `assets`, form);
     }
 
     async assetRename(projectId: number, branchId: string, assetId: number, name: string) {
@@ -252,10 +158,7 @@ class Rest {
         form.append('projectId', `${projectId}`);
         form.append('branchId', branchId);
         form.append('name', name);
-        const result = await this._request<Asset>('PUT', `assets/${assetId}`, form);
-        // invalidate asset-related cache entries
-        this._cache.invalidate(/assets/);
-        return result;
+        return this._request<Asset>('PUT', `assets/${assetId}`, form);
     }
 
     async assetFile(assetId: number, branchId: string, filename: string) {
