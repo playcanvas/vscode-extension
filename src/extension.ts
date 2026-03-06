@@ -192,8 +192,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await collabProvider.link(collabState);
             await uriHandler.link(uriState);
         })();
-        await reloading;
+        const [err] = await tryCatch(reloading);
         reloading = null;
+        if (err) {
+            throw err;
+        }
     };
 
     // uri handler

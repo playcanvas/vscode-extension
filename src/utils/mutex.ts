@@ -7,24 +7,20 @@ class Mutex<T> {
     ) {}
 
     async atomic(keys: string[], fn: () => Promise<T>): Promise<T | undefined> {
-        /* eslint-disable prefer-const -- let avoids TDZ; const throws inside IIFE */
-        let chain: Promise<T | undefined>;
-        chain = (async () => {
-            // wait until no overlapping chains remain
-            let deps: Promise<T | undefined>[];
-            do {
-                deps = Array.from(this._chains.entries())
-                    .filter(([path, p]) => p !== chain && keys.some((k) => this._match(k, path)))
-                    .map(([, p]) => p);
-                if (deps.length) {
-                    await Promise.all(deps);
-                }
-            } while (deps.length);
-            return fn().catch((err) => {
+        // snapshot dependencies before registering this chain to avoid deadlocks
+        const deps = Array.from(
+            new Set(
+                Array.from(this._chains.entries())
+                    .filter(([path]) => keys.some((k) => this._match(k, path)))
+                    .map(([, p]) => p)
+            )
+        );
+        const chain = Promise.allSettled(deps).then(() =>
+            fn().catch((err) => {
                 this._onError?.(err);
                 return undefined;
-            });
-        })();
+            })
+        );
 
         for (const key of keys) {
             this._chains.set(key, chain);

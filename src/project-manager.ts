@@ -517,12 +517,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 return;
             }
 
-            // check if asset was deleted during subscribe
-            if (!this._assets.has(uniqueId)) {
-                this._log.debug(`asset ${uniqueId} deleted during creation, aborting`);
-                return;
-            }
-
             this._cleanup.push(async () => {
                 await this._sharedb.unsubscribe('assets', `${uniqueId}`);
             });
