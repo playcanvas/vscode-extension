@@ -54,8 +54,11 @@ export const effect = (fn: Effect): (() => void) => {
         // track new deps
         const ctx = { effect: run, deps };
         stack.push(ctx);
-        fn();
-        stack.pop();
+        try {
+            fn();
+        } finally {
+            stack.pop();
+        }
     };
     run();
     return () => {
