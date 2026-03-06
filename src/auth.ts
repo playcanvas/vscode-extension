@@ -3,6 +3,7 @@ import http from 'http';
 import * as vscode from 'vscode';
 
 import { API_URL, COOKIE_NAME, NAME, PUBLISHER, HOME_URL, LOGIN_URL, PORT, WEB } from './config';
+import { AUTH_TIMEOUT_MS } from './connections/constants';
 import { Rest } from './connections/rest';
 import { tryCatch } from './utils/utils';
 
@@ -41,6 +42,10 @@ class Auth {
 
         // FIXME: Improve server side OAuth flow to avoid opening a local server and parsing HTML
         return new Promise<string>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                server.close();
+                reject(new Error('Authentication timed out. Please try again.'));
+            }, AUTH_TIMEOUT_MS);
             const server = http.createServer(async (req, res) => {
                 if (req.url?.startsWith('/auth/callback')) {
                     const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -93,6 +98,7 @@ class Auth {
                     }
 
                     // resolve access token
+                    clearTimeout(timeout);
                     resolve(accessToken);
 
                     // redirect to vscode
@@ -114,7 +120,10 @@ class Auth {
                     });
                     vscode.env.openExternal(oauthUri);
                 })
-                .on('error', reject);
+                .on('error', (err) => {
+                    clearTimeout(timeout);
+                    reject(err);
+                });
         });
     }
 
