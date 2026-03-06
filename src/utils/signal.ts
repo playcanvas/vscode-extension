@@ -1,6 +1,6 @@
 type Effect = () => void;
 
-let current: Effect | null = null;
+const stack: { effect: Effect; deps: Set<Set<Effect>> }[] = [];
 
 export const signal = <T>(value: T): { get: () => T; set: <U extends T>(setter: (prev: T) => U) => U } => {
     let _value: T = value;
@@ -8,8 +8,10 @@ export const signal = <T>(value: T): { get: () => T; set: <U extends T>(setter: 
     const subscribers = new Set<Effect>();
 
     const get = () => {
-        if (current) {
-            subscribers.add(current);
+        const ctx = stack[stack.length - 1];
+        if (ctx) {
+            subscribers.add(ctx.effect);
+            ctx.deps.add(subscribers);
         }
         return _value;
     };
@@ -18,7 +20,9 @@ export const signal = <T>(value: T): { get: () => T; set: <U extends T>(setter: 
         const newValue = setter(_value);
         if (newValue !== _value) {
             _value = newValue;
-            subscribers.forEach((effect) => effect());
+            for (const e of [...subscribers]) {
+                e();
+            }
         }
         return newValue;
     };
@@ -29,20 +33,35 @@ export const signal = <T>(value: T): { get: () => T; set: <U extends T>(setter: 
 export const computed = <T>(fn: () => T): { get: () => T } => {
     const result = signal<T>(fn());
 
-    effect(() => {
+    const dispose = effect(() => {
         result.set(() => fn());
     });
+    void dispose;
 
     return {
         get: result.get
     };
 };
 
-export const effect = (fn: Effect) => {
+export const effect = (fn: Effect): (() => void) => {
+    const deps = new Set<Set<Effect>>();
     const run = () => {
-        current = run;
+        // clear old deps
+        for (const set of deps) {
+            set.delete(run);
+        }
+        deps.clear();
+        // track new deps
+        const ctx = { effect: run, deps };
+        stack.push(ctx);
         fn();
-        current = null;
+        stack.pop();
     };
     run();
+    return () => {
+        for (const set of deps) {
+            set.delete(run);
+        }
+        deps.clear();
+    };
 };
