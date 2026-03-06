@@ -24,15 +24,19 @@ import {
 } from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
-    const result: vscode.Uri[] = [];
     const entries = await vscode.workspace.fs.readDirectory(uri);
+    const result: vscode.Uri[] = [];
+    const subdirs: Promise<vscode.Uri[]>[] = [];
     for (const [name, type] of entries) {
         const fullPath = vscode.Uri.joinPath(uri, name);
+        result.push(fullPath);
         if (type === vscode.FileType.Directory) {
-            result.push(fullPath, ...(await readDirRecursive(fullPath)));
-        } else {
-            result.push(fullPath);
+            subdirs.push(readDirRecursive(fullPath));
         }
+    }
+    const nested = await Promise.all(subdirs);
+    for (const uris of nested) {
+        result.push(...uris);
     }
     return result;
 };
@@ -151,12 +155,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _sync(uri: vscode.Uri, content: Uint8Array) {
-        this._debouncer.debounce(`${uri}`, async () => {
-            // note: set echo hash at write time so it matches the actual
-            // file content, not a future debounced write
-            this._echo.set(`${uri}:change`, hash(content));
-            await vscode.workspace.fs.writeFile(uri, content);
-        });
+        this._debouncer
+            .debounce(`${uri}`, async () => {
+                // note: set echo hash at write time so it matches the actual
+                // file content, not a future debounced write
+                this._echo.set(`${uri}:change`, hash(content));
+                await vscode.workspace.fs.writeFile(uri, content);
+            })
+            .catch((err) => {
+                // ignore cancellation from debounce supersede/cancel/clear
+                if (/debounce/.test(err.message)) {
+                    return;
+                }
+                this._log.error(`failed to sync ${uri}: ${err.message}`);
+            });
     }
 
     private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
@@ -207,6 +219,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 case 'file': {
                     // clear any pending debounced writes and write immediately
                     this._debouncer.cancel(`${uri}`);
+                    this._echo.set(`${uri}:change`, hash(content));
                     await vscode.workspace.fs.writeFile(uri, content);
                     break;
                 }
@@ -689,6 +702,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         if (op.hash !== this._echo.get(`${op.uri}:change`)) {
                                             return;
                                         }
+                                        // consume echo to prevent accumulation
+                                        this._echo.delete(`${op.uri}:change`);
                                         // skip if hash is the same
                                         if (op.hash === hash(content)) {
                                             return;
@@ -899,8 +914,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             unwatchDisk();
 
             this._echo.clear();
-            this._readMutex.clear();
-            this._writeMutex.clear();
+            await this._readMutex.clear();
+            await this._writeMutex.clear();
             this._debouncer.clear();
             this._opened.clear();
 
