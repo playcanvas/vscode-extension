@@ -24,15 +24,19 @@ import {
 } from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
-    const result: vscode.Uri[] = [];
     const entries = await vscode.workspace.fs.readDirectory(uri);
+    const result: vscode.Uri[] = [];
+    const subdirs: Promise<vscode.Uri[]>[] = [];
     for (const [name, type] of entries) {
         const fullPath = vscode.Uri.joinPath(uri, name);
+        result.push(fullPath);
         if (type === vscode.FileType.Directory) {
-            result.push(fullPath, ...(await readDirRecursive(fullPath)));
-        } else {
-            result.push(fullPath);
+            subdirs.push(readDirRecursive(fullPath));
         }
+    }
+    const nested = await Promise.all(subdirs);
+    for (const uris of nested) {
+        result.push(...uris);
     }
     return result;
 };
@@ -85,9 +89,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _locks: Set<string> = new Set<string>();
 
-    private _readMutex = new Mutex<void>(pathsRelated);
+    private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
 
-    private _writeMutex = new Mutex<void>(pathsRelated);
+    private _writeMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('writeMutex error', err));
 
     private _debouncer = new Debouncer<void>(50);
 
@@ -151,12 +155,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _sync(uri: vscode.Uri, content: Uint8Array) {
-        this._debouncer.debounce(`${uri}`, async () => {
-            // note: set echo hash at write time so it matches the actual
-            // file content, not a future debounced write
-            this._echo.set(`${uri}:change`, hash(content));
-            await vscode.workspace.fs.writeFile(uri, content);
-        });
+        this._debouncer
+            .debounce(`${uri}`, async () => {
+                // note: set echo hash at write time so it matches the actual
+                // file content, not a future debounced write
+                this._echo.set(`${uri}:change`, hash(content));
+                await vscode.workspace.fs.writeFile(uri, content);
+            })
+            .catch((err) => {
+                // ignore cancellation from debounce supersede/cancel/clear
+                if (/debounce/.test(err.message)) {
+                    return;
+                }
+                this._log.error(`failed to sync ${uri}: ${err.message}`);
+            });
     }
 
     private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
@@ -207,6 +219,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 case 'file': {
                     // clear any pending debounced writes and write immediately
                     this._debouncer.cancel(`${uri}`);
+                    this._echo.set(`${uri}:change`, hash(content));
                     await vscode.workspace.fs.writeFile(uri, content);
                     break;
                 }
@@ -227,58 +240,64 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // update editor if file is open
-            const viewing = this._opened.has(uri.path);
+            const viewing =
+                this._opened.has(uri.path) ||
+                vscode.workspace.textDocuments.some((document) => document.uri.toString() === uri.toString());
             if (viewing) {
                 // note: lock before any await so onDidChangeTextDocument can't
                 // submit ops with stale offsets while doc.data is ahead of the
                 // vscode buffer. mirrors the editor's synchronous ignoreLocalChanges.
                 this._locks.add(`${uri}`);
 
-                const document = await vscode.workspace.openTextDocument(uri);
-                const workspaceEdit = new vscode.WorkspaceEdit();
-                workspaceEdit.set(uri, sharedb2vscode(document, [op]));
-                const applied = await vscode.workspace.applyEdit(workspaceEdit);
+                try {
+                    const document = await vscode.workspace.openTextDocument(uri);
+                    const workspaceEdit = new vscode.WorkspaceEdit();
+                    workspaceEdit.set(uri, sharedb2vscode(document, [op]));
+                    const applied = await vscode.workspace.applyEdit(workspaceEdit);
 
-                // note: reconcile dropped keystrokes using content snapshot (doc.data
-                // at op time), not live doc.data which races ahead when ops arrive
-                // faster than applyEdit can process them.
-                if (this._projectManager && this._folderUri) {
-                    const currentText = document.getText();
-                    const expected = buffer.toString(content);
-                    if (expected !== currentText) {
-                        const path = relativePath(uri, this._folderUri);
+                    // note: reconcile dropped keystrokes using content snapshot (doc.data
+                    // at op time), not live doc.data which races ahead when ops arrive
+                    // faster than applyEdit can process them.
+                    if (this._projectManager && this._folderUri) {
+                        const currentText = document.getText();
+                        const expected = buffer.toString(content);
+                        if (expected !== currentText) {
+                            const path = relativePath(uri, this._folderUri);
 
-                        if (!applied) {
-                            // applyEdit failed — replace VS Code buffer with ShareDB state
-                            const file = this._projectManager.files.get(path);
-                            if (file?.type === 'file') {
-                                const docData = file.doc.data as string;
-                                const fullReplace = new vscode.WorkspaceEdit();
-                                fullReplace.replace(
-                                    uri,
-                                    new vscode.Range(document.positionAt(0), document.positionAt(currentText.length)),
-                                    docData
-                                );
-                                const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
-                                if (!resyncApplied) {
-                                    this._log.error(`reconcile.remote.resync also failed for ${uri}`);
+                            if (!applied) {
+                                // applyEdit failed — replace VS Code buffer with ShareDB state
+                                const file = this._projectManager.files.get(path);
+                                if (file?.type === 'file') {
+                                    const docData = file.doc.data as string;
+                                    const fullReplace = new vscode.WorkspaceEdit();
+                                    fullReplace.replace(
+                                        uri,
+                                        new vscode.Range(
+                                            document.positionAt(0),
+                                            document.positionAt(currentText.length)
+                                        ),
+                                        docData
+                                    );
+                                    const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
+                                    if (!resyncApplied) {
+                                        this._log.error(`reconcile.remote.resync also failed for ${uri}`);
+                                    }
+                                    this._sync(uri, buffer.from(docData));
+                                    this._log.warn(`reconcile.remote.resync ${uri}`);
+                                    return;
                                 }
-                                this._sync(uri, buffer.from(docData));
-                                this._locks.delete(`${uri}`);
-                                this._log.warn(`reconcile.remote.resync ${uri}`);
-                                return;
                             }
-                        }
 
-                        // applyEdit succeeded but text differs — user typed during lock
-                        this._projectManager.write(path, buffer.from(currentText));
-                        this._sync(uri, buffer.from(currentText));
-                        this._locks.delete(`${uri}`);
-                        this._log.debug(`reconcile.remote ${uri}`);
-                        return;
+                            // applyEdit succeeded but text differs — user typed during lock
+                            this._projectManager.write(path, buffer.from(currentText));
+                            this._sync(uri, buffer.from(currentText));
+                            this._log.debug(`reconcile.remote ${uri}`);
+                            return;
+                        }
                     }
+                } finally {
+                    this._locks.delete(`${uri}`);
                 }
-                this._locks.delete(`${uri}`);
             }
 
             // mirror to disk (debounced)
@@ -447,12 +466,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 edit1.insert(open.uri, new vscode.Position(0, 0), ' ');
                 this._locks.add(`${open.uri}`);
 
-                // remove space to mark as dirty with noop
-                await vscode.workspace.applyEdit(edit1);
-                const edit2 = new vscode.WorkspaceEdit();
-                edit2.delete(open.uri, new vscode.Range(0, 0, 0, 1));
-                await vscode.workspace.applyEdit(edit2);
-                this._locks.delete(`${open.uri}`);
+                try {
+                    // remove space to mark as dirty with noop
+                    await vscode.workspace.applyEdit(edit1);
+                    const edit2 = new vscode.WorkspaceEdit();
+                    edit2.delete(open.uri, new vscode.Range(0, 0, 0, 1));
+                    await vscode.workspace.applyEdit(edit2);
+                } finally {
+                    this._locks.delete(`${open.uri}`);
+                }
 
                 this._log.debug(`dirtify ${open.uri}`);
             });
@@ -689,6 +711,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         if (op.hash !== this._echo.get(`${op.uri}:change`)) {
                                             return;
                                         }
+                                        // consume echo to prevent accumulation
+                                        this._echo.delete(`${op.uri}:change`);
                                         // skip if hash is the same
                                         if (op.hash === hash(content)) {
                                             return;
@@ -899,7 +923,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             unwatchDisk();
 
             this._echo.clear();
-            this._writeMutex.clear();
+            await this._readMutex.clear();
+            await this._writeMutex.clear();
             this._debouncer.clear();
             this._opened.clear();
 

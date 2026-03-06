@@ -8,8 +8,16 @@ import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
+import { tryCatch, withTimeout } from '../utils/utils';
 
-import { PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+import {
+    CONNECT_TIMEOUT_MS,
+    PING_INTERVAL_MS,
+    PONG_TIMEOUT_MS,
+    RECONNECT_BASE_MS,
+    RECONNECT_MAX_MS,
+    SUBSCRIBE_TIMEOUT_MS
+} from './constants';
 
 // register text type
 sharedb.types.register(type);
@@ -93,7 +101,8 @@ class ShareDb extends EventEmitter<EventMap> {
                 if (!json.id) {
                     const reason = `[${this.constructor.name}] invalid access token`;
                     socket.close(3000, reason);
-                    throw this.error.set(() => new Error(reason));
+                    this.error.set(() => new Error(reason));
+                    return;
                 }
                 this._log.debug('socket.auth', json);
 
@@ -113,7 +122,8 @@ class ShareDb extends EventEmitter<EventMap> {
         socket.addEventListener('close', ({ code, reason }: { code: number; reason: string }) => {
             this._log.debug('socket.close', code, reason.toString());
 
-            // reset connected
+            // reject pending callers then reset
+            this._active.reject(new Error('connection reset'));
             this._active = new Deferred();
             this.connected.set(() => false);
 
@@ -231,11 +241,14 @@ class ShareDb extends EventEmitter<EventMap> {
 
         // subscribe to doc
         const [connection] = await this._active.promise;
-        return new Promise<sharedb.Doc | undefined>((resolve) => {
-            const doc = connection.get(type, key);
+        const doc = connection.get(type, key);
+        const onload = () => {
+            this._log.debug('doc.load', type, key);
+            this.subscriptions.set(`${type}:${key}`, doc);
+        };
+        const pending = new Promise<sharedb.Doc | undefined>((resolve) => {
             doc.on('load', () => {
-                this._log.debug('doc.load', type, key);
-                this.subscriptions.set(`${type}:${key}`, doc);
+                onload();
                 resolve(doc);
             });
             doc.on('error', (err) => {
@@ -251,6 +264,18 @@ class ShareDb extends EventEmitter<EventMap> {
             doc.subscribe();
             this._log.debug('doc.subscribe', type, key);
         });
+        const [err, value] = await tryCatch(
+            withTimeout(pending, SUBSCRIBE_TIMEOUT_MS, `subscribe timed out for ${type}:${key}`)
+        );
+        if (err) {
+            this._log.warn(err.message);
+            doc.removeAllListeners('load');
+            doc.removeAllListeners('error');
+            this.subscriptions.delete(`${type}:${key}`);
+            doc.destroy();
+            return undefined;
+        }
+        return value;
     }
 
     /**
@@ -269,12 +294,10 @@ class ShareDb extends EventEmitter<EventMap> {
 
     async bulkSubscribe(subscriptions: [string, string][]) {
         const [connection] = await this._active.promise;
-        return new Promise<(sharedb.Doc | undefined)[]>((resolve) => {
-            connection.startBulk();
-            const docs = Promise.all(subscriptions.map(([type, key]) => this.subscribe(type, key)));
-            connection.endBulk();
-            docs.then(resolve);
-        });
+        connection.startBulk();
+        const docs = Promise.all(subscriptions.map(([type, key]) => this.subscribe(type, key)));
+        connection.endBulk();
+        return docs;
     }
 
     async unsubscribe(type: string, key: string) {
@@ -295,12 +318,10 @@ class ShareDb extends EventEmitter<EventMap> {
 
     async bulkUnsubscribe(subscriptions: [string, string][]) {
         const [connection] = await this._active.promise;
-        return new Promise<void>((resolve) => {
-            connection.startBulk();
-            const unsubs = Promise.all(subscriptions.map(([type, key]) => this.unsubscribe(type, key)));
-            connection.endBulk();
-            unsubs.then(() => resolve());
-        });
+        connection.startBulk();
+        const unsubs = Promise.all(subscriptions.map(([type, key]) => this.unsubscribe(type, key)));
+        connection.endBulk();
+        await unsubs;
     }
 
     async sendRaw(data: Parameters<WebSocket['send']>[0]) {
@@ -331,13 +352,17 @@ class ShareDb extends EventEmitter<EventMap> {
     async connect(getToken: () => string) {
         this._getToken = getToken;
         this._socket = this._connect();
-        await this._active.promise;
+        await withTimeout(this._active.promise, CONNECT_TIMEOUT_MS, 'ShareDB connection timed out');
     }
 
     disconnect() {
         // mark as intentional disconnect
         this._disconnecting = true;
         this._cancelReconnect();
+
+        // reject pending callers
+        this._active.reject(new Error('disconnected'));
+        this._active = new Deferred();
 
         // clear keep alive
         if (this._alive) {

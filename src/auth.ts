@@ -3,6 +3,7 @@ import http from 'http';
 import * as vscode from 'vscode';
 
 import { API_URL, COOKIE_NAME, NAME, PUBLISHER, HOME_URL, LOGIN_URL, PORT, WEB } from './config';
+import { AUTH_TIMEOUT_MS } from './connections/constants';
 import { Rest } from './connections/rest';
 import { tryCatch } from './utils/utils';
 
@@ -25,6 +26,7 @@ class Auth {
         const [error] = await tryCatch(rest.id());
         if (error && /HTTP 4\d{2}/.test(error.message)) {
             await vscode.window.showErrorMessage('Invalid PlayCanvas Access Token', { modal: true });
+            return undefined;
         }
         return accessToken;
     }
@@ -41,6 +43,12 @@ class Auth {
 
         // FIXME: Improve server side OAuth flow to avoid opening a local server and parsing HTML
         return new Promise<string>((resolve, reject) => {
+            const ctrl = new AbortController();
+            const timeout = setTimeout(() => {
+                ctrl.abort();
+                server.close();
+                reject(new Error('Authentication timed out. Please try again.'));
+            }, AUTH_TIMEOUT_MS);
             const server = http.createServer(async (req, res) => {
                 if (req.url?.startsWith('/auth/callback')) {
                     const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -60,11 +68,16 @@ class Auth {
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({ code })
+                        body: JSON.stringify({ code }),
+                        signal: ctrl.signal
                     });
                     if (!res2.ok) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
                         res.end('Failed to exchange code for session id.');
+                        clearTimeout(timeout);
+                        ctrl.abort();
+                        server.close();
+                        reject(new Error('Failed to exchange code for session id.'));
                         return;
                     }
                     const { sessionId } = (await res2.json()) as unknown as { sessionId: string };
@@ -76,11 +89,16 @@ class Auth {
                     const res3 = await fetch(`${HOME_URL}/editor`, {
                         headers: {
                             Cookie: cookie
-                        }
+                        },
+                        signal: ctrl.signal
                     });
                     if (!res3.ok) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
                         res.end('Failed to fetch access token.');
+                        clearTimeout(timeout);
+                        ctrl.abort();
+                        server.close();
+                        reject(new Error('Failed to fetch access token.'));
                         return;
                     }
                     const text = await res3.text();
@@ -89,10 +107,15 @@ class Auth {
                     if (!accessToken) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
                         res.end('Failed to parse access token.');
+                        clearTimeout(timeout);
+                        ctrl.abort();
+                        server.close();
+                        reject(new Error('Failed to parse access token.'));
                         return;
                     }
 
                     // resolve access token
+                    clearTimeout(timeout);
                     resolve(accessToken);
 
                     // redirect to vscode
@@ -114,7 +137,10 @@ class Auth {
                     });
                     vscode.env.openExternal(oauthUri);
                 })
-                .on('error', reject);
+                .on('error', (err) => {
+                    clearTimeout(timeout);
+                    reject(err);
+                });
         });
     }
 

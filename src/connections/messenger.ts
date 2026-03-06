@@ -5,8 +5,15 @@ import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
+import { withTimeout } from '../utils/utils';
 
-import { PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+import {
+    CONNECT_TIMEOUT_MS,
+    PING_INTERVAL_MS,
+    PONG_TIMEOUT_MS,
+    RECONNECT_BASE_MS,
+    RECONNECT_MAX_MS
+} from './constants';
 
 type EventMap = {
     'asset.new': [
@@ -153,7 +160,8 @@ class Messenger extends EventEmitter<EventMap> {
         socket.addEventListener('close', ({ code, reason }: { code: number; reason: string }) => {
             this._log.debug('socket.close', code, reason.toString());
 
-            // reset connected
+            // reject pending callers then reset
+            this._active.reject(new Error('connection reset'));
             this._active = new Deferred();
             this.connected.set(() => false);
 
@@ -212,6 +220,9 @@ class Messenger extends EventEmitter<EventMap> {
 
         // re-watch all tracked projects
         for (const projectId of this.watchers) {
+            if (socket.readyState !== WebSocket.OPEN) {
+                break;
+            }
             socket.send(
                 JSON.stringify({
                     name: 'project.watch',
@@ -243,9 +254,13 @@ class Messenger extends EventEmitter<EventMap> {
             target: { type: 'general' },
             env: ['*'],
             data: { id: projectId }
-        }).then(() => {
-            this._log.info(`watching project ${projectId}`);
-        });
+        })
+            .then(() => {
+                this._log.info(`watching project ${projectId}`);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send watch request', err);
+            });
 
         // track watchers
         this.watchers.add(projectId);
@@ -264,9 +279,13 @@ class Messenger extends EventEmitter<EventMap> {
             target: { type: 'general' },
             env: ['*'],
             data: { id: projectId }
-        }).then(() => {
-            this._log.info(`unwatched project ${projectId}`);
-        });
+        })
+            .then(() => {
+                this._log.info(`unwatched project ${projectId}`);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send watch request', err);
+            });
 
         // remove from watchers
         this.watchers.delete(projectId);
@@ -300,13 +319,17 @@ class Messenger extends EventEmitter<EventMap> {
     async connect(getToken: () => string) {
         this._getToken = getToken;
         this._socket = this._connect();
-        await this._active.promise;
+        await withTimeout(this._active.promise, CONNECT_TIMEOUT_MS, 'Messenger connection timed out');
     }
 
     disconnect() {
         // mark as intentional disconnect
         this._disconnecting = true;
         this._cancelReconnect();
+
+        // reject pending callers
+        this._active.reject(new Error('disconnected'));
+        this._active = new Deferred();
 
         // clear keep alive
         if (this._alive) {

@@ -4,6 +4,14 @@ class Bimap<T1, T2> {
     private _backward = new Map<T2, T1>();
 
     set(keyL: T1, keyR: T2) {
+        const oldR = this._forward.get(keyL);
+        if (oldR !== undefined) {
+            this._backward.delete(oldR);
+        }
+        const oldL = this._backward.get(keyR);
+        if (oldL !== undefined) {
+            this._forward.delete(oldL);
+        }
         this._forward.set(keyL, keyR);
         this._backward.set(keyR, keyL);
     }

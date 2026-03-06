@@ -5,8 +5,15 @@ import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
+import { withTimeout } from '../utils/utils';
 
-import { PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+import {
+    CONNECT_TIMEOUT_MS,
+    PING_INTERVAL_MS,
+    PONG_TIMEOUT_MS,
+    RECONNECT_BASE_MS,
+    RECONNECT_MAX_MS
+} from './constants';
 
 type EventMap = {
     'room:join': [{ name: string; userId: number; users?: number[] }];
@@ -73,7 +80,7 @@ class Relay extends EventEmitter<EventMap> {
             const reason = `[${this.constructor.name}] invalid access token`;
             // TODO: figure out why this triggers 1006 not 3000
             socket.close(3000, reason);
-            throw this.error.set(() => new Error(reason));
+            this.error.set(() => new Error(reason));
         }, 5000);
         socket.addEventListener('open', () => {
             this._log.debug('socket.open');
@@ -100,7 +107,8 @@ class Relay extends EventEmitter<EventMap> {
                 this._authTimeout = null;
             }
 
-            // reset connected
+            // reject pending callers then reset
+            this._active.reject(new Error('connection reset'));
             this._active = new Deferred();
             this.connected.set(() => false);
 
@@ -165,6 +173,9 @@ class Relay extends EventEmitter<EventMap> {
         // re-join all tracked rooms
         for (const [projectId, roomNames] of this.rooms) {
             for (const name of roomNames) {
+                if (socket.readyState !== WebSocket.OPEN) {
+                    break;
+                }
                 socket.send(
                     JSON.stringify({
                         t: 'room:join',
@@ -201,9 +212,13 @@ class Relay extends EventEmitter<EventMap> {
                 type: 'project',
                 id: projectId
             }
-        }).then(() => {
-            this._log.debug(`joined room ${name}`);
-        });
+        })
+            .then(() => {
+                this._log.debug(`joined room ${name}`);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send room message', err);
+            });
 
         // track joined rooms
         if (!this.rooms.has(projectId)) {
@@ -223,9 +238,13 @@ class Relay extends EventEmitter<EventMap> {
         this.send({
             t: 'room:leave',
             name: name
-        }).then(() => {
-            this._log.debug(`left room ${name}`);
-        });
+        })
+            .then(() => {
+                this._log.debug(`left room ${name}`);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send room message', err);
+            });
 
         // track left rooms
         this.rooms.get(projectId)?.delete(name);
@@ -237,9 +256,13 @@ class Relay extends EventEmitter<EventMap> {
             msg: msg,
             name: name,
             to: userId
-        }).then(() => {
-            this._log.debug(`sent message to room ${name}`, msg);
-        });
+        })
+            .then(() => {
+                this._log.debug(`sent message to room ${name}`, msg);
+            })
+            .catch((err) => {
+                this._log.warn('failed to send room message', err);
+            });
     }
 
     async send(data: object) {
@@ -270,13 +293,17 @@ class Relay extends EventEmitter<EventMap> {
     async connect(getToken: () => string) {
         this._getToken = getToken;
         this._socket = this._connect();
-        await this._active.promise;
+        await withTimeout(this._active.promise, CONNECT_TIMEOUT_MS, 'Relay connection timed out');
     }
 
     disconnect() {
         // mark as intentional disconnect
         this._disconnecting = true;
         this._cancelReconnect();
+
+        // reject pending callers
+        this._active.reject(new Error('disconnected'));
+        this._active = new Deferred();
 
         // clear auth timeout
         if (this._authTimeout) {

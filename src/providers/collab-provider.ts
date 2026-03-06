@@ -6,7 +6,7 @@ import type { ProjectManager } from '../project-manager';
 import * as buffer from '../utils/buffer';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
-import { relativePath, uriStartsWith, guard } from '../utils/utils';
+import { relativePath, uriStartsWith, tryCatch } from '../utils/utils';
 
 class CollabItem extends vscode.TreeItem {
     readonly username: string;
@@ -82,11 +82,15 @@ class CollabProvider
 
             // wait for file to be available
             const path = relativePath(uri, folderUri);
-            projectManager.waitForFile(path, 'file').then((file) => {
-                // set room
-                this._room = `document-${file.uniqueId}`;
-                this.refresh();
-            });
+            projectManager
+                .waitForFile(path, 'file')
+                .then((file) => {
+                    // set room
+                    this._room = `document-${file.uniqueId}`;
+                    this.refresh();
+                })
+                // eslint-disable-next-line @typescript-eslint/no-empty-function
+                .catch(() => {});
         };
         const disposable = vscode.window.onDidChangeActiveTextEditor((editor) => {
             if (!editor) {
@@ -117,15 +121,21 @@ class CollabProvider
         if (!element) {
             const room = this._rooms.get(this._room || '');
             if (!room) {
-                return Promise.resolve([]);
+                return [];
             }
 
             const items: CollabItem[] = [];
             for (const id of room) {
                 let item = this._items.get(id);
                 if (!item) {
-                    const user = await guard(this._rest.user(id), this.error);
-                    const buf = await guard(this._rest.userThumb(user.id), this.error);
+                    const [err, user] = await tryCatch(this._rest.user(id));
+                    if (err) {
+                        continue;
+                    }
+                    const [err2, buf] = await tryCatch(this._rest.userThumb(user.id));
+                    if (err2) {
+                        continue;
+                    }
                     const base64 = buffer.toBase64(new Uint8Array(buf));
                     const iconUri = vscode.Uri.parse(`data:image/png;base64,${base64}`);
                     item = new CollabItem(user.username, iconUri);
@@ -134,10 +144,10 @@ class CollabProvider
 
                 items.push(item);
             }
-            return Promise.resolve(items.sort((a, b) => a.username.localeCompare(b.username)));
+            return items.sort((a, b) => a.username.localeCompare(b.username));
         }
 
-        return Promise.resolve([]);
+        return [];
     }
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
