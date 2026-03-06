@@ -8,8 +8,16 @@ import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
+import { tryCatch, withTimeout } from '../utils/utils';
 
-import { PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+import {
+    CONNECT_TIMEOUT_MS,
+    PING_INTERVAL_MS,
+    PONG_TIMEOUT_MS,
+    RECONNECT_BASE_MS,
+    RECONNECT_MAX_MS,
+    SUBSCRIBE_TIMEOUT_MS
+} from './constants';
 
 // register text type
 sharedb.types.register(type);
@@ -93,7 +101,7 @@ class ShareDb extends EventEmitter<EventMap> {
                 if (!json.id) {
                     const reason = `[${this.constructor.name}] invalid access token`;
                     socket.close(3000, reason);
-                    throw this.error.set(() => new Error(reason));
+                    this.error.set(() => new Error(reason));
                 }
                 this._log.debug('socket.auth', json);
 
@@ -231,8 +239,8 @@ class ShareDb extends EventEmitter<EventMap> {
 
         // subscribe to doc
         const [connection] = await this._active.promise;
-        return new Promise<sharedb.Doc | undefined>((resolve) => {
-            const doc = connection.get(type, key);
+        const doc = connection.get(type, key);
+        const pending = new Promise<sharedb.Doc | undefined>((resolve) => {
             doc.on('load', () => {
                 this._log.debug('doc.load', type, key);
                 this.subscriptions.set(`${type}:${key}`, doc);
@@ -251,6 +259,16 @@ class ShareDb extends EventEmitter<EventMap> {
             doc.subscribe();
             this._log.debug('doc.subscribe', type, key);
         });
+        const [err, value] = await tryCatch(
+            withTimeout(pending, SUBSCRIBE_TIMEOUT_MS, `subscribe timed out for ${type}:${key}`)
+        );
+        if (err) {
+            this._log.warn(err.message);
+            this.subscriptions.delete(`${type}:${key}`);
+            doc.destroy();
+            return undefined;
+        }
+        return value;
     }
 
     /**
@@ -331,7 +349,7 @@ class ShareDb extends EventEmitter<EventMap> {
     async connect(getToken: () => string) {
         this._getToken = getToken;
         this._socket = this._connect();
-        await this._active.promise;
+        await withTimeout(this._active.promise, CONNECT_TIMEOUT_MS, 'ShareDB connection timed out');
     }
 
     disconnect() {
