@@ -7,40 +7,34 @@ class Mutex<T> {
     ) {}
 
     async atomic(keys: string[], fn: () => Promise<T>): Promise<T | undefined> {
-        // wait for all matching chains to complete
-        const wait = Promise.all(
-            Array.from(this._chains.entries()).reduce(
-                (rest, [path, promise]) => {
-                    if (keys.some((key) => this._match(key, path))) {
-                        rest.push(promise);
-                    }
-                    return rest;
-                },
-                [] as Promise<T | undefined>[]
-            )
-        );
-
-        // schedule the new operation
-        const chain = wait
-            .then(() =>
-                fn().catch((err) => {
-                    this._onError?.(err);
-                    return undefined;
-                })
-            )
-            .finally(() => {
-                // remove the chain when done
-                for (const key of keys) {
-                    if (this._chains.get(key) === chain) {
-                        this._chains.delete(key);
-                    }
+        const chain = (async () => {
+            // wait until no overlapping chains remain
+            let deps: Promise<T | undefined>[];
+            do {
+                deps = Array.from(this._chains.entries())
+                    .filter(([path, p]) => p !== chain && keys.some((k) => this._match(k, path)))
+                    .map(([, p]) => p);
+                if (deps.length) {
+                    await Promise.all(deps);
                 }
+            } while (deps.length);
+            return fn().catch((err) => {
+                this._onError?.(err);
+                return undefined;
             });
+        })();
 
-        // store the new chain for all keys
         for (const key of keys) {
             this._chains.set(key, chain);
         }
+
+        chain.finally(() => {
+            for (const key of keys) {
+                if (this._chains.get(key) === chain) {
+                    this._chains.delete(key);
+                }
+            }
+        });
 
         return chain;
     }
@@ -49,7 +43,8 @@ class Mutex<T> {
         return Promise.all(this._chains.values());
     }
 
-    clear() {
+    async clear() {
+        await this.all();
         this._chains.clear();
     }
 }
