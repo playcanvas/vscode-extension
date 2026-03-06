@@ -247,51 +247,55 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 // vscode buffer. mirrors the editor's synchronous ignoreLocalChanges.
                 this._locks.add(`${uri}`);
 
-                const document = await vscode.workspace.openTextDocument(uri);
-                const workspaceEdit = new vscode.WorkspaceEdit();
-                workspaceEdit.set(uri, sharedb2vscode(document, [op]));
-                const applied = await vscode.workspace.applyEdit(workspaceEdit);
+                try {
+                    const document = await vscode.workspace.openTextDocument(uri);
+                    const workspaceEdit = new vscode.WorkspaceEdit();
+                    workspaceEdit.set(uri, sharedb2vscode(document, [op]));
+                    const applied = await vscode.workspace.applyEdit(workspaceEdit);
 
-                // note: reconcile dropped keystrokes using content snapshot (doc.data
-                // at op time), not live doc.data which races ahead when ops arrive
-                // faster than applyEdit can process them.
-                if (this._projectManager && this._folderUri) {
-                    const currentText = document.getText();
-                    const expected = buffer.toString(content);
-                    if (expected !== currentText) {
-                        const path = relativePath(uri, this._folderUri);
+                    // note: reconcile dropped keystrokes using content snapshot (doc.data
+                    // at op time), not live doc.data which races ahead when ops arrive
+                    // faster than applyEdit can process them.
+                    if (this._projectManager && this._folderUri) {
+                        const currentText = document.getText();
+                        const expected = buffer.toString(content);
+                        if (expected !== currentText) {
+                            const path = relativePath(uri, this._folderUri);
 
-                        if (!applied) {
-                            // applyEdit failed — replace VS Code buffer with ShareDB state
-                            const file = this._projectManager.files.get(path);
-                            if (file?.type === 'file') {
-                                const docData = file.doc.data as string;
-                                const fullReplace = new vscode.WorkspaceEdit();
-                                fullReplace.replace(
-                                    uri,
-                                    new vscode.Range(document.positionAt(0), document.positionAt(currentText.length)),
-                                    docData
-                                );
-                                const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
-                                if (!resyncApplied) {
-                                    this._log.error(`reconcile.remote.resync also failed for ${uri}`);
+                            if (!applied) {
+                                // applyEdit failed — replace VS Code buffer with ShareDB state
+                                const file = this._projectManager.files.get(path);
+                                if (file?.type === 'file') {
+                                    const docData = file.doc.data as string;
+                                    const fullReplace = new vscode.WorkspaceEdit();
+                                    fullReplace.replace(
+                                        uri,
+                                        new vscode.Range(
+                                            document.positionAt(0),
+                                            document.positionAt(currentText.length)
+                                        ),
+                                        docData
+                                    );
+                                    const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
+                                    if (!resyncApplied) {
+                                        this._log.error(`reconcile.remote.resync also failed for ${uri}`);
+                                    }
+                                    this._sync(uri, buffer.from(docData));
+                                    this._log.warn(`reconcile.remote.resync ${uri}`);
+                                    return;
                                 }
-                                this._sync(uri, buffer.from(docData));
-                                this._locks.delete(`${uri}`);
-                                this._log.warn(`reconcile.remote.resync ${uri}`);
-                                return;
                             }
-                        }
 
-                        // applyEdit succeeded but text differs — user typed during lock
-                        this._projectManager.write(path, buffer.from(currentText));
-                        this._sync(uri, buffer.from(currentText));
-                        this._locks.delete(`${uri}`);
-                        this._log.debug(`reconcile.remote ${uri}`);
-                        return;
+                            // applyEdit succeeded but text differs — user typed during lock
+                            this._projectManager.write(path, buffer.from(currentText));
+                            this._sync(uri, buffer.from(currentText));
+                            this._log.debug(`reconcile.remote ${uri}`);
+                            return;
+                        }
                     }
+                } finally {
+                    this._locks.delete(`${uri}`);
                 }
-                this._locks.delete(`${uri}`);
             }
 
             // mirror to disk (debounced)
@@ -460,12 +464,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 edit1.insert(open.uri, new vscode.Position(0, 0), ' ');
                 this._locks.add(`${open.uri}`);
 
-                // remove space to mark as dirty with noop
-                await vscode.workspace.applyEdit(edit1);
-                const edit2 = new vscode.WorkspaceEdit();
-                edit2.delete(open.uri, new vscode.Range(0, 0, 0, 1));
-                await vscode.workspace.applyEdit(edit2);
-                this._locks.delete(`${open.uri}`);
+                try {
+                    // remove space to mark as dirty with noop
+                    await vscode.workspace.applyEdit(edit1);
+                    const edit2 = new vscode.WorkspaceEdit();
+                    edit2.delete(open.uri, new vscode.Range(0, 0, 0, 1));
+                    await vscode.workspace.applyEdit(edit2);
+                } finally {
+                    this._locks.delete(`${open.uri}`);
+                }
 
                 this._log.debug(`dirtify ${open.uri}`);
             });
