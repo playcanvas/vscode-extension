@@ -6,7 +6,9 @@ import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
 
-import { PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
+import { withTimeout } from '../utils/utils';
+
+import { CONNECT_TIMEOUT_MS, PING_INTERVAL_MS, PONG_TIMEOUT_MS, RECONNECT_BASE_MS, RECONNECT_MAX_MS } from './constants';
 
 type EventMap = {
     'room:join': [{ name: string; userId: number; users?: number[] }];
@@ -270,7 +272,7 @@ class Relay extends EventEmitter<EventMap> {
     async connect(getToken: () => string) {
         this._getToken = getToken;
         this._socket = this._connect();
-        await this._active.promise;
+        await withTimeout(this._active.promise, CONNECT_TIMEOUT_MS, 'Relay connection timed out');
     }
 
     disconnect() {
