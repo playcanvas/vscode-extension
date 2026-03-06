@@ -78,11 +78,8 @@ class GrapheneSender implements vscode.TelemetrySender {
 
     private _url: string;
 
-    private _accessToken: string;
-
     constructor(accessToken: string) {
-        this._url = `${HOME_URL}/editor/metrics`;
-        this._accessToken = accessToken;
+        this._url = `${HOME_URL}/editor/metrics?access_token=${encodeURIComponent(accessToken)}`;
         this._timer = setInterval(() => {
             void this._flush();
         }, FLUSH_INTERVAL);
@@ -214,7 +211,7 @@ class GrapheneSender implements vscode.TelemetrySender {
         const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
         const res = await fetch(this._url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this._accessToken}` },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ events }),
             signal: ctrl.signal
         }).catch((err) => {
@@ -228,6 +225,10 @@ class GrapheneSender implements vscode.TelemetrySender {
         if (!res.ok) {
             if (res.status === 413) {
                 return 'too-large';
+            }
+            if (res.status === 401 || res.status === 403) {
+                this._log.debug(`flush failed: ${res.status} ${res.statusText}`);
+                return 'drop';
             }
             if (RETRYABLE_STATUS.has(res.status)) {
                 this._log.debug(`flush failed: ${res.status} ${res.statusText}`);
