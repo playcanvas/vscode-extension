@@ -12,6 +12,8 @@ const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 class Rest {
     private _log = new Log(this.constructor.name);
 
+    private _disposed = false;
+
     url: string;
 
     origin: string;
@@ -22,6 +24,10 @@ class Rest {
         this.url = url;
         this.origin = origin;
         this._accessToken = accessToken;
+    }
+
+    dispose() {
+        this._disposed = true;
     }
 
     private _backoff(attempt: number, retryAfter?: number) {
@@ -70,6 +76,13 @@ class Rest {
             const headers: Record<string, string> = { origin: this.origin };
             if (auth) {
                 headers['Authorization'] = `Bearer ${this._accessToken}`;
+            }
+            if (body && !(body instanceof FormData)) {
+                headers['Content-Type'] = 'application/json';
+            }
+
+            if (this._disposed) {
+                throw new Error('REST client disposed');
             }
 
             const ctrl = new AbortController();
