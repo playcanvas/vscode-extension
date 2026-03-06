@@ -26,6 +26,7 @@ class Auth {
         const [error] = await tryCatch(rest.id());
         if (error && /HTTP 4\d{2}/.test(error.message)) {
             await vscode.window.showErrorMessage('Invalid PlayCanvas Access Token', { modal: true });
+            return undefined;
         }
         return accessToken;
     }
@@ -73,6 +74,10 @@ class Auth {
                     if (!res2.ok) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
                         res.end('Failed to exchange code for session id.');
+                        clearTimeout(timeout);
+                        ctrl.abort();
+                        server.close();
+                        reject(new Error('Failed to exchange code for session id.'));
                         return;
                     }
                     const { sessionId } = (await res2.json()) as unknown as { sessionId: string };
@@ -90,6 +95,10 @@ class Auth {
                     if (!res3.ok) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
                         res.end('Failed to fetch access token.');
+                        clearTimeout(timeout);
+                        ctrl.abort();
+                        server.close();
+                        reject(new Error('Failed to fetch access token.'));
                         return;
                     }
                     const text = await res3.text();
@@ -98,6 +107,10 @@ class Auth {
                     if (!accessToken) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
                         res.end('Failed to parse access token.');
+                        clearTimeout(timeout);
+                        ctrl.abort();
+                        server.close();
+                        reject(new Error('Failed to parse access token.'));
                         return;
                     }
 
