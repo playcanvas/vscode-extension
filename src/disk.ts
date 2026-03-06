@@ -85,9 +85,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _locks: Set<string> = new Set<string>();
 
-    private _readMutex = new Mutex<void>(pathsRelated);
+    private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
 
-    private _writeMutex = new Mutex<void>(pathsRelated);
+    private _writeMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('writeMutex error', err));
 
     private _debouncer = new Debouncer<void>(50);
 
@@ -899,6 +899,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             unwatchDisk();
 
             this._echo.clear();
+            this._readMutex.clear();
             this._writeMutex.clear();
             this._debouncer.clear();
             this._opened.clear();
