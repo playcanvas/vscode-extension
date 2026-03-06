@@ -107,7 +107,8 @@ class Relay extends EventEmitter<EventMap> {
                 this._authTimeout = null;
             }
 
-            // reset connected
+            // reject pending callers then reset
+            this._active.reject(new Error('connection reset'));
             this._active = new Deferred();
             this.connected.set(() => false);
 
@@ -172,6 +173,9 @@ class Relay extends EventEmitter<EventMap> {
         // re-join all tracked rooms
         for (const [projectId, roomNames] of this.rooms) {
             for (const name of roomNames) {
+                if (socket.readyState !== WebSocket.OPEN) {
+                    break;
+                }
                 socket.send(
                     JSON.stringify({
                         t: 'room:join',
@@ -296,6 +300,10 @@ class Relay extends EventEmitter<EventMap> {
         // mark as intentional disconnect
         this._disconnecting = true;
         this._cancelReconnect();
+
+        // reject pending callers
+        this._active.reject(new Error('disconnected'));
+        this._active = new Deferred();
 
         // clear auth timeout
         if (this._authTimeout) {
