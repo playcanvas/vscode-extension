@@ -77,8 +77,11 @@ class GrapheneSender implements vscode.TelemetrySender {
 
     private _url: string;
 
+    private _accessToken: string;
+
     constructor(accessToken: string) {
-        this._url = `${HOME_URL}/editor/metrics?access_token=${accessToken}`;
+        this._url = `${HOME_URL}/editor/metrics`;
+        this._accessToken = accessToken;
         this._timer = setInterval(() => {
             void this._flush();
         }, FLUSH_INTERVAL);
@@ -208,7 +211,7 @@ class GrapheneSender implements vscode.TelemetrySender {
     private async _postBatch(events: MetricEvent[]): Promise<PostBatchResult> {
         const res = await fetch(this._url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this._accessToken}` },
             body: JSON.stringify({ events })
         }).catch((err) => {
             this._log.debug(`flush failed: ${err.message}`);
