@@ -160,7 +160,8 @@ class Messenger extends EventEmitter<EventMap> {
         socket.addEventListener('close', ({ code, reason }: { code: number; reason: string }) => {
             this._log.debug('socket.close', code, reason.toString());
 
-            // reset connected
+            // reject pending callers then reset
+            this._active.reject(new Error('connection reset'));
             this._active = new Deferred();
             this.connected.set(() => false);
 
@@ -219,6 +220,9 @@ class Messenger extends EventEmitter<EventMap> {
 
         // re-watch all tracked projects
         for (const projectId of this.watchers) {
+            if (socket.readyState !== WebSocket.OPEN) {
+                break;
+            }
             socket.send(
                 JSON.stringify({
                     name: 'project.watch',
@@ -322,6 +326,10 @@ class Messenger extends EventEmitter<EventMap> {
         // mark as intentional disconnect
         this._disconnecting = true;
         this._cancelReconnect();
+
+        // reject pending callers
+        this._active.reject(new Error('disconnected'));
+        this._active = new Deferred();
 
         // clear keep alive
         if (this._alive) {
