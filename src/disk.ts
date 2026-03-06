@@ -240,7 +240,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // update editor if file is open
-            const viewing = this._opened.has(uri.path);
+            const viewing =
+                this._opened.has(uri.path) ||
+                vscode.workspace.textDocuments.some((document) => document.uri.toString() === uri.toString());
             if (viewing) {
                 // note: lock before any await so onDidChangeTextDocument can't
                 // submit ops with stale offsets while doc.data is ahead of the
