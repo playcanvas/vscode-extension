@@ -18,7 +18,7 @@ import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect } from './utils/signal';
-import { projectToName, uriStartsWith } from './utils/utils';
+import { projectToName, tryCatch, uriStartsWith } from './utils/utils';
 
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
@@ -156,6 +156,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => handleError(disk.error.get()));
 
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
+        await projectManager.flushPending();
         const diskState = await disk.unlink();
         const projectState = await projectManager.unlink();
         projectState.branchId = branchId ?? projectState.branchId;
@@ -485,7 +486,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // connect sharedb, messenger, relay if not connected
         if (!sharedb.connected.get()) {
-            await sharedb.connect(() => accessToken);
+            const [err] = await tryCatch(sharedb.connect(() => accessToken));
+            if (err) {
+                sharedb.disconnect();
+                throw err;
+            }
             context.subscriptions.push(
                 new vscode.Disposable(() => {
                     sharedb.disconnect();
