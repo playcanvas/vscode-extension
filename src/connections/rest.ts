@@ -1,6 +1,8 @@
 import { Log } from '../log';
 import type { Asset, Branch, Project, User } from '../typings/models';
-import { summarize } from '../utils/utils';
+import { summarize, tryCatch } from '../utils/utils';
+
+import { FETCH_TIMEOUT_MS } from './constants';
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
@@ -79,12 +81,12 @@ class Rest {
 
     origin: string;
 
-    accessToken: string;
+    private _accessToken: string;
 
     constructor({ url, origin, accessToken }: { url: string; origin: string; accessToken: string }) {
         this.url = url;
         this.origin = origin;
-        this.accessToken = accessToken;
+        this._accessToken = accessToken;
     }
 
     private _backoff(attempt: number, retryAfter?: number) {
@@ -152,88 +154,63 @@ class Rest {
         // retry loop
         let lastError: Error | null = null;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-            try {
-                const headers: Record<string, string> = {
-                    origin: this.origin
-                };
-                if (auth) {
-                    headers['Authorization'] = `Bearer ${this.accessToken}`;
-                }
+            const headers: Record<string, string> = { origin: this.origin };
+            if (auth) {
+                headers['Authorization'] = `Bearer ${this._accessToken}`;
+            }
 
-                const res = await fetch(`${this.url}/${path}`, {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+            const [fetchErr, res] = await tryCatch(
+                fetch(`${this.url}/${path}`, {
                     method,
                     headers,
-                    body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined
-                });
+                    body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
+                    signal: ctrl.signal
+                }) as Promise<Response>
+            );
+            clearTimeout(timer);
 
-                // check for HTTP errors
-                if (!res.ok) {
-                    const statusText = res.statusText;
-                    const errorBody = await res.text();
-                    const error = new Error(`HTTP ${res.status} ${statusText}: ${errorBody}`);
-
-                    // check if retryable
-                    if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_RETRIES) {
-                        lastError = error;
-
-                        // calculate backoff delay
-                        const retryAfter = this._retryAfter(res);
-                        const delayMs = this._backoff(attempt, retryAfter);
-
-                        // log retry attempt
-                        this._log.warn(
-                            `Request failed with ${res.status}, retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${method} ${path}`
-                        );
-
-                        // wait before retry
-                        await new Promise((resolve) => setTimeout(resolve, delayMs));
-                        continue;
-                    }
-
-                    // not retryable or max retries exceeded
-                    throw error;
-                }
-
-                // success - parse response
-                let result: T;
-                switch (type) {
-                    case 'buffer': {
-                        const buf = await res.arrayBuffer();
-                        this._log.debug(res.status, method, path, summarize(buf));
-                        result = buf as T;
-                        break;
-                    }
-                    case 'json': {
-                        const json = await res.json();
-                        this._log.debug(res.status, method, path, summarize(json));
-                        result = json as T;
-                        break;
-                    }
-                }
-
-                // cache successful GET requests
-                const ttl = this._ttl(path);
-                if (ttl && method === 'GET') {
-                    this._cache.set(`${method}:${path}`, result, ttl);
-                }
-
-                return result;
-            } catch (error) {
-                // network errors or fetch failures
-                if (attempt < MAX_RETRIES && error instanceof Error) {
-                    lastError = error;
-                    const delayMs = this._backoff(attempt);
+            // network error
+            if (fetchErr) {
+                lastError = fetchErr;
+                if (attempt < MAX_RETRIES) {
+                    const delay = this._backoff(attempt);
                     this._log.warn(
-                        `Request failed with network error, retrying in ${delayMs}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${method} ${path}`
+                        `Request failed with network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${method} ${path}`
                     );
-                    await new Promise((resolve) => setTimeout(resolve, delayMs));
+                    await new Promise((r) => setTimeout(r, delay));
+                    continue;
+                }
+                throw fetchErr;
+            }
+
+            // http error
+            if (!res.ok) {
+                const errorBody = await res.text();
+                const error = new Error(`HTTP ${res.status} ${res.statusText}: ${errorBody}`);
+                if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_RETRIES) {
+                    lastError = error;
+                    const delay = this._backoff(attempt, this._retryAfter(res));
+                    this._log.warn(
+                        `Request failed with ${res.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${method} ${path}`
+                    );
+                    await new Promise((r) => setTimeout(r, delay));
                     continue;
                 }
                 throw error;
             }
+
+            // success
+            const result = (type === 'buffer' ? await res.arrayBuffer() : await res.json()) as T;
+            this._log.debug(res.status, method, path, summarize(result));
+            const ttl = this._ttl(path);
+            if (ttl && method === 'GET') {
+                this._cache.set(`${method}:${path}`, result, ttl);
+            }
+            return result;
         }
 
-        // all retries exhausted
         throw lastError || new Error(`Request failed after ${MAX_RETRIES} retries`);
     }
 

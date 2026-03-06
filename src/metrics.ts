@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import { HOME_URL, NAME, PUBLISHER } from './config.js';
+import { FETCH_TIMEOUT_MS } from './connections/constants';
 import { Log } from './log';
 
 const FLUSH_INTERVAL = 5000;
@@ -209,14 +210,18 @@ class GrapheneSender implements vscode.TelemetrySender {
     }
 
     private async _postBatch(events: MetricEvent[]): Promise<PostBatchResult> {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
         const res = await fetch(this._url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this._accessToken}` },
-            body: JSON.stringify({ events })
+            body: JSON.stringify({ events }),
+            signal: ctrl.signal
         }).catch((err) => {
             this._log.debug(`flush failed: ${err.message}`);
             return null;
         });
+        clearTimeout(timer);
         if (!res) {
             return 'retry';
         }
