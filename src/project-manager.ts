@@ -516,6 +516,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 this.error.set(() => new Error(`failed to subscribe to new asset ${uniqueId}`));
                 return;
             }
+
+            // check if asset was deleted during subscribe
+            if (!this._assets.has(uniqueId)) {
+                this._log.debug(`asset ${uniqueId} deleted during creation, aborting`);
+                return;
+            }
+
             this._cleanup.push(async () => {
                 await this._sharedb.unsubscribe('assets', `${uniqueId}`);
             });
@@ -532,8 +539,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     skipsDirty = true;
                 }
             } else {
-                // wait for text based documents to be created
-                await new Promise<void>((resolve) => {
+                // wait for text based documents to be created (with timeout)
+                const filename = new Promise<void>((resolve) => {
                     if (doc1.data.file?.filename) {
                         resolve();
                         return;
@@ -546,6 +553,19 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     };
                     doc1.on('op', load);
                 });
+                const [fnErr] = await tryCatch(
+                    withTimeout(filename, EVENT_TIMEOUT_MS, `filename timed out for asset ${uniqueId}`)
+                );
+                if (fnErr) {
+                    this._log.warn(fnErr.message);
+                    return;
+                }
+
+                // check if asset was deleted during filename wait
+                if (!this._assets.has(uniqueId)) {
+                    this._log.debug(`asset ${uniqueId} deleted during creation, aborting`);
+                    return;
+                }
 
                 // subscribe to asset document
                 const doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
@@ -554,6 +574,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     this._retryDocSubscription(uniqueId);
                     return;
                 }
+
+                // check if asset was deleted during doc subscribe
+                if (!this._assets.has(uniqueId)) {
+                    this._log.debug(`asset ${uniqueId} deleted during creation, aborting`);
+                    return;
+                }
+
                 this._cleanup.push(async () => {
                     await this._sharedb.unsubscribe('documents', `${uniqueId}`);
                 });
@@ -1147,19 +1174,24 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // wait for pending ops to be acknowledged before saving,
         // matching the Code Editor's behavior (save.ts:144-150).
         // prevents saving stale content while ops are in-flight.
-        const save = () => {
+        let sent = false;
+        const send = () => {
+            if (sent) {
+                return;
+            }
+            sent = true;
             this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
             this._log.debug(`saved file ${path}`);
         };
         if (file.doc.hasPending()) {
-            file.doc.once('nothing pending', save);
+            file.doc.once('nothing pending', send);
             // re-check: event may have fired between hasPending() and once()
             if (!file.doc.hasPending()) {
-                file.doc.off('nothing pending', save);
-                save();
+                file.doc.off('nothing pending', send);
+                send();
             }
         } else {
-            save();
+            send();
         }
     }
 
