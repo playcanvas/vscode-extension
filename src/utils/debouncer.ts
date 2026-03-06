@@ -1,40 +1,42 @@
 class Debouncer<T> {
-    private _timeouts = new Map<string, NodeJS.Timeout>();
+    private _pending = new Map<string, { timeout: NodeJS.Timeout; reject: (err: Error) => void }>();
 
     constructor(private readonly _delay: number) {}
 
     debounce(key: string, fn: () => Promise<T>): Promise<T> {
         return new Promise((resolve, reject) => {
-            if (this._timeouts.get(key)) {
-                clearTimeout(this._timeouts.get(key));
+            const existing = this._pending.get(key);
+            if (existing) {
+                clearTimeout(existing.timeout);
+                existing.reject(new Error('debounce superseded'));
             }
-            this._timeouts.set(
-                key,
-                setTimeout(() => {
+            this._pending.set(key, {
+                timeout: setTimeout(() => {
                     fn()
                         .then(resolve)
                         .catch(reject)
-                        .finally(() => {
-                            this._timeouts.delete(key);
-                        });
-                }, this._delay)
-            );
+                        .finally(() => this._pending.delete(key));
+                }, this._delay),
+                reject
+            });
         });
     }
 
-    cancel(key: string): void {
-        const timeout = this._timeouts.get(key);
-        if (timeout) {
-            clearTimeout(timeout);
-            this._timeouts.delete(key);
+    cancel(key: string) {
+        const existing = this._pending.get(key);
+        if (existing) {
+            clearTimeout(existing.timeout);
+            existing.reject(new Error('debounce cancelled'));
+            this._pending.delete(key);
         }
     }
 
     clear() {
-        for (const [, timeout] of this._timeouts) {
+        for (const [, { timeout, reject }] of this._pending) {
             clearTimeout(timeout);
+            reject(new Error('debounce cleared'));
         }
-        this._timeouts.clear();
+        this._pending.clear();
     }
 }
 
