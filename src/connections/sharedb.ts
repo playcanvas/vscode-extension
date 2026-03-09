@@ -19,6 +19,7 @@ import {
     RECONNECT_MAX_MS,
     SUBSCRIBE_TIMEOUT_MS
 } from './constants';
+import { delay, latency } from './latency';
 
 // register text type
 sharedb.types.register(type);
@@ -84,7 +85,7 @@ class ShareDb extends EventEmitter<EventMap> {
                       origin: this.origin
                   }
               };
-        const socket = new WebSocket(this.url, options);
+        const socket = latency(new WebSocket(this.url, options));
 
         // send request for auth
         socket.addEventListener('open', () => {
@@ -204,8 +205,13 @@ class ShareDb extends EventEmitter<EventMap> {
                 return;
             }
 
-            // resume normal processing
-            onmessage?.(msg);
+            // resume normal processing (delay for latency simulation)
+            const d = delay();
+            if (d > 0) {
+                setTimeout(() => onmessage?.(msg), d);
+            } else {
+                onmessage?.(msg);
+            }
         };
 
         // intercept send to queue and forward to open socket

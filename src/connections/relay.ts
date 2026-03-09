@@ -15,6 +15,7 @@ import {
     RECONNECT_BASE_MS,
     RECONNECT_MAX_MS
 } from './constants';
+import { latency } from './latency';
 
 type EventMap = {
     'room:join': [{ name: string; userId: number; users?: number[] }];
@@ -42,6 +43,8 @@ class Relay extends EventEmitter<EventMap> {
 
     private _lastPong = 0;
 
+    private _pings: number[] = [];
+
     url: string;
 
     origin: string;
@@ -49,6 +52,8 @@ class Relay extends EventEmitter<EventMap> {
     rooms = new Map<number, Set<string>>();
 
     connected = signal<boolean>(false);
+
+    ping = signal<number>(0);
 
     error = signal<Error | undefined>(undefined);
 
@@ -72,7 +77,7 @@ class Relay extends EventEmitter<EventMap> {
                       cookie: 't=0'
                   }
               };
-        const socket = new WebSocket(this.url, options);
+        const socket = latency(new WebSocket(this.url, options));
 
         // send request for auth
         // ! Invalid access tokens will hang here
@@ -153,6 +158,7 @@ class Relay extends EventEmitter<EventMap> {
                 return;
             }
             // app-level ping — server responds with bare "pong" (not JSON-encoded)
+            this._pings.push(Date.now());
             socket.send(JSON.stringify('ping'));
         }, PING_INTERVAL_MS);
 
@@ -160,6 +166,10 @@ class Relay extends EventEmitter<EventMap> {
         socket.addEventListener('message', ({ data: raw }: { data: Data }) => {
             if (raw.toString() === 'pong') {
                 this._lastPong = Date.now();
+                const sent = this._pings.shift();
+                if (sent) {
+                    this.ping.set(() => this._lastPong - sent);
+                }
                 return;
             }
             try {
