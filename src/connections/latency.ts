@@ -1,8 +1,7 @@
 import type WebSocket from 'isomorphic-ws';
 import type { MessageEvent } from 'ws';
 
-const LATENCY = parseInt(process.env.LATENCY ?? '0', 10) || 0;
-const JITTER = parseInt(process.env.JITTER ?? '0', 10) || 0;
+import { JITTER, LATENCY } from '../config';
 
 /** computed delay with optional jitter */
 const delay = () => (LATENCY > 0 ? LATENCY + Math.round((Math.random() * 2 - 1) * JITTER) : 0);
