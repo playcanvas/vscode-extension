@@ -79,6 +79,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _events: EventEmitter<EventMap>;
 
+    private _linked = false;
+
     private _folderUri?: vscode.Uri;
 
     private _projectManager?: ProjectManager;
@@ -856,7 +858,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
-        if (this._folderUri || this._projectManager) {
+        if (this._linked) {
             throw this.error.set(() => new Error('manager already linked'));
         }
 
@@ -927,10 +929,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             await this._writeMutex.clear();
             this._debouncer.clear();
             this._opened.clear();
-
-            this._folderUri = undefined;
-            this._projectManager = undefined;
         });
+
+        this._linked = true;
 
         // notify completion
         updatingDiskDone();
@@ -939,18 +940,19 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     async unlink() {
-        if (!this._folderUri || !this._projectManager) {
-            throw this.error.set(() => new Error('manager not linked'));
-        }
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
-
-        await Promise.all(this._cleanup.map((fn) => fn()));
-        this._cleanup.length = 0;
-
-        this._log.info(`unlinked from ${folderUri.toString()}`);
-
-        return { folderUri, projectManager };
+        if (!this._linked) {
+            this._log.warn('unlink called when not linked');
+            if (!folderUri || !projectManager) {
+                throw this.error.set(() => new Error('unlink called before link'));
+            }
+            return { folderUri, projectManager };
+        }
+        await super.unlink();
+        this._linked = false;
+        this._log.info(`unlinked from ${folderUri!.toString()}`);
+        return { folderUri: folderUri!, projectManager: projectManager! };
     }
 }
 

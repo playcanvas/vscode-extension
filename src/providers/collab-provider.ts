@@ -28,6 +28,8 @@ class CollabProvider
 
     private _items = new Map<number, CollabItem>();
 
+    private _linked = false;
+
     private _room?: string;
 
     private _folderUri?: vscode.Uri;
@@ -151,7 +153,7 @@ class CollabProvider
     }
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
-        if (this._folderUri || this._projectManager) {
+        if (this._linked) {
             throw this.error.set(() => new Error('manager already linked'));
         }
 
@@ -164,26 +166,27 @@ class CollabProvider
             unwatchDocument();
 
             this._room = undefined;
-
-            this._folderUri = undefined;
-            this._projectManager = undefined;
         });
+
+        this._linked = true;
 
         this._log.info(`linked to ${folderUri.toString()}`);
     }
 
     async unlink() {
-        if (!this._folderUri || !this._projectManager) {
-            throw this.error.set(() => new Error('manager not linked'));
-        }
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
-
+        if (!this._linked) {
+            this._log.warn('unlink called when not linked');
+            if (!folderUri || !projectManager) {
+                throw this.error.set(() => new Error('unlink called before link'));
+            }
+            return { folderUri, projectManager };
+        }
         await super.unlink();
-
-        this._log.info(`unlinked from ${folderUri.toString()}`);
-
-        return { folderUri, projectManager };
+        this._linked = false;
+        this._log.info(`unlinked from ${folderUri!.toString()}`);
+        return { folderUri: folderUri!, projectManager: projectManager! };
     }
 }
 

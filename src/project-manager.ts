@@ -65,6 +65,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _rest: Rest;
 
+    private _linked = false;
+
     private _projectId?: number;
 
     private _branchId?: string;
@@ -1253,7 +1255,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
-        if (this._projectId || this._branchId) {
+        if (this._linked) {
             throw this.error.set(() => new Error('project already linked'));
         }
 
@@ -1417,26 +1419,27 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._idUniqueId.clear();
             this._collided.clear();
             this._collidedByPath.clear();
-
-            this._projectId = undefined;
-            this._branchId = undefined;
         });
+
+        this._linked = true;
 
         this._log.info(`project ${this._projectId} (branch ${this._branchId}) loaded`);
     }
 
     async unlink() {
-        if (!this._projectId || !this._branchId) {
-            throw this.error.set(() => new Error('project not linked'));
-        }
         const projectId = this._projectId;
         const branchId = this._branchId;
-
+        if (!this._linked) {
+            this._log.warn('unlink called when not linked');
+            if (projectId === undefined || branchId === undefined) {
+                throw this.error.set(() => new Error('unlink called before link'));
+            }
+            return { projectId, branchId };
+        }
         await super.unlink();
-
+        this._linked = false;
         this._log.info(`project ${projectId} (branch ${branchId}) unloaded`);
-
-        return { projectId, branchId };
+        return { projectId: projectId!, branchId: branchId! };
     }
 }
 
