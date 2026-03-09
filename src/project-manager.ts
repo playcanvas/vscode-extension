@@ -65,6 +65,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _rest: Rest;
 
+    private _linked = false;
+
     private _projectId?: number;
 
     private _branchId?: string;
@@ -220,7 +222,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _addAsset(uniqueId: number, doc: Doc) {
         if (this._assets.has(uniqueId)) {
-            throw this.error.set(() => new Error('asset already added'));
+            this._log.debug(`asset ${uniqueId} already added, skipping`);
+            return;
         }
 
         const snapshot = structuredClone(doc.data);
@@ -338,6 +341,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _addFolder(uniqueId: number) {
         const path = this._assetPath(uniqueId);
 
+        // already registered with same uniqueId (from create's optimistic add)
+        // note: skip asset:file:create — folder was created locally, disk doesn't need notification
+        const existing = this._files.get(path);
+        if (existing?.uniqueId === uniqueId) {
+            return true;
+        }
+
         // check for file path collision
         if (this._checkForSkip(uniqueId)) {
             return false;
@@ -380,7 +390,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._pendingRetries.delete(uniqueId);
 
             // bail out if project was unlinked while waiting
-            if (!this._projectId || !this._branchId) {
+            if (!this._linked) {
                 return;
             }
 
@@ -390,7 +400,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             const doc = await this._sharedb.resubscribe('documents', `${uniqueId}`);
 
             // re-check after await — unlink may have happened during resubscribe
-            if (!this._projectId || !this._branchId) {
+            if (!this._linked) {
                 if (doc) {
                     doc.destroy();
                 }
@@ -433,7 +443,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._pendingSaveRetries.delete(uniqueId);
 
             // bail out if project was unlinked while waiting
-            if (!this._projectId) {
+            if (!this._linked) {
                 return;
             }
 
@@ -441,7 +451,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
 
             // re-check after await — unlink may have happened during sendRaw
-            if (!this._projectId) {
+            if (!this._linked) {
                 return;
             }
 
@@ -934,6 +944,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // create asset
         const asset = await guard(this._rest.assetCreate(this._projectId, this._branchId, data), this.error);
 
+        // register folder optimistically — don't depend on messenger round-trip
+        // note: only _files is populated; _assets/_idUniqueId require ShareDB doc
+        // shape (item_id, path[]) which differs from REST response (id, parent)
+        if (type === 'folder') {
+            this._files.set(path, { type: 'folder', uniqueId: asset.uniqueId });
+        }
+
         // resolve rest promise
         rest.resolve(asset);
 
@@ -1253,8 +1270,28 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
-        if (this._projectId || this._branchId) {
+        if (this._linked) {
             throw this.error.set(() => new Error('project already linked'));
+        }
+
+        // clean up partial state from a previously failed link attempt
+        if (this._cleanup.length > 0) {
+            await Promise.allSettled(this._cleanup.map((fn) => fn()));
+            this._cleanup.length = 0;
+            for (const timeout of this._pendingRetries.values()) {
+                clearTimeout(timeout);
+            }
+            this._pendingRetries.clear();
+            for (const timeout of this._pendingSaveRetries.values()) {
+                clearTimeout(timeout);
+            }
+            this._pendingSaveRetries.clear();
+            this._saveRetryCounts.clear();
+            this._files.clear();
+            this._assets.clear();
+            this._idUniqueId.clear();
+            this._collided.clear();
+            this._collidedByPath.clear();
         }
 
         // fetch project asset metadata
@@ -1417,26 +1454,27 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._idUniqueId.clear();
             this._collided.clear();
             this._collidedByPath.clear();
-
-            this._projectId = undefined;
-            this._branchId = undefined;
         });
+
+        this._linked = true;
 
         this._log.info(`project ${this._projectId} (branch ${this._branchId}) loaded`);
     }
 
     async unlink() {
-        if (!this._projectId || !this._branchId) {
-            throw this.error.set(() => new Error('project not linked'));
-        }
         const projectId = this._projectId;
         const branchId = this._branchId;
-
+        if (!this._linked) {
+            this._log.warn('unlink called when not linked');
+            if (projectId === undefined || branchId === undefined) {
+                throw this.error.set(() => new Error('unlink called before link'));
+            }
+            return { projectId, branchId };
+        }
         await super.unlink();
-
+        this._linked = false;
         this._log.info(`project ${projectId} (branch ${branchId}) unloaded`);
-
-        return { projectId, branchId };
+        return { projectId: projectId!, branchId: branchId! };
     }
 }
 
