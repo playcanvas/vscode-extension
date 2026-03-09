@@ -250,6 +250,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
     });
     effect(() => {
         const enabled = connected.get();
+        metrics.increment('connection', { status: enabled ? 'connected' : 'disconnected' });
+    });
+    effect(() => {
+        const enabled = connected.get();
         connectionStatusItem.color = enabled ? connectionStatusColors.connected : connectionStatusColors.disconnected;
         if (enabled) {
             const m = messenger.ping.get();
@@ -260,7 +264,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
         } else {
             connectionStatusItem.text = `$(primitive-dot) Disconnected`;
         }
-        metrics.increment('connection', { status: enabled ? 'connected' : 'disconnected' });
     });
 
     // collision status bar item
