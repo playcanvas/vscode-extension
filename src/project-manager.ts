@@ -222,7 +222,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _addAsset(uniqueId: number, doc: Doc) {
         if (this._assets.has(uniqueId)) {
-            throw this.error.set(() => new Error('asset already added'));
+            this._log.debug(`asset ${uniqueId} already added, skipping`);
+            return;
         }
 
         const snapshot = structuredClone(doc.data);
@@ -339,6 +340,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _addFolder(uniqueId: number) {
         const path = this._assetPath(uniqueId);
+
+        // already registered with same uniqueId (from create's optimistic add)
+        // note: skip asset:file:create — folder was created locally, disk doesn't need notification
+        const existing = this._files.get(path);
+        if (existing?.uniqueId === uniqueId) {
+            return true;
+        }
 
         // check for file path collision
         if (this._checkForSkip(uniqueId)) {
@@ -935,6 +943,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // create asset
         const asset = await guard(this._rest.assetCreate(this._projectId, this._branchId, data), this.error);
+
+        // register folder optimistically — don't depend on messenger round-trip
+        // note: only _files is populated; _assets/_idUniqueId require ShareDB doc
+        // shape (item_id, path[]) which differs from REST response (id, parent)
+        if (type === 'folder') {
+            this._files.set(path, { type: 'folder', uniqueId: asset.uniqueId });
+        }
 
         // resolve rest promise
         rest.resolve(asset);
