@@ -382,7 +382,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._pendingRetries.delete(uniqueId);
 
             // bail out if project was unlinked while waiting
-            if (!this._projectId || !this._branchId) {
+            if (!this._linked) {
                 return;
             }
 
@@ -392,7 +392,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             const doc = await this._sharedb.resubscribe('documents', `${uniqueId}`);
 
             // re-check after await — unlink may have happened during resubscribe
-            if (!this._projectId || !this._branchId) {
+            if (!this._linked) {
                 if (doc) {
                     doc.destroy();
                 }
@@ -435,7 +435,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._pendingSaveRetries.delete(uniqueId);
 
             // bail out if project was unlinked while waiting
-            if (!this._projectId) {
+            if (!this._linked) {
                 return;
             }
 
@@ -443,7 +443,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
 
             // re-check after await — unlink may have happened during sendRaw
-            if (!this._projectId) {
+            if (!this._linked) {
                 return;
             }
 
@@ -1257,6 +1257,26 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
         if (this._linked) {
             throw this.error.set(() => new Error('project already linked'));
+        }
+
+        // clean up partial state from a previously failed link attempt
+        if (this._cleanup.length > 0) {
+            await Promise.allSettled(this._cleanup.map((fn) => fn()));
+            this._cleanup.length = 0;
+            for (const timeout of this._pendingRetries.values()) {
+                clearTimeout(timeout);
+            }
+            this._pendingRetries.clear();
+            for (const timeout of this._pendingSaveRetries.values()) {
+                clearTimeout(timeout);
+            }
+            this._pendingSaveRetries.clear();
+            this._saveRetryCounts.clear();
+            this._files.clear();
+            this._assets.clear();
+            this._idUniqueId.clear();
+            this._collided.clear();
+            this._collidedByPath.clear();
         }
 
         // fetch project asset metadata

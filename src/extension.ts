@@ -18,7 +18,7 @@ import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect } from './utils/signal';
-import { projectToName, tryCatch, uriStartsWith } from './utils/utils';
+import { projectToName, retry, tryCatch, uriStartsWith } from './utils/utils';
 
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
@@ -174,7 +174,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     let reloading: Promise<void> | null = null;
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
         while (reloading) {
-            await reloading;
+            await tryCatch(reloading);
         }
         reloading = (async () => {
             await projectManager.flushPending();
@@ -187,7 +187,14 @@ export const activate = async (context: vscode.ExtensionContext) => {
             // TODO: figure out why this is needed to avoid ShareDB issues
             await new Promise((resolve) => setTimeout(resolve, 1000));
 
-            await projectManager.link(projectState);
+            // retry link phase — transient network failures during reload
+            // should not leave the extension in a broken unlinked state
+            await retry(() => projectManager.link(projectState), {
+                retries: 2,
+                delay: (i) => 3000 * (i + 1),
+                warn: (err, attempt) => log.warn(`reload link failed (attempt ${attempt}/3): ${err.message}`)
+            });
+
             await disk.link(diskState);
             await collabProvider.link(collabState);
             await uriHandler.link(uriState);
@@ -428,7 +435,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const [err] = await tryCatch(reload(projectManager));
             reloadDone();
             if (err) {
-                throw err;
+                void handleError(err).catch((e) => log.error(e.message));
+                return;
             }
         })
     );
