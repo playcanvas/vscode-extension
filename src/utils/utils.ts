@@ -12,6 +12,14 @@ export const hash = (data: string | Uint8Array) => {
     return crypto.createHash('md5').update(data).digest('hex');
 };
 
+export const withTimeout = <T>(promise: Promise<T>, ms: number, msg: string) => {
+    let id: ReturnType<typeof setTimeout>;
+    const timer = new Promise<never>((_, reject) => {
+        id = setTimeout(() => reject(new Error(msg)), ms);
+    });
+    return Promise.race([promise, timer]).finally(() => clearTimeout(id));
+};
+
 export const tryCatch = async <T>(promise: Promise<T>): Promise<[Error, null] | [null, T]> => {
     try {
         return [null, await promise];

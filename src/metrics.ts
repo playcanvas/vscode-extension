@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import { HOME_URL, NAME, PUBLISHER } from './config.js';
+import { FETCH_TIMEOUT_MS } from './connections/constants';
 import { Log } from './log';
 
 const FLUSH_INTERVAL = 5000;
@@ -78,7 +79,7 @@ class GrapheneSender implements vscode.TelemetrySender {
     private _url: string;
 
     constructor(accessToken: string) {
-        this._url = `${HOME_URL}/editor/metrics?access_token=${accessToken}`;
+        this._url = `${HOME_URL}/editor/metrics?access_token=${encodeURIComponent(accessToken)}`;
         this._timer = setInterval(() => {
             void this._flush();
         }, FLUSH_INTERVAL);
@@ -206,20 +207,28 @@ class GrapheneSender implements vscode.TelemetrySender {
     }
 
     private async _postBatch(events: MetricEvent[]): Promise<PostBatchResult> {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
         const res = await fetch(this._url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ events })
+            body: JSON.stringify({ events }),
+            signal: ctrl.signal
         }).catch((err) => {
             this._log.debug(`flush failed: ${err.message}`);
             return null;
         });
+        clearTimeout(timer);
         if (!res) {
             return 'retry';
         }
         if (!res.ok) {
             if (res.status === 413) {
                 return 'too-large';
+            }
+            if (res.status === 401 || res.status === 403) {
+                this._log.debug(`flush failed: ${res.status} ${res.statusText}`);
+                return 'drop';
             }
             if (RETRYABLE_STATUS.has(res.status)) {
                 this._log.debug(`flush failed: ${res.status} ${res.statusText}`);
