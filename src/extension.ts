@@ -239,7 +239,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         connected: '#2ecc71',
         disconnected: '#e74c3c'
     };
-    const connectionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10000);
+    const connectionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10001);
     context.subscriptions.push(connectionStatusItem);
     connectionStatusItem.color = connectionStatusColors.disconnected;
     connectionStatusItem.text = `$(primitive-dot) Disconnected`;
