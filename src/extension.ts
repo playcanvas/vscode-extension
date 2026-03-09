@@ -239,11 +239,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
         connected: '#2ecc71',
         disconnected: '#e74c3c'
     };
-    const connectionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10001);
+    const connectionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10000);
     context.subscriptions.push(connectionStatusItem);
     connectionStatusItem.color = connectionStatusColors.disconnected;
     connectionStatusItem.text = `$(primitive-dot) Disconnected`;
-    connectionStatusItem.tooltip = 'PlayCanvas Connection Status';
+    connectionStatusItem.tooltip = 'PlayCanvas Connection';
     connectionStatusItem.show();
     const connected = computed(() => {
         return sharedb.connected.get() && messenger.connected.get() && relay.connected.get();
@@ -251,23 +251,16 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const enabled = connected.get();
         connectionStatusItem.color = enabled ? connectionStatusColors.connected : connectionStatusColors.disconnected;
-        connectionStatusItem.text = `$(primitive-dot) ${enabled ? 'Connected' : 'Disconnected'}`;
-        metrics.increment('connection', { status: enabled ? 'connected' : 'disconnected' });
-    });
-
-    // ping status bar item
-    const pingStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10000);
-    context.subscriptions.push(pingStatusItem);
-    pingStatusItem.tooltip = 'PlayCanvas Round-Trip Time';
-    effect(() => {
-        const m = messenger.ping.get();
-        const r = relay.ping.get();
-        const vals = [m, r].filter((v) => v > 0);
-        if (vals.length) {
-            const avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-            pingStatusItem.text = `$(graph) ${avg}ms`;
-            pingStatusItem.show();
+        if (enabled) {
+            const m = messenger.ping.get();
+            const r = relay.ping.get();
+            const vals = [m, r].filter((v) => v > 0);
+            const suffix = vals.length ? ` ${Math.round(vals.reduce((a, b) => a + b, 0) / vals.length)}ms` : '';
+            connectionStatusItem.text = `$(primitive-dot) Connected${suffix}`;
+        } else {
+            connectionStatusItem.text = `$(primitive-dot) Disconnected`;
         }
+        metrics.increment('connection', { status: enabled ? 'connected' : 'disconnected' });
     });
 
     // collision status bar item
