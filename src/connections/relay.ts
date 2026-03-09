@@ -8,6 +8,7 @@ import { signal } from '../utils/signal';
 import { withTimeout } from '../utils/utils';
 
 import {
+    AUTH_CLOSE_CODE,
     CONNECT_TIMEOUT_MS,
     PING_INTERVAL_MS,
     PONG_TIMEOUT_MS,
@@ -120,6 +121,11 @@ class Relay extends EventEmitter<EventMap> {
 
             // skip reconnect if intentionally disconnected
             if (this._disconnecting) {
+                return;
+            }
+
+            // skip reconnect on auth failure — retrying with same token won't help
+            if (code === AUTH_CLOSE_CODE) {
                 return;
             }
 
