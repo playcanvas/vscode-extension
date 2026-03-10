@@ -685,6 +685,23 @@ export const activate = async (context: vscode.ExtensionContext) => {
             })
         );
 
+        // disable autosave for playcanvas workspace — autosave interferes
+        // with realtime collaborative editing
+        const disableAutosave = () => {
+            const f = vscode.workspace.getConfiguration('files');
+            if (f.get('autoSave') !== 'off') {
+                f.update('autoSave', 'off', vscode.ConfigurationTarget.Workspace);
+            }
+        };
+        disableAutosave();
+        context.subscriptions.push(
+            vscode.workspace.onDidChangeConfiguration((e) => {
+                if (e.affectsConfiguration('files.autoSave')) {
+                    disableAutosave();
+                }
+            })
+        );
+
         // link collab provider
         collabProvider.link({
             folderUri,
