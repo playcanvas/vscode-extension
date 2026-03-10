@@ -562,6 +562,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            // cancel pending debounced write to prevent it firing after native save
+            this._debouncer.cancel(`${document.uri}`);
+
             // check if ignore updated (only if file has unsaved changes)
             if (file.dirty) {
                 this._checkIgnoreUpdated(document.uri);

@@ -323,11 +323,18 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             const path = this._assetPath(uniqueId);
 
-            // mark as dirty (ops received that aren't saved yet)
-            file.dirty = true;
+            // compute dirty: does doc content still differ from last S3 save?
+            const asset = this._assets.get(uniqueId);
+            const dirty = asset?.file?.hash !== hash(doc.data);
+            file.dirty = dirty;
 
             // emit a change event to update editor and disk
             this._events.emit('asset:file:update', path, op, buffer.from(doc.data));
+
+            // content matches S3 — clear VS Code dirty indicator
+            if (!dirty) {
+                this._events.emit('asset:file:save', path);
+            }
         });
 
         // emit file created event with ShareDB content for disk
@@ -494,6 +501,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // mark as clean (sharedb content now synced with S3)
             file.dirty = false;
+            this._events.emit('asset:file:save', path);
         });
         return () => {
             this._sharedb.off('doc:save', docSaveHandle);

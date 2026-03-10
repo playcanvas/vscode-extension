@@ -1214,6 +1214,44 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), '', 'file content should be empty');
     });
 
+    test('file save (doc:save:success -> local)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create asset and open document
+        const asset = await assetCreate({ name: 'save_docsave_success.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset, 'asset should be created');
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        // make local edit (reliably makes isDirty = true)
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL EDIT\n');
+        await vscode.workspace.applyEdit(edit);
+        assert.strictEqual(tdoc.isDirty, true, 'document should be dirty after local edit');
+
+        // create save promise (fires when _save() -> document.save() runs)
+        const saved = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidSaveTextDocument((d) => {
+                if (d.uri.toString() === uri.toString()) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+
+        // simulate doc:save:success without hash change (tests the new code path)
+        sharedb.emit('doc:save', 'success', asset.uniqueId);
+
+        // wait for _save() to call document.save()
+        await assertResolves(saved, 'vscode.onDidSaveTextDocument');
+
+        // verify dirty indicator is cleared
+        assert.strictEqual(tdoc.isDirty, false, 'document should not be dirty after doc:save:success');
+    });
+
     test('file delete (remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
