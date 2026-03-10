@@ -153,6 +153,19 @@ export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[]) =
     return edits;
 };
 
+export const opdiff = (op: ShareDbTextOp) => {
+    let ins = 0;
+    let del = 0;
+    for (const c of op) {
+        if (typeof c === 'string') {
+            ins += c.length;
+        } else if (typeof c === 'object') {
+            del += c.d;
+        }
+    }
+    return `+${ins} -${del}`;
+};
+
 export const minimalDiff = (a: string, b: string) => {
     const minLen = Math.min(a.length, b.length);
     let prefix = 0;
