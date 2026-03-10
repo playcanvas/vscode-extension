@@ -1214,6 +1214,92 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), '', 'file content should be empty');
     });
 
+    test('file save (doc:save:success -> local)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create asset and open document
+        const asset = await assetCreate({ name: 'save_docsave_success.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset, 'asset should be created');
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        // make local edit (reliably makes isDirty = true)
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL EDIT\n');
+        await vscode.workspace.applyEdit(edit);
+        assert.strictEqual(tdoc.isDirty, true, 'document should be dirty after local edit');
+
+        // create save promise (fires when _save() -> document.save() runs)
+        const saved = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidSaveTextDocument((d) => {
+                if (d.uri.toString() === uri.toString()) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+
+        // simulate doc:save:success without hash change (tests the new code path)
+        sharedb.sendRaw.resetHistory();
+        sharedb.emit('doc:save', 'success', asset.uniqueId);
+
+        // wait for _save() to call document.save()
+        await assertResolves(saved, 'vscode.onDidSaveTextDocument');
+
+        // verify dirty indicator is cleared
+        assert.strictEqual(tdoc.isDirty, false, 'document should not be dirty after doc:save:success');
+
+        // verify no redundant server save was triggered
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        assert.strictEqual(saveCalls.length, 0, 'should not send redundant doc:save to server');
+    });
+
+    test('file save (remote op reverts to S3 hash)', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const content = '// REVERT TEST';
+        const asset = await assetCreate({ name: 'revert_op_save.js', content });
+        assert.ok(asset, 'asset should be created');
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+
+        // remote op inserts text then reverts it (content returns to S3 hash)
+        const insert = '// EXTRA\n';
+        const changed = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && e.document.getText().startsWith(insert)) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+        doc.submitOp([0, insert], { source: 'remote' });
+        await assertResolves(changed, 'vscode.onDidChangeTextDocument');
+
+        // revert op — hash matches S3 so asset:file:save fires
+        const saved = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidSaveTextDocument((d) => {
+                if (d.uri.toString() === uri.toString()) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+        doc.submitOp([0, { d: insert.length }], { source: 'remote' });
+
+        await assertResolves(saved, 'vscode.onDidSaveTextDocument');
+        assert.strictEqual(tdoc.isDirty, false, 'should not be dirty after revert to S3 hash');
+        assert.strictEqual(tdoc.getText(), content, 'content should match original');
+    });
+
     test('file delete (remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;

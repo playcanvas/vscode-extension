@@ -15,7 +15,7 @@ import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
-import { hash, parsePath, guard, withTimeout, tryCatch } from './utils/utils';
+import { hash, parsePath, guard, withTimeout, tryCatch, minimalDiff } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -323,11 +323,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             const path = this._assetPath(uniqueId);
 
-            // mark as dirty (ops received that aren't saved yet)
-            file.dirty = true;
+            // compute dirty: does doc content still differ from last S3 save?
+            // if asset metadata is missing, defaults to dirty (undefined !== hash)
+            const asset = this._assets.get(uniqueId);
+            const dirty = asset?.file?.hash !== hash(doc.data);
+            file.dirty = dirty;
 
-            // emit a change event to update editor and disk
+            // update must run before save so buffer is written before indicator clears
             this._events.emit('asset:file:update', path, op, buffer.from(doc.data));
+            if (!dirty) {
+                this._events.emit('asset:file:save', path);
+            }
         });
 
         // emit file created event with ShareDB content for disk
@@ -494,6 +500,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // mark as clean (sharedb content now synced with S3)
             file.dirty = false;
+            this._events.emit('asset:file:save', path);
         });
         return () => {
             this._sharedb.off('doc:save', docSaveHandle);
@@ -1136,22 +1143,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
-        // find common prefix
-        const minLen = Math.min(oldText.length, newText.length);
-        let prefix = 0;
-        while (prefix < minLen && oldText[prefix] === newText[prefix]) {
-            prefix++;
-        }
-
-        // find common suffix (avoid overlapping with prefix)
-        let suffix = 0;
-        while (
-            suffix < minLen - prefix &&
-            oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]
-        ) {
-            suffix++;
-        }
-
+        const { prefix, suffix } = minimalDiff(oldText, newText);
         const delLen = oldText.length - prefix - suffix;
         const insText = newText.substring(prefix, newText.length - suffix);
 

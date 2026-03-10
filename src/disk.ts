@@ -20,7 +20,8 @@ import {
     uriStartsWith,
     fileExists,
     tryCatch,
-    hash
+    hash,
+    minimalDiff
 } from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
@@ -267,7 +268,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             const path = relativePath(uri, this._folderUri);
 
                             if (!applied) {
-                                // applyEdit failed — replace VS Code buffer with ShareDB state
+                                // applyEdit failed -- replace VS Code buffer with ShareDB state
                                 const file = this._projectManager.files.get(path);
                                 if (file?.type === 'file') {
                                     const docData = file.doc.data as string;
@@ -290,7 +291,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 }
                             }
 
-                            // applyEdit succeeded but text differs — user typed during lock
+                            // applyEdit succeeded but text differs -- user typed during lock
                             this._projectManager.write(path, buffer.from(currentText));
                             this._sync(uri, buffer.from(currentText));
                             this._log.debug(`reconcile.remote ${uri}`);
@@ -458,22 +459,38 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                // skip if not dirty
                 if (!file.dirty) {
                     return;
                 }
 
-                // apply a space insert to mark as dirty with noop
-                const edit1 = new vscode.WorkspaceEdit();
-                edit1.insert(open.uri, new vscode.Position(0, 0), ' ');
                 this._locks.add(`${open.uri}`);
-
                 try {
-                    // remove space to mark as dirty with noop
-                    await vscode.workspace.applyEdit(edit1);
-                    const edit2 = new vscode.WorkspaceEdit();
-                    edit2.delete(open.uri, new vscode.Range(0, 0, 0, 1));
-                    await vscode.workspace.applyEdit(edit2);
+                    const current = open.getText();
+                    const expected = file.doc.data as string;
+
+                    if (current !== expected) {
+                        // buffer has stale content -- apply minimal diff
+                        const { prefix, suffix } = minimalDiff(current, expected);
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.replace(
+                            open.uri,
+                            new vscode.Range(open.positionAt(prefix), open.positionAt(current.length - suffix)),
+                            expected.substring(prefix, expected.length - suffix)
+                        );
+                        if (await vscode.workspace.applyEdit(edit)) {
+                            this._sync(open.uri, buffer.from(expected));
+                        } else {
+                            this._log.warn(`dirtify applyEdit failed for ${open.uri}`);
+                        }
+                    } else {
+                        // content matches -- noop to mark dirty
+                        const edit1 = new vscode.WorkspaceEdit();
+                        edit1.insert(open.uri, new vscode.Position(0, 0), ' ');
+                        await vscode.workspace.applyEdit(edit1);
+                        const edit2 = new vscode.WorkspaceEdit();
+                        edit2.delete(open.uri, new vscode.Range(0, 0, 0, 1));
+                        await vscode.workspace.applyEdit(edit2);
+                    }
                 } finally {
                     this._locks.delete(`${open.uri}`);
                 }
@@ -561,6 +578,23 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (!file || file.type !== 'file') {
                 return;
             }
+
+            // skip auto-save: only manual saves (Cmd+S) should trigger server
+            // save and mtime refresh. auto-save would clear the dirtify marker
+            // set on load for files dirty on the server.
+            if (e.reason !== vscode.TextDocumentSaveReason.Manual) {
+                return;
+            }
+
+            // cancel pending debounced write to prevent it firing after native save
+            this._debouncer.cancel(`${document.uri}`);
+
+            // write buffer to disk so mtime is fresh before native save,
+            // preventing "file on disk is newer" when initial sync or
+            // remote edits wrote to disk after VS Code last tracked mtime
+            const content = buffer.from(document.getText());
+            this._echo.set(`${document.uri}:change`, hash(content));
+            e.waitUntil(vscode.workspace.fs.writeFile(document.uri, content));
 
             // check if ignore updated (only if file has unsaved changes)
             if (file.dirty) {
