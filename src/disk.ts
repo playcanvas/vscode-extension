@@ -16,6 +16,7 @@ import {
     parsePath,
     sharedb2vscode,
     vscode2sharedb,
+    opdiff,
     relativePath,
     uriStartsWith,
     fileExists,
@@ -306,7 +307,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // mirror to disk (debounced)
             this._sync(uri, content);
 
-            this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri}`);
+            this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri} ${opdiff(op)}`);
         });
     }
 
@@ -567,7 +568,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // mark as dirty if any ops submitted (any unsaved changes)
             file.dirty ||= !!opOptions.length;
 
-            this._log.debug(`document.change ${document.uri.path}`);
+            this._log.debug(`document.change ${document.uri.path} ${opOptions.map(([o]) => opdiff(o)).join(' ')}`);
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;
