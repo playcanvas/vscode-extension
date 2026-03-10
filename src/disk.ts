@@ -268,7 +268,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             const path = relativePath(uri, this._folderUri);
 
                             if (!applied) {
-                                // applyEdit failed — replace VS Code buffer with ShareDB state
+                                // applyEdit failed -- replace VS Code buffer with ShareDB state
                                 const file = this._projectManager.files.get(path);
                                 if (file?.type === 'file') {
                                     const docData = file.doc.data as string;
@@ -291,7 +291,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 }
                             }
 
-                            // applyEdit succeeded but text differs — user typed during lock
+                            // applyEdit succeeded but text differs -- user typed during lock
                             this._projectManager.write(path, buffer.from(currentText));
                             this._sync(uri, buffer.from(currentText));
                             this._log.debug(`reconcile.remote ${uri}`);
@@ -477,8 +477,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             new vscode.Range(open.positionAt(prefix), open.positionAt(current.length - suffix)),
                             expected.substring(prefix, expected.length - suffix)
                         );
-                        await vscode.workspace.applyEdit(edit);
-                        this._sync(open.uri, buffer.from(expected));
+                        if (await vscode.workspace.applyEdit(edit)) {
+                            this._sync(open.uri, buffer.from(expected));
+                        }
                     } else {
                         // content matches -- noop to mark dirty
                         const edit1 = new vscode.WorkspaceEdit();

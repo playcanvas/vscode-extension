@@ -1257,6 +1257,42 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send redundant doc:save to server');
     });
 
+    test('file save (remote op reverts to S3 hash)', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const content = '// REVERT TEST';
+        const asset = await assetCreate({ name: 'revert_op_save.js', content });
+        assert.ok(asset, 'asset should be created');
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+
+        // remote op inserts text (makes dirty)
+        const insert = '// EXTRA\n';
+        doc.submitOp([0, insert], { source: 'remote' });
+        await new Promise((r) => setTimeout(r, 200));
+        assert.strictEqual(tdoc.isDirty, true, 'should be dirty after remote insert');
+
+        // remote op reverts the insert (content returns to S3 hash)
+        const saved = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidSaveTextDocument((d) => {
+                if (d.uri.toString() === uri.toString()) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+        doc.submitOp([0, { d: insert.length }], { source: 'remote' });
+
+        await assertResolves(saved, 'vscode.onDidSaveTextDocument');
+        assert.strictEqual(tdoc.isDirty, false, 'should not be dirty after revert to S3 hash');
+        assert.strictEqual(tdoc.getText(), content, 'content should match original');
+    });
+
     test('file delete (remote -> local)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
