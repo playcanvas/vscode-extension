@@ -1273,8 +1273,16 @@ suite('Extension Test Suite', () => {
 
         // remote op inserts text (makes dirty)
         const insert = '// EXTRA\n';
+        const changed = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString()) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
         doc.submitOp([0, insert], { source: 'remote' });
-        await new Promise((r) => setTimeout(r, 200));
+        await assertResolves(changed, 'vscode.onDidChangeTextDocument');
         assert.strictEqual(tdoc.isDirty, true, 'should be dirty after remote insert');
 
         // remote op reverts the insert (content returns to S3 hash)

@@ -479,6 +479,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         );
                         if (await vscode.workspace.applyEdit(edit)) {
                             this._sync(open.uri, buffer.from(expected));
+                        } else {
+                            this._log.warn(`dirtify applyEdit failed for ${open.uri}`);
                         }
                     } else {
                         // content matches -- noop to mark dirty
