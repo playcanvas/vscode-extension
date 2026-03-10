@@ -488,6 +488,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             expected.substring(prefix, expected.length - suffix)
                         );
                         await vscode.workspace.applyEdit(edit);
+                        this._sync(open.uri, buffer.from(expected));
                     } else {
                         // content matches — noop to mark dirty
                         const edit1 = new vscode.WorkspaceEdit();
