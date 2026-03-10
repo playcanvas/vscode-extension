@@ -1275,7 +1275,7 @@ suite('Extension Test Suite', () => {
         const insert = '// EXTRA\n';
         const changed = new Promise<void>((resolve) => {
             const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
-                if (e.document.uri.toString() === uri.toString()) {
+                if (e.document.uri.toString() === uri.toString() && e.document.getText().startsWith(insert)) {
                     disposable.dispose();
                     resolve();
                 }
