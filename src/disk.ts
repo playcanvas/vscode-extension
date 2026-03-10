@@ -20,7 +20,8 @@ import {
     uriStartsWith,
     fileExists,
     tryCatch,
-    hash
+    hash,
+    minimalDiff
 } from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
@@ -468,19 +469,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const expected = file.doc.data as string;
 
                     if (current !== expected) {
-                        // buffer has stale content — apply minimal diff
-                        const minLen = Math.min(current.length, expected.length);
-                        let prefix = 0;
-                        while (prefix < minLen && current[prefix] === expected[prefix]) {
-                            prefix++;
-                        }
-                        let suffix = 0;
-                        while (
-                            suffix < minLen - prefix &&
-                            current[current.length - 1 - suffix] === expected[expected.length - 1 - suffix]
-                        ) {
-                            suffix++;
-                        }
+                        // buffer has stale content -- apply minimal diff
+                        const { prefix, suffix } = minimalDiff(current, expected);
                         const edit = new vscode.WorkspaceEdit();
                         edit.replace(
                             open.uri,
@@ -490,7 +480,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         await vscode.workspace.applyEdit(edit);
                         this._sync(open.uri, buffer.from(expected));
                     } else {
-                        // content matches — noop to mark dirty
+                        // content matches -- noop to mark dirty
                         const edit1 = new vscode.WorkspaceEdit();
                         edit1.insert(open.uri, new vscode.Position(0, 0), ' ');
                         await vscode.workspace.applyEdit(edit1);

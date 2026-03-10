@@ -15,7 +15,7 @@ import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
-import { hash, parsePath, guard, withTimeout, tryCatch } from './utils/utils';
+import { hash, parsePath, guard, withTimeout, tryCatch, minimalDiff } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -1143,22 +1143,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
-        // find common prefix
-        const minLen = Math.min(oldText.length, newText.length);
-        let prefix = 0;
-        while (prefix < minLen && oldText[prefix] === newText[prefix]) {
-            prefix++;
-        }
-
-        // find common suffix (avoid overlapping with prefix)
-        let suffix = 0;
-        while (
-            suffix < minLen - prefix &&
-            oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]
-        ) {
-            suffix++;
-        }
-
+        const { prefix, suffix } = minimalDiff(oldText, newText);
         const delLen = oldText.length - prefix - suffix;
         const insText = newText.substring(prefix, newText.length - suffix);
 

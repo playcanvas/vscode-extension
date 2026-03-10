@@ -1243,6 +1243,7 @@ suite('Extension Test Suite', () => {
         });
 
         // simulate doc:save:success without hash change (tests the new code path)
+        sharedb.sendRaw.resetHistory();
         sharedb.emit('doc:save', 'success', asset.uniqueId);
 
         // wait for _save() to call document.save()
@@ -1250,6 +1251,10 @@ suite('Extension Test Suite', () => {
 
         // verify dirty indicator is cleared
         assert.strictEqual(tdoc.isDirty, false, 'document should not be dirty after doc:save:success');
+
+        // verify no redundant server save was triggered
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        assert.strictEqual(saveCalls.length, 0, 'should not send redundant doc:save to server');
     });
 
     test('file delete (remote -> local)', async () => {

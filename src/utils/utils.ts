@@ -153,6 +153,19 @@ export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[]) =
     return edits;
 };
 
+export const minimalDiff = (a: string, b: string) => {
+    const minLen = Math.min(a.length, b.length);
+    let prefix = 0;
+    while (prefix < minLen && a[prefix] === b[prefix]) {
+        prefix++;
+    }
+    let suffix = 0;
+    while (suffix < minLen - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) {
+        suffix++;
+    }
+    return { prefix, suffix };
+};
+
 export const projectToName = (project: Project, encode = true) => {
     // encode to escape symbols except spaces
     const name = encode ? encodeURIComponent(project.name).replace(/%20/g, ' ') : project.name;
