@@ -458,22 +458,45 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                // skip if not dirty
                 if (!file.dirty) {
                     return;
                 }
 
-                // apply a space insert to mark as dirty with noop
-                const edit1 = new vscode.WorkspaceEdit();
-                edit1.insert(open.uri, new vscode.Position(0, 0), ' ');
                 this._locks.add(`${open.uri}`);
-
                 try {
-                    // remove space to mark as dirty with noop
-                    await vscode.workspace.applyEdit(edit1);
-                    const edit2 = new vscode.WorkspaceEdit();
-                    edit2.delete(open.uri, new vscode.Range(0, 0, 0, 1));
-                    await vscode.workspace.applyEdit(edit2);
+                    const current = open.getText();
+                    const expected = file.doc.data as string;
+
+                    if (current !== expected) {
+                        // buffer has stale content — apply minimal diff
+                        const minLen = Math.min(current.length, expected.length);
+                        let prefix = 0;
+                        while (prefix < minLen && current[prefix] === expected[prefix]) {
+                            prefix++;
+                        }
+                        let suffix = 0;
+                        while (
+                            suffix < minLen - prefix &&
+                            current[current.length - 1 - suffix] === expected[expected.length - 1 - suffix]
+                        ) {
+                            suffix++;
+                        }
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.replace(
+                            open.uri,
+                            new vscode.Range(open.positionAt(prefix), open.positionAt(current.length - suffix)),
+                            expected.substring(prefix, expected.length - suffix)
+                        );
+                        await vscode.workspace.applyEdit(edit);
+                    } else {
+                        // content matches — noop to mark dirty
+                        const edit1 = new vscode.WorkspaceEdit();
+                        edit1.insert(open.uri, new vscode.Position(0, 0), ' ');
+                        await vscode.workspace.applyEdit(edit1);
+                        const edit2 = new vscode.WorkspaceEdit();
+                        edit2.delete(open.uri, new vscode.Range(0, 0, 0, 1));
+                        await vscode.workspace.applyEdit(edit2);
+                    }
                 } finally {
                     this._locks.delete(`${open.uri}`);
                 }
@@ -564,6 +587,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // cancel pending debounced write to prevent it firing after native save
             this._debouncer.cancel(`${document.uri}`);
+
+            // skip auto-save: only manual saves (Cmd+S) should trigger server
+            // save and mtime refresh. auto-save would clear the dirtify marker
+            // set on load for files dirty on the server.
+            if (e.reason !== vscode.TextDocumentSaveReason.Manual) {
+                return;
+            }
+
+            // write buffer to disk so mtime is fresh before native save,
+            // preventing "file on disk is newer" when initial sync or
+            // remote edits wrote to disk after VS Code last tracked mtime
+            const content = buffer.from(document.getText());
+            this._echo.set(`${document.uri}:change`, hash(content));
+            e.waitUntil(vscode.workspace.fs.writeFile(document.uri, content));
 
             // check if ignore updated (only if file has unsaved changes)
             if (file.dirty) {
