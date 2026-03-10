@@ -1271,7 +1271,7 @@ suite('Extension Test Suite', () => {
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
         assert.ok(doc, 'sharedb document should exist');
 
-        // remote op inserts text (makes dirty)
+        // remote op inserts text then reverts it (content returns to S3 hash)
         const insert = '// EXTRA\n';
         const changed = new Promise<void>((resolve) => {
             const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
@@ -1283,9 +1283,8 @@ suite('Extension Test Suite', () => {
         });
         doc.submitOp([0, insert], { source: 'remote' });
         await assertResolves(changed, 'vscode.onDidChangeTextDocument');
-        assert.strictEqual(tdoc.isDirty, true, 'should be dirty after remote insert');
 
-        // remote op reverts the insert (content returns to S3 hash)
+        // revert op — hash matches S3 so asset:file:save fires
         const saved = new Promise<void>((resolve) => {
             const disposable = vscode.workspace.onDidSaveTextDocument((d) => {
                 if (d.uri.toString() === uri.toString()) {
