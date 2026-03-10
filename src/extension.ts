@@ -690,6 +690,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         const disableAutosave = () => {
             const f = vscode.workspace.getConfiguration('files');
             if (f.get('autoSave') !== 'off') {
+                log.debug('disabling files.autoSave for workspace');
                 f.update('autoSave', 'off', vscode.ConfigurationTarget.Workspace);
             }
         };
