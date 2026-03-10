@@ -586,15 +586,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // cancel pending debounced write to prevent it firing after native save
-            this._debouncer.cancel(`${document.uri}`);
-
             // skip auto-save: only manual saves (Cmd+S) should trigger server
             // save and mtime refresh. auto-save would clear the dirtify marker
             // set on load for files dirty on the server.
             if (e.reason !== vscode.TextDocumentSaveReason.Manual) {
                 return;
             }
+
+            // cancel pending debounced write to prevent it firing after native save
+            this._debouncer.cancel(`${document.uri}`);
 
             // write buffer to disk so mtime is fresh before native save,
             // preventing "file on disk is newer" when initial sync or
