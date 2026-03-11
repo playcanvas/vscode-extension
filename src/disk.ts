@@ -748,8 +748,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         if (op.hash !== this._echo.get(`${op.uri}:change`)) {
                                             return;
                                         }
-                                        // consume echo to prevent accumulation
-                                        this._echo.delete(`${op.uri}:change`);
                                         // skip if hash is the same
                                         if (op.hash === hash(content)) {
                                             return;
