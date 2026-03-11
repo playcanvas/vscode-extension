@@ -34,8 +34,8 @@ The PlayCanvas VS Code Extension is a realtime editing environment for text-base
 - List view for currently online collaborators per file
 - Ignore file support (Beta)
     - Create a file in the root of your project called `.pcignore`
-    - Syntax follows for `.gitignore` using file blobs (e.g. `*.ts`)
-    - Reload project to re-parse ignore file
+    - Syntax follows `.gitignore` using file globs (e.g. `*.ts`)
+    - Rules re-parse automatically on change; reload to sync files to disk
 
 ## Local Development
 
