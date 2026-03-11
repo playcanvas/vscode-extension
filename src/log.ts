@@ -11,6 +11,10 @@ class Log {
         this._source = source;
     }
 
+    trace(...args: unknown[]) {
+        Log.channel.trace(`[${this._source}]`, ...args);
+    }
+
     debug(...args: unknown[]) {
         Log.channel.debug(`[${this._source}]`, ...args);
     }

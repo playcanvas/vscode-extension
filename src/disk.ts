@@ -739,6 +739,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     // skip if file is in memory and content is the same
                                     const file = projectManager.files.get(path);
                                     if (file && file.type === 'file' && file.doc.data === buffer.toString(content)) {
+                                        this._log.trace(`echo.skip.equal ${op.uri}`);
                                         return;
                                     }
 
@@ -746,17 +747,18 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     if (op.hash !== undefined) {
                                         // skip if newer change detected
                                         if (op.hash !== this._echo.get(`${op.uri}:change`)) {
+                                            this._log.trace(`echo.skip.newer ${op.uri}`);
                                             return;
                                         }
-                                        // consume echo to prevent accumulation
-                                        this._echo.delete(`${op.uri}:change`);
                                         // skip if hash is the same
                                         if (op.hash === hash(content)) {
+                                            this._log.trace(`echo.skip.match ${op.uri}`);
                                             return;
                                         }
                                         // skip if content is empty
                                         // FIXME: figure out why content can be empty (maybe from readFile not returning anything)
                                         if (content.length === 0) {
+                                            this._log.trace(`echo.skip.empty ${op.uri}`);
                                             return;
                                         }
                                     }
@@ -803,7 +805,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // check local echo
             if (this._echo.has(key)) {
-                this._echo.delete(key);
                 return;
             }
 
@@ -860,7 +861,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // check local echo
             if (this._echo.has(key)) {
-                this._echo.delete(key);
                 return;
             }
 
