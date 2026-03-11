@@ -801,7 +801,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // check local echo
             if (this._echo.has(key)) {
-                this._echo.delete(key);
                 return;
             }
 
@@ -858,7 +857,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // check local echo
             if (this._echo.has(key)) {
-                this._echo.delete(key);
                 return;
             }
 
