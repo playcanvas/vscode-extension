@@ -53,6 +53,9 @@ const openFolderStub = sandbox
 // stub warning message for collision dialogs
 const warningMessageStub = sandbox.stub(vscode.window, 'showWarningMessage').resolves(undefined);
 
+// stub info message for ignore update prompts
+const infoMessageStub = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
 // spy vscode methods
 const openTextDocumentSpy = sandbox.spy(vscode.workspace, 'openTextDocument');
 
@@ -1560,6 +1563,54 @@ suite('Extension Test Suite', () => {
         // check ignored file and folder do not exist as assets
         const ignoredFileAsset = Array.from(assets.values()).find((a) => a.name === 'ignored_file.js');
         assert.strictEqual(ignoredFileAsset, undefined, 'ignored file should not exist as asset');
+    });
+
+    test('.pcignore dynamic re-parse (remote update blocks new pattern)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        infoMessageStub.resetHistory();
+
+        // find .pcignore asset
+        const asset = Array.from(assets.values()).find((a) => a.name === '.pcignore');
+        assert.ok(asset, '.pcignore asset should exist');
+
+        // get sharedb document subscription
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, '.pcignore document subscription should exist');
+
+        // append '*.txt\n' after current content
+        const offset = (doc.data as string).length;
+        const watcher = watchFilePromise(folderUri, '.pcignore', 'change');
+        doc.submitOp([offset, '*.txt\n'], { source: 'remote' });
+        await assertResolves(watcher, 'watcher.change');
+
+        // assert reload prompt was shown
+        assert.ok(infoMessageStub.calledOnce, 'info message should be shown once');
+        const msg = infoMessageStub.getCall(0).args[0] as string;
+        assert.ok(msg.includes('Ignore rules updated'), 'message should contain "Ignore rules updated"');
+
+        // write a .txt file and verify it's ignored by the re-parsed rules
+        const txtWatcher = watchFilePromise(folderUri, 'test_ignored.txt', 'create');
+        const txtUri = vscode.Uri.joinPath(folderUri, 'test_ignored.txt');
+        await assertResolves(vscode.workspace.fs.writeFile(txtUri, buffer.from('// IGNORED TXT')), 'fs.writeFile');
+        await assertResolves(txtWatcher, 'watcher.create');
+
+        // check no asset was created for the txt file
+        const txtAsset = Array.from(assets.values()).find((a) => a.name === 'test_ignored.txt');
+        assert.strictEqual(txtAsset, undefined, 'txt file should not exist as asset');
+    });
+
+    test('.pcignore path guard (no prompt on non-pcignore file)', async () => {
+        infoMessageStub.resetHistory();
+
+        // non-pcignore file triggers asset:file:create -> _checkIgnoreUpdated path guard
+        const asset = await assetCreate({ name: 'dedup_test.js', content: '// test' });
+        assert.ok(asset, 'asset should be created');
+
+        // no prompt because URI is not .pcignore
+        assert.ok(infoMessageStub.notCalled, 'info message should not be shown for non-pcignore file');
     });
 
     test('file path collision (remote -> local)', async () => {
