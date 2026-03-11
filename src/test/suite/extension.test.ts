@@ -1580,9 +1580,10 @@ suite('Extension Test Suite', () => {
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
         assert.ok(doc, '.pcignore document subscription should exist');
 
-        // current content is 'ignored*.js\n' (12 chars), append '*.txt\n'
+        // append '*.txt\n' after current content
+        const offset = (doc.data as string).length;
         const watcher = watchFilePromise(folderUri, '.pcignore', 'change');
-        doc.submitOp([12, '*.txt\n'], { source: 'remote' });
+        doc.submitOp([offset, '*.txt\n'], { source: 'remote' });
         await assertResolves(watcher, 'watcher.change');
 
         // assert reload prompt was shown
@@ -1601,14 +1602,14 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(txtAsset, undefined, 'txt file should not exist as asset');
     });
 
-    test('.pcignore hash dedup (no prompt on non-pcignore file)', async () => {
+    test('.pcignore path guard (no prompt on non-pcignore file)', async () => {
         infoMessageStub.resetHistory();
 
-        // create a non-pcignore file — triggers asset:file:create → _checkIgnoreUpdated
+        // non-pcignore file triggers asset:file:create -> _checkIgnoreUpdated path guard
         const asset = await assetCreate({ name: 'dedup_test.js', content: '// test' });
         assert.ok(asset, 'asset should be created');
 
-        // _checkIgnoreUpdated bails because URI is not .pcignore
+        // no prompt because URI is not .pcignore
         assert.ok(infoMessageStub.notCalled, 'info message should not be shown for non-pcignore file');
     });
 

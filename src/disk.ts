@@ -111,7 +111,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._events = events;
     }
 
-    private _checkIgnoreUpdated(uri: vscode.Uri) {
+    private _checkIgnoreUpdated(uri: vscode.Uri, deleted = false) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
@@ -122,14 +122,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         }
 
         const file = pm.files.get(Disk.IGNORE_FILE);
-        const text = file?.type === 'file' ? (file.doc.data as string) : '';
+        const text = deleted ? '' : file?.type === 'file' ? (file.doc.data as string) : '';
         const h = hash(buffer.from(text));
         if (h === this._ignoreHash) {
             return;
         }
 
         // re-parse immediately so future ops respect new rules
-        this._parseIgnoreText(text, folderUri);
+        this._parseIgnoreText(text, folderUri, h);
 
         // prompt reload for disk sync (safe sequential writes + progress UI via link())
         vscode.window
@@ -141,8 +141,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             });
     }
 
-    private _parseIgnoreText(text: string, folderUri: vscode.Uri) {
-        this._ignoreHash = hash(buffer.from(text));
+    private _parseIgnoreText(text: string, folderUri: vscode.Uri, h = hash(buffer.from(text))) {
+        this._ignoreHash = h;
 
         if (!text) {
             this._ignoring = (_uri: vscode.Uri) => false;
@@ -438,7 +438,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
         const assetFileDelete = this._events.on('asset:file:delete', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
-            this._checkIgnoreUpdated(uri);
+            this._checkIgnoreUpdated(uri, true);
             await this._delete(uri);
         });
         const assetFileRename = this._events.on('asset:file:rename', async (oldPath, newPath) => {
@@ -975,6 +975,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             await this._writeMutex.clear();
             this._debouncer.clear();
             this._opened.clear();
+            this._ignoring = (_uri: vscode.Uri) => false;
+            this._ignoreHash = '';
         });
 
         this._linked = true;
