@@ -20,6 +20,9 @@ import { EventEmitter } from './utils/event-emitter';
 import { computed, effect } from './utils/signal';
 import { projectToName, retry, tryCatch, uriStartsWith } from './utils/utils';
 
+const HEARTBEAT_MS = 5 * 60 * 1000;
+const PING_SAMPLE_MS = 60_000;
+
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -72,9 +75,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const metrics = new Metrics(accessToken);
     context.subscriptions.push(metrics.disposable);
     metrics.increment('session.start');
+    const heartbeat = setInterval(() => metrics.increment('session.heartbeat'), HEARTBEAT_MS);
+    context.subscriptions.push(new vscode.Disposable(() => clearInterval(heartbeat)));
 
     // error handler
-    const handleError = async (error?: Error) => {
+    const handleError = async (error?: Error, source?: string) => {
         if (!error) {
             return;
         }
@@ -85,7 +90,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             log.error(error.stack);
         }
 
-        metrics.logError(error);
+        metrics.logError(error, source ? { source } : undefined);
 
         // handle auth errors
         if (/access token/.test(error.message)) {
@@ -119,7 +124,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = sharedb.error.get();
         if (err) {
-            void handleError(err).catch((e) => log.error(e.message));
+            void handleError(err, 'sharedb').catch((e) => log.error(e.message));
         }
     });
 
@@ -137,7 +142,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = relay.error.get();
         if (err) {
-            void handleError(err).catch((e) => log.error(e.message));
+            void handleError(err, 'relay').catch((e) => log.error(e.message));
         }
     });
 
@@ -167,7 +172,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = disk.error.get();
         if (err) {
-            void handleError(err).catch((e) => log.error(e.message));
+            void handleError(err, 'disk').catch((e) => log.error(e.message));
         }
     });
 
@@ -216,7 +221,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = uriHandler.error.get();
         if (err) {
-            void handleError(err).catch((e) => log.error(e.message));
+            void handleError(err, 'uri-handler').catch((e) => log.error(e.message));
         }
     });
     context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
@@ -229,7 +234,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = collabProvider.error.get();
         if (err) {
-            void handleError(err).catch((e) => log.error(e.message));
+            void handleError(err, 'collab-provider').catch((e) => log.error(e.message));
         }
     });
     context.subscriptions.push(vscode.window.registerTreeDataProvider('collab-view', collabProvider));
@@ -248,10 +253,30 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const connected = computed(() => {
         return sharedb.connected.get() && messenger.connected.get() && relay.connected.get();
     });
-    effect(() => {
-        const enabled = connected.get();
-        metrics.increment('connection', { status: enabled ? 'connected' : 'disconnected' });
-    });
+    const services = [
+        { name: 'sharedb', sig: sharedb.connected },
+        { name: 'messenger', sig: messenger.connected },
+        { name: 'relay', sig: relay.connected }
+    ] as const;
+    for (const { name, sig } of services) {
+        let prev: boolean | null = null;
+        let wasConnected = false;
+        effect(() => {
+            const val = sig.get();
+            if (prev !== null) {
+                if (prev && !val) {
+                    metrics.increment('connection.down', { service: name });
+                }
+                if (wasConnected && !prev && val) {
+                    metrics.increment('reconnect', { service: name });
+                }
+            }
+            if (val) {
+                wasConnected = true;
+            }
+            prev = val;
+        });
+    }
     effect(() => {
         const enabled = connected.get();
         connectionStatusItem.color = enabled ? connectionStatusColors.connected : connectionStatusColors.disconnected;
@@ -265,6 +290,17 @@ export const activate = async (context: vscode.ExtensionContext) => {
             connectionStatusItem.text = `$(primitive-dot) Disconnected`;
         }
     });
+    const pingSampler = setInterval(() => {
+        const m = messenger.ping.get();
+        const r = relay.ping.get();
+        if (m > 0) {
+            metrics.addTimer('ws.ping', m, { service: 'messenger' });
+        }
+        if (r > 0) {
+            metrics.addTimer('ws.ping', r, { service: 'relay' });
+        }
+    }, PING_SAMPLE_MS);
+    context.subscriptions.push(new vscode.Disposable(() => clearInterval(pingSampler)));
 
     // collision status bar item
     const collisionStatusColors = {
@@ -649,7 +685,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         effect(() => {
             const err = projectManager.error.get();
             if (err) {
-                void handleError(err).catch((e) => log.error(e.message));
+                void handleError(err, 'project-manager').catch((e) => log.error(e.message));
             }
         });
         effect(() => {
@@ -662,10 +698,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
         cache.set(project.id, { branchId, projectManager });
 
         setSentryProject(project.id, branchId);
+        const t0 = Date.now();
         await projectManager.link({
             projectId: project.id,
             branchId: branchId
         });
+        metrics.addTimer('project.load', Date.now() - t0);
+        metrics.addHistogram('project.assets', projectManager.files.size - 1);
         context.subscriptions.push(
             new vscode.Disposable(() => {
                 projectManager.unlink();
