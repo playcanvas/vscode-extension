@@ -419,9 +419,21 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const path = folderUri ? relativePath(uri, folderUri) : undefined;
                     const file = path ? this._projectManager?.files.get(path) : undefined;
                     if (file?.type === 'file') {
+                        // skip if user has new unsaved changes since save was confirmed
+                        if (file.dirty) {
+                            this._log.debug(`save.remote.skip ${uri} (dirty)`);
+                            return;
+                        }
+
                         const content = buffer.from(file.doc.data);
                         this._echo.set(`${uri}:change`, hash(content));
                         await vscode.workspace.fs.writeFile(uri, content);
+
+                        // recheck: user may have typed during writeFile await
+                        if (file.dirty) {
+                            this._log.debug(`save.remote.skip ${uri} (dirty after write)`);
+                            return;
+                        }
                     }
 
                     try {
