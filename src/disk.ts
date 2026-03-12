@@ -93,6 +93,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _locks: Set<string> = new Set<string>();
 
+    private _syncing = new Set<string>();
+
     private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
 
     private _writeMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('writeMutex error', err));
@@ -169,18 +171,28 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._log.debug(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
     }
 
-    private _sync(uri: vscode.Uri, content: Uint8Array) {
+    private _sync(uri: vscode.Uri, content: Uint8Array, remote = false) {
+        const key = `${uri}`;
+        if (remote) {
+            this._syncing.add(key);
+        }
         this._debouncer
-            .debounce(`${uri}`, async () => {
+            .debounce(key, async () => {
                 // note: set echo hash at write time so it matches the actual
                 // file content, not a future debounced write
                 this._echo.set(`${uri}:change`, hash(content));
                 await vscode.workspace.fs.writeFile(uri, content);
+                if (remote) {
+                    setTimeout(() => this._syncing.delete(key), 200);
+                }
             })
             .catch((err) => {
                 // ignore cancellation from debounce supersede/cancel/clear
                 if (/debounce/.test(err.message)) {
                     return;
+                }
+                if (remote) {
+                    this._syncing.delete(key);
                 }
                 this._log.error(`failed to sync ${uri}: ${err.message}`);
             });
@@ -315,8 +327,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 }
             }
 
-            // mirror to disk (debounced)
-            this._sync(uri, content);
+            // mirror to disk (debounced) — mark as remote so watcher skips the echo
+            this._sync(uri, content, true);
 
             this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri} ${opdiff(op)}`);
         });
@@ -848,6 +860,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            // skip watcher events from remote-originated disk writes
+            if (this._syncing.has(`${uri}`)) {
+                return;
+            }
+
             // check if file is in memory and of type file
             const path = relativePath(uri, folderUri);
             const file = projectManager.files.get(path);
@@ -971,6 +988,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             unwatchDisk();
 
             this._echo.clear();
+            this._syncing.clear();
             await this._readMutex.clear();
             await this._writeMutex.clear();
             this._debouncer.clear();
