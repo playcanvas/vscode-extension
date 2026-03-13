@@ -603,6 +603,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // mark as dirty if any ops submitted (any unsaved changes)
             file.dirty ||= !!opOptions.length;
 
+            // external disk change — force dirty indicator and auto-save
+            if (!document.isDirty && opOptions.length) {
+                dirtify(document);
+                projectManager.save(path);
+            }
+
             this._log.debug(`document.change ${document.uri.path} ${opOptions.map(([o]) => opdiff(o)).join(' ')}`);
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
