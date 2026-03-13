@@ -30,6 +30,16 @@
         "watch:web": "rollup -c -w"
     },
     "contributes": {
+        "languages": [
+            {
+                "id": "pcignore",
+                "filenames": [".pcignore"],
+                "icon": {
+                    "light": "./resources/logo.svg",
+                    "dark": "./resources/logo.svg"
+                }
+            }
+        ],
         "configuration": {
             "type": "object",
             "title": "PlayCanvas",
