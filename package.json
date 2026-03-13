@@ -33,7 +33,9 @@
         "languages": [
             {
                 "id": "pcignore",
-                "filenames": [".pcignore"],
+                "filenames": [
+                    ".pcignore"
+                ],
                 "icon": {
                     "light": "./resources/logo.svg",
                     "dark": "./resources/logo.svg"
