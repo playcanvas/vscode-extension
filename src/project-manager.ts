@@ -126,7 +126,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         while (parent) {
             const parentUniqueId = this._idUniqueId.getL(parent);
             if (!parentUniqueId) {
-                throw this.error.set(() => new Error(`missing parent asset id mapping for ${parent}`));
+                throw this.error.set(() => new Error(`missing id mapping for parent asset ${parent}`));
             }
             const parentAsset = this._assets.get(parentUniqueId);
             if (!parentAsset) {
