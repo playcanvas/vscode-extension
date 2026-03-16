@@ -486,55 +486,61 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         };
     }
 
-    private _watchDocument(folderUri: vscode.Uri, projectManager: ProjectManager) {
-        const dirtify = (open: vscode.TextDocument) => {
-            return this._writeMutex.atomic([`${open.uri}`], async () => {
-                const path = relativePath(open.uri, folderUri);
-                const file = projectManager.files.get(path);
-                if (!file || file.type !== 'file') {
-                    return;
-                }
+    private _dirtify(doc: vscode.TextDocument) {
+        const folderUri = this._folderUri;
+        const pm = this._projectManager;
+        if (!folderUri || !pm) {
+            return;
+        }
 
-                if (!file.dirty) {
-                    return;
-                }
+        return this._writeMutex.atomic([`${doc.uri}`], async () => {
+            const path = relativePath(doc.uri, folderUri);
+            const file = pm.files.get(path);
+            if (!file || file.type !== 'file') {
+                return;
+            }
 
-                this._locks.add(`${open.uri}`);
-                try {
-                    const current = open.getText();
-                    const expected = file.doc.data as string;
+            if (!file.dirty) {
+                return;
+            }
 
-                    if (current !== expected) {
-                        // buffer has stale content -- apply minimal diff
-                        const { prefix, suffix } = minimalDiff(current, expected);
-                        const edit = new vscode.WorkspaceEdit();
-                        edit.replace(
-                            open.uri,
-                            new vscode.Range(open.positionAt(prefix), open.positionAt(current.length - suffix)),
-                            expected.substring(prefix, expected.length - suffix)
-                        );
-                        if (await vscode.workspace.applyEdit(edit)) {
-                            this._sync(open.uri, buffer.from(expected));
-                        } else {
-                            this._log.warn(`dirtify applyEdit failed for ${open.uri}`);
-                        }
+            this._locks.add(`${doc.uri}`);
+            try {
+                const current = doc.getText();
+                const expected = file.doc.data as string;
+
+                if (current !== expected) {
+                    // buffer has stale content -- apply minimal diff
+                    const { prefix, suffix } = minimalDiff(current, expected);
+                    const edit = new vscode.WorkspaceEdit();
+                    edit.replace(
+                        doc.uri,
+                        new vscode.Range(doc.positionAt(prefix), doc.positionAt(current.length - suffix)),
+                        expected.substring(prefix, expected.length - suffix)
+                    );
+                    if (await vscode.workspace.applyEdit(edit)) {
+                        this._sync(doc.uri, buffer.from(expected));
                     } else {
-                        // content matches -- noop to mark dirty
-                        const edit1 = new vscode.WorkspaceEdit();
-                        edit1.insert(open.uri, new vscode.Position(0, 0), ' ');
-                        await vscode.workspace.applyEdit(edit1);
-                        const edit2 = new vscode.WorkspaceEdit();
-                        edit2.delete(open.uri, new vscode.Range(0, 0, 0, 1));
-                        await vscode.workspace.applyEdit(edit2);
+                        this._log.warn(`dirtify applyEdit failed for ${doc.uri}`);
                     }
-                } finally {
-                    this._locks.delete(`${open.uri}`);
+                } else {
+                    // content matches -- noop to mark dirty
+                    const edit1 = new vscode.WorkspaceEdit();
+                    edit1.insert(doc.uri, new vscode.Position(0, 0), ' ');
+                    await vscode.workspace.applyEdit(edit1);
+                    const edit2 = new vscode.WorkspaceEdit();
+                    edit2.delete(doc.uri, new vscode.Range(0, 0, 0, 1));
+                    await vscode.workspace.applyEdit(edit2);
                 }
+            } finally {
+                this._locks.delete(`${doc.uri}`);
+            }
 
-                this._log.debug(`dirtify ${open.uri}`);
-            });
-        };
+            this._log.debug(`dirtify ${doc.uri}`);
+        });
+    }
 
+    private _watchDocument(folderUri: vscode.Uri, projectManager: ProjectManager) {
         for (const open of vscode.workspace.textDocuments) {
             if (!uriStartsWith(open.uri, folderUri)) {
                 continue;
@@ -542,7 +548,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(open.uri, folderUri);
             this._opened.add(open.uri.path);
             this._events.emit('asset:doc:open', path);
-            dirtify(open);
+            this._dirtify(open);
         }
         const onopen = vscode.workspace.onDidOpenTextDocument((document) => {
             if (!uriStartsWith(document.uri, folderUri)) {
@@ -551,7 +557,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(document.uri, folderUri);
             this._opened.add(document.uri.path);
             this._events.emit('asset:doc:open', path);
-            dirtify(document);
+            this._dirtify(document);
         });
         const onclose = vscode.workspace.onDidCloseTextDocument((document) => {
             if (!uriStartsWith(document.uri, folderUri)) {
@@ -602,6 +608,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // mark as dirty if any ops submitted (any unsaved changes)
             file.dirty ||= !!opOptions.length;
+
+            // external disk change — force dirty indicator
+            if (!document.isDirty && opOptions.length) {
+                this._dirtify(document);
+            }
 
             this._log.debug(`document.change ${document.uri.path} ${opOptions.map(([o]) => opdiff(o)).join(' ')}`);
         });
@@ -744,6 +755,26 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         return;
                                     }
 
+                                    // atomic write pattern: external tools write temp+rename,
+                                    // producing create events for existing files — treat as change
+                                    const existing = projectManager.files.get(path);
+                                    if (existing && existing.type === 'file' && type === 'file' && content) {
+                                        if (existing.doc.data === buffer.toString(content)) {
+                                            return;
+                                        }
+                                        this._log.debug(`change.local (atomic) ${op.uri}`);
+                                        projectManager.write(path, content);
+                                        if (this._opened.has(op.uri.path)) {
+                                            const doc = vscode.workspace.textDocuments.find(
+                                                (d) => d.uri.path === op.uri.path
+                                            );
+                                            if (doc) {
+                                                this._dirtify(doc);
+                                            }
+                                        }
+                                        return;
+                                    }
+
                                     // ensure ancestor folders exist before creating
                                     // handles race condition where child events arrive before parent events
                                     const segments = path.split('/');
@@ -800,7 +831,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                                     this._log.debug(`change.local ${op.uri}`);
                                     projectManager.write(path, content);
-                                    projectManager.save(path);
+
+                                    // dirtify if file was opened while change was deferred
+                                    if (this._opened.has(op.uri.path)) {
+                                        const doc = vscode.workspace.textDocuments.find(
+                                            (d) => d.uri.path === op.uri.path
+                                        );
+                                        if (doc) {
+                                            this._dirtify(doc);
+                                        }
+                                    }
+
                                     return Promise.resolve();
                                 });
                                 break;
@@ -913,7 +954,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(uri, folderUri);
             const file = projectManager.files.get(path);
             if (!file) {
-                this._log.warn(`skipping delete of ${path} as it is not in memory`);
+                this._log.debug(`skipping delete of ${path} (not in memory)`);
                 return;
             }
 
