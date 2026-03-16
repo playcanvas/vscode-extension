@@ -86,10 +86,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
 
         // log to output channel (also reports to sentry)
-        log.error(error.message);
-        if (error.stack) {
-            log.error(error.stack);
-        }
+        log.error(error);
 
         metrics.logError(error, source ? { source } : undefined);
 
