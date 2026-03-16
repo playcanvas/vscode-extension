@@ -1157,7 +1157,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // mark as dirty (ops submitted that aren't saved yet)
+        const prev = file.dirty;
         file.dirty = true;
+        if (!prev) {
+            this._events.emit('asset:file:dirty', path, true);
+        }
 
         this._log.debug(`wrote file ${path}`);
     }

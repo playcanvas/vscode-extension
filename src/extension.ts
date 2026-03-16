@@ -13,6 +13,7 @@ import { Metrics } from './metrics';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
+import { DirtyDecorationProvider } from './providers/dirty-decoration-provider';
 import { closeSentry, setSentryProject, setSentryUser } from './sentry';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
@@ -185,6 +186,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await projectManager.flushPending();
             const collabState = await collabProvider.unlink();
             const uriState = await uriHandler.unlink();
+            const dirtyState = await dirtyProvider.unlink();
             const diskState = await disk.unlink();
             const projectState = await projectManager.unlink();
             projectState.branchId = branchId ?? projectState.branchId;
@@ -201,6 +203,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             });
 
             await disk.link(diskState);
+            await dirtyProvider.link(dirtyState);
             await collabProvider.link(collabState);
             await uriHandler.link(uriState);
         })();
@@ -238,6 +241,16 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     });
     context.subscriptions.push(vscode.window.registerTreeDataProvider('collab-view', collabProvider));
+
+    // dirty decoration provider
+    const dirtyProvider = new DirtyDecorationProvider({ events });
+    effect(() => {
+        const err = dirtyProvider.error.get();
+        if (err) {
+            void handleError(err, 'dirty-decoration-provider').catch((e) => log.error(e.message));
+        }
+    });
+    context.subscriptions.push(vscode.window.registerFileDecorationProvider(dirtyProvider));
 
     // connection status bar item
     const connectionStatusColors = {
@@ -721,6 +734,14 @@ export const activate = async (context: vscode.ExtensionContext) => {
         context.subscriptions.push(
             new vscode.Disposable(() => {
                 disk.unlink();
+            })
+        );
+
+        // link dirty decoration provider
+        await dirtyProvider.link({ folderUri, projectManager });
+        context.subscriptions.push(
+            new vscode.Disposable(() => {
+                dirtyProvider.unlink();
             })
         );
 
