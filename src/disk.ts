@@ -607,7 +607,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._sync(document.uri, buffer.from(text));
 
             // mark as dirty if any ops submitted (any unsaved changes)
+            const prev = file.dirty;
             file.dirty ||= !!opOptions.length;
+            if (!prev && file.dirty) {
+                this._events.emit('asset:file:dirty', path, true);
+            }
 
             // external disk change — force dirty indicator
             if (!document.isDirty && opOptions.length) {

@@ -81,6 +81,18 @@
                 "enableForWorkspaceTypeScriptVersions": true
             }
         ],
+        "colors": [
+            {
+                "id": "playcanvas.dirtyForeground",
+                "description": "Color for unsaved files in the explorer",
+                "defaults": {
+                    "dark": "#f4a62a",
+                    "light": "#c88520",
+                    "highContrast": "#f4a62a",
+                    "highContrastLight": "#c88520"
+                }
+            }
+        ],
         "views": {
             "explorer": [
                 {

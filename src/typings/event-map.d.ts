@@ -10,6 +10,7 @@ export type EventMap = {
     'asset:file:delete': [string];
     'asset:file:rename': [string, string];
     'asset:file:save': [string];
+    'asset:file:dirty': [string, boolean];
 
     'asset:doc:open': [string];
     'asset:doc:close': [string];
