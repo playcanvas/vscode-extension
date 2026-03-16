@@ -1041,6 +1041,163 @@ suite('Extension Test Suite', () => {
         await assertResolves(updated, 'sharedb.op');
     });
 
+    test('file changes (atomic write closed local -> remote)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create asset
+        const asset = await assetCreate({ name: 'atomic_write_closed.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset, 'asset should be created');
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document, 'document should exist');
+
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // snapshot assetCreate call count after setup
+        const createsBefore = rest.assetCreate.callCount;
+
+        // create update promise — minimal diff: "SAMPLE CONTENT" -> "ATOMIC CONTENT"
+        const newContent = '// ATOMIC CONTENT';
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
+            [3, 'ATOMIC', { d: 6 }] // replace "SAMPLE" with "ATOMIC" at offset 3
+        ]);
+
+        // simulate atomic write: write temp file outside workspace, then rename over existing
+        const tmpUri = vscode.Uri.file(`/tmp/claude/atomic_write_closed.js`);
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file('/tmp/claude'));
+        await vscode.workspace.fs.writeFile(tmpUri, buffer.from(newContent));
+        await vscode.workspace.fs.rename(tmpUri, uri, { overwrite: true });
+
+        // wait for remote update to be detected
+        await assertResolves(updated, 'sharedb.op');
+
+        // verify no new asset was created (atomic write, not new asset)
+        assert.strictEqual(rest.assetCreate.callCount, createsBefore, 'should not call assetCreate for atomic write');
+    });
+
+    test('file changes (atomic write identical content skipped)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create asset
+        const asset = await assetCreate({ name: 'atomic_write_noop.js', content: '// SAME CONTENT' });
+        assert.ok(asset, 'asset should be created');
+
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // get sharedb doc to check submitOp
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+        doc.submitOp.resetHistory();
+
+        // snapshot assetCreate call count after setup
+        const createsBefore = rest.assetCreate.callCount;
+
+        // simulate atomic write with identical content
+        const tmpUri = vscode.Uri.file(`/tmp/claude/atomic_write_noop.js`);
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file('/tmp/claude'));
+        await vscode.workspace.fs.writeFile(tmpUri, buffer.from('// SAME CONTENT'));
+        await vscode.workspace.fs.rename(tmpUri, uri, { overwrite: true });
+
+        // wait for deferred handler to process (10ms defer + margin)
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        // verify no ops submitted (content unchanged)
+        assert.strictEqual(doc.submitOp.callCount, 0, 'should not submit ops for identical content');
+
+        // verify no new asset was created
+        assert.strictEqual(rest.assetCreate.callCount, createsBefore, 'should not call assetCreate for atomic write');
+    });
+
+    test('file changes (no auto-save on closed external change)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create asset
+        const asset = await assetCreate({ name: 'no_autosave_closed.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset, 'asset should be created');
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document, 'document should exist');
+
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // create update promise
+        const newContent = `// CLOSED NO SAVE\n${document}`;
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
+            [3, 'CLOSED NO SAVE\n// '] // minimal diff insert at offset 3 (after common prefix "// ")
+        ]);
+
+        // reset sendRaw history
+        sharedb.sendRaw.resetHistory();
+
+        // make external change by writing to file directly
+        await vscode.workspace.fs.writeFile(uri, buffer.from(newContent));
+
+        // wait for remote update to be detected
+        await assertResolves(updated, 'sharedb.op');
+
+        // wait for any deferred save to fire
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        // verify no doc:save was sent (no auto-save on external change)
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external closed file change');
+    });
+
+    test('file changes (opened external write dirtifies without auto-save)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // create asset
+        const asset = await assetCreate({ name: 'dirtify_external.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset, 'asset should be created');
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document, 'document should exist');
+
+        // get file uri
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+
+        // open document
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+
+        // reset sendRaw history
+        sharedb.sendRaw.resetHistory();
+
+        // create change promise (onDidChangeTextDocument fires for external edits)
+        const changed = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && e.document.getText() !== document) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+
+        // make external change by writing to file directly
+        const newContent = `// EXTERNAL EDIT\n${document}`;
+        await vscode.workspace.fs.writeFile(uri, buffer.from(newContent));
+
+        // wait for VS Code to reload buffer and fire onDidChangeTextDocument
+        await assertResolves(changed, 'vscode.onDidChangeTextDocument');
+
+        // wait for dirtify and any deferred handlers
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        // verify document is dirty (dirtify worked)
+        assert.strictEqual(tdoc.isDirty, true, 'document should be dirty after external edit');
+
+        // verify no doc:save was sent (no auto-save)
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external open file change');
+    });
+
     test('file save (local -> remote)', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
