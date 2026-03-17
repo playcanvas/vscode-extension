@@ -158,23 +158,31 @@ const client = new BrowserClient({
     beforeSend: (event) => {
         // type guard to ensure event has message and extra properties
         const typedEvent = event as typeof event & GroupingEvent;
-        if (typedEvent.message) {
+        // extract raw message from either message events or exception events
+        const exceptionValue = typedEvent.exception?.values?.[0];
+        const raw = typedEvent.message || exceptionValue?.value;
+        if (raw) {
             // note: group by normalized message template while retaining raw debug context
-            const { normalized, paths, assetIds, documentIds, timestamps } = normalizeMessage(typedEvent.message);
+            const { normalized, paths, assetIds, documentIds, timestamps } = normalizeMessage(raw);
             typedEvent.extra = {
                 // previous extra data is preserved
                 ...(typedEvent.extra || {}),
 
                 // new metadata is added
                 metadata: {
-                    message: typedEvent.message,
+                    message: raw,
                     paths,
                     assetIds,
                     documentIds,
                     timestamps
                 }
             };
-            typedEvent.message = normalized;
+            if (typedEvent.message) {
+                typedEvent.message = normalized;
+            }
+            if (exceptionValue) {
+                exceptionValue.value = normalized;
+            }
             typedEvent.fingerprint = [normalized];
         }
         return sanitize(typedEvent) as typeof event;
