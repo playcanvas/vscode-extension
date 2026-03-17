@@ -124,6 +124,30 @@ const assertOpsPromise = (key: string, expected: unknown[]) => {
     });
 };
 
+const waitForAsset = (name: string, timeout = process.env.CI ? 2000 : 1000) => {
+    // resolve immediately if already present
+    const existing = Array.from(assets.values()).find((v) => v.name === name);
+    if (existing) {
+        return Promise.resolve(existing);
+    }
+    return assertResolves(
+        new Promise<Asset>((resolve) => {
+            const handler = ({ data }: { data: { asset: { name: string; id: string } } }) => {
+                if (data.asset.name !== name) {
+                    return;
+                }
+                messenger.off('asset.new', handler);
+                const a = Array.from(assets.values()).find((v) => v.name === name);
+                assert.ok(a, `asset ${name} should exist after asset.new`);
+                resolve(a);
+            };
+            messenger.on('asset.new', handler);
+        }),
+        `waitForAsset(${name})`,
+        timeout
+    );
+};
+
 suite('Extension Test Suite', () => {
     suiteTeardown(async () => {
         const workspace = vscode.workspace.workspaceFolders?.[0];
@@ -1729,9 +1753,8 @@ suite('Extension Test Suite', () => {
 
         infoMessageStub.resetHistory();
 
-        // find .pcignore asset
-        const asset = Array.from(assets.values()).find((a) => a.name === '.pcignore');
-        assert.ok(asset, '.pcignore asset should exist');
+        // wait for .pcignore asset (created async by previous test's deferred queue)
+        const asset = await waitForAsset('.pcignore');
 
         // get sharedb document subscription
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
