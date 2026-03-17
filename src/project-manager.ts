@@ -15,7 +15,7 @@ import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { signal } from './utils/signal';
-import { hash, parsePath, guard, withTimeout, tryCatch, minimalDiff } from './utils/utils';
+import { hash, parsePath, guard, withTimeout, tryCatch, minimalDiff, sanitizeName } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -118,7 +118,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         const path = override.path ?? asset.path;
-        const name = override.name ?? asset.name;
+        const name = sanitizeName(override.name ?? asset.name);
 
         // build full path by recursively following parent chain
         const segments: string[] = [name];
@@ -132,7 +132,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             if (!parentAsset) {
                 throw this.error.set(() => new Error(`missing parent asset ${parentUniqueId}`));
             }
-            segments.unshift(parentAsset.name);
+            segments.unshift(sanitizeName(parentAsset.name));
 
             const parentPath = parentAsset.path ?? [];
             parent = parentPath[parentPath.length - 1];

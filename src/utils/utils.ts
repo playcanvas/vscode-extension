@@ -8,6 +8,10 @@ import type { ShareDbTextOp } from '../typings/sharedb';
 
 import type { signal } from './signal';
 
+// eslint-disable-next-line no-control-regex
+const ILLEGAL_FS_CHARS = /[<>:"/\\|?*\x00-\x1F\x7F]/g;
+const WINDOWS_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
+
 export const hash = (data: string | Uint8Array) => {
     return crypto.createHash('md5').update(data).digest('hex');
 };
@@ -179,9 +183,16 @@ export const minimalDiff = (a: string, b: string) => {
     return { prefix, suffix };
 };
 
+export const sanitizeName = (name: string) => {
+    let result = name.replace(ILLEGAL_FS_CHARS, '_').replace(/^[. ]+|[. ]+$/g, '');
+    if (WINDOWS_RESERVED.test(result)) {
+        result = `_${result}`;
+    }
+    return result || '_';
+};
+
 export const projectToName = (project: Project, encode = true) => {
-    // encode to escape symbols except spaces
-    const name = encode ? encodeURIComponent(project.name).replace(/%20/g, ' ') : project.name;
+    const name = encode ? sanitizeName(project.name) : project.name;
     return `${name} (${project.id})`;
 };
 
