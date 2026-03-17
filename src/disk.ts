@@ -282,44 +282,35 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     workspaceEdit.set(uri, sharedb2vscode(document, [op]));
                     const applied = await vscode.workspace.applyEdit(workspaceEdit);
 
-                    // note: reconcile dropped keystrokes using content snapshot (doc.data
-                    // at op time), not live doc.data which races ahead when ops arrive
-                    // faster than applyEdit can process them.
+                    // reconcile: compare buffer against live doc.data (source of truth).
+                    // applyEdit is async so keystrokes or format-on-save transforms can
+                    // slip into the buffer during the await. never push buffer into sharedb
+                    // — force-reset to doc.data instead (mirrors online editor on focus).
                     if (this._projectManager && this._folderUri) {
-                        const currentText = document.getText();
-                        const expected = buffer.toString(content);
-                        if (expected !== currentText) {
-                            const path = relativePath(uri, this._folderUri);
-
-                            if (!applied) {
-                                // applyEdit failed -- replace VS Code buffer with ShareDB state
-                                const file = this._projectManager.files.get(path);
-                                if (file?.type === 'file') {
-                                    const docData = file.doc.data as string;
-                                    const fullReplace = new vscode.WorkspaceEdit();
-                                    fullReplace.replace(
-                                        uri,
-                                        new vscode.Range(
-                                            document.positionAt(0),
-                                            document.positionAt(currentText.length)
-                                        ),
-                                        docData
-                                    );
-                                    const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
-                                    if (!resyncApplied) {
-                                        this._log.error(`reconcile.remote.resync also failed for ${uri}`);
-                                    }
-                                    this._sync(uri, buffer.from(docData));
-                                    this._log.warn(`reconcile.remote.resync ${uri}`);
-                                    return;
+                        const path = relativePath(uri, this._folderUri);
+                        const file = this._projectManager.files.get(path);
+                        if (file?.type === 'file') {
+                            const docData = file.doc.data as string;
+                            const currentText = document.getText();
+                            if (!applied || docData !== currentText) {
+                                const dropped = applied && docData !== currentText;
+                                const fullReplace = new vscode.WorkspaceEdit();
+                                fullReplace.replace(
+                                    uri,
+                                    new vscode.Range(document.positionAt(0), document.positionAt(currentText.length)),
+                                    docData
+                                );
+                                const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
+                                if (!resyncApplied) {
+                                    this._log.error(`resync also failed for ${uri}`);
                                 }
+                                this._sync(uri, buffer.from(docData));
+                                if (dropped) {
+                                    this._log.error(`reconcile.remote.dropped_keystrokes ${uri}`);
+                                }
+                                this._log.warn(`reconcile.remote.resync ${uri} applied=${applied} dropped=${dropped}`);
+                                return;
                             }
-
-                            // applyEdit succeeded but text differs -- user typed during lock
-                            this._projectManager.write(path, buffer.from(currentText));
-                            this._sync(uri, buffer.from(currentText));
-                            this._log.debug(`reconcile.remote ${uri}`);
-                            return;
                         }
                     }
                 } finally {
