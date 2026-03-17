@@ -297,7 +297,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return false;
         }
 
-        // compute dirty state by comparing hash of doc content vs S3 hash
+        // after hard reset, collab server nullifies inactive doc data — skip until reload
+        if (doc.data === null) {
+            this._log.debug(`skipped file ${path} (null data, pending reload)`);
+            return false;
+        }
+
         const asset = this._assets.get(uniqueId);
         if (!asset?.file) {
             throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
