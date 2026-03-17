@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { captureException, captureMessage } from './sentry';
+import { captureException } from './sentry';
 
 class Log {
     static channel = vscode.window.createOutputChannel('PlayCanvas', { log: true });
@@ -29,11 +29,8 @@ class Log {
 
     error(...args: unknown[]) {
         Log.channel.error(`[${this._source}]`, ...args);
-        if (args[0] instanceof Error) {
-            captureException(args[0], this._source);
-        } else {
-            captureMessage(args.map(String).join(' '), 'error', this._source);
-        }
+        const err = args[0] instanceof Error ? args[0] : new Error(args.map(String).join(' '));
+        captureException(err, this._source);
     }
 }
 
