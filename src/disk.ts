@@ -293,6 +293,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             const docData = file.doc.data as string;
                             const currentText = document.getText();
                             if (!applied || docData !== currentText) {
+                                const dropped = applied && docData !== currentText;
                                 const fullReplace = new vscode.WorkspaceEdit();
                                 fullReplace.replace(
                                     uri,
@@ -304,7 +305,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     this._log.error(`resync also failed for ${uri}`);
                                 }
                                 this._sync(uri, buffer.from(docData));
-                                this._log.warn(`reconcile.remote.resync ${uri} applied=${applied}`);
+                                if (dropped) {
+                                    this._log.error(`reconcile.remote.dropped_keystrokes ${uri}`);
+                                }
+                                this._log.warn(`reconcile.remote.resync ${uri} applied=${applied} dropped=${dropped}`);
                                 return;
                             }
                         }
