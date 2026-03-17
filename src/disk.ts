@@ -181,7 +181,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 // note: set echo hash at write time so it matches the actual
                 // file content, not a future debounced write
                 this._echo.set(`${uri}:change`, hash(content));
-                await vscode.workspace.fs.writeFile(uri, content);
+                let attempt = 0;
+                while (true) {
+                    const [err] = await tryCatch(Promise.resolve(vscode.workspace.fs.writeFile(uri, content)));
+                    if (!err) {
+                        break;
+                    }
+                    if (attempt++ >= 2 || !/EBUSY/.test(err.message)) {
+                        throw err;
+                    }
+                    await new Promise((r) => setTimeout(r, 100 * Math.pow(2, attempt - 1)));
+                }
                 if (remote) {
                     setTimeout(() => this._syncing.delete(key), 200);
                 }
