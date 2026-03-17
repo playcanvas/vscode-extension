@@ -149,7 +149,7 @@ const waitForAsset = (name: string) => {
     );
 };
 
-suite('Extension Test Suite', () => {
+suite('extension', () => {
     suiteTeardown(async () => {
         const workspace = vscode.workspace.workspaceFolders?.[0];
         if (workspace) {
@@ -215,7 +215,7 @@ suite('Extension Test Suite', () => {
     };
 
     // NOTE: file path is set in MockUriHandler instance above
-    test('project load (with file path)', async () => {
+    test('project load - file path', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -346,7 +346,7 @@ suite('Extension Test Suite', () => {
         assert.ok(quickPickOptions.title.includes('Collision'), 'quick pick should have collision title');
     });
 
-    test('uri open file', async () => {
+    test('uri open - file', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -385,7 +385,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(call.args[0].toString(), externalUri.toString(), 'uri handler args should match');
     });
 
-    test('uri open collision file shows warning', async () => {
+    test('uri open - collision warning', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -464,7 +464,7 @@ suite('Extension Test Suite', () => {
         }
     });
 
-    test('file create (remote -> local)', async () => {
+    test('file create - remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -506,7 +506,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), document, 'file content should match');
     });
 
-    test('file create (local -> remote)', async () => {
+    test('file create - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -555,7 +555,7 @@ suite('Extension Test Suite', () => {
         );
     });
 
-    test('file create (fast create local -> remote)', async () => {
+    test('file create - fast local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -618,7 +618,7 @@ suite('Extension Test Suite', () => {
         }
     });
 
-    test('folder create (nested structure local -> remote)', async () => {
+    test('folder create - nested local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -680,7 +680,7 @@ suite('Extension Test Suite', () => {
         );
     });
 
-    test('folder create (siblings in parallel local -> remote)', async () => {
+    test('folder create - siblings local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -764,7 +764,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(creationOrder.length, 5, 'all 5 assets should be created');
     });
 
-    test('folder create (similar names independent local -> remote)', async () => {
+    test('folder create - similar names local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -834,7 +834,7 @@ suite('Extension Test Suite', () => {
         assert.ok(folderABIndex !== -1, 'folder AB should be created');
     });
 
-    test('folder create (copy directory tree ensures ancestors local -> remote)', async () => {
+    test('folder create - copy tree local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -907,7 +907,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(creationOrder.length, 3, 'all 3 assets should be created');
     });
 
-    test('file changes (opened remote -> local)', async () => {
+    test('file change - open remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -959,7 +959,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), newDocument, 'file content should match');
     });
 
-    test('file changes (closed remote -> local)', async () => {
+    test('file change - closed remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -990,7 +990,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), `// REMOTE COMMENT\n${document}`, 'file content should match');
     });
 
-    test('file changes (opened local -> remote)', async () => {
+    test('file change - open local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1031,7 +1031,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), newDocument, 'file content should match');
     });
 
-    test('file changes (closed local -> remote)', async () => {
+    test('file change - closed local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1060,7 +1060,7 @@ suite('Extension Test Suite', () => {
         await assertResolves(updated, 'sharedb.op');
     });
 
-    test('file changes (atomic write closed local -> remote)', async () => {
+    test('file change - atomic write local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1096,7 +1096,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(rest.assetCreate.callCount, createsBefore, 'should not call assetCreate for atomic write');
     });
 
-    test('file changes (atomic write identical content skipped)', async () => {
+    test('file change - atomic write identical skip', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1132,7 +1132,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(rest.assetCreate.callCount, createsBefore, 'should not call assetCreate for atomic write');
     });
 
-    test('file changes (no auto-save on closed external change)', async () => {
+    test('file change - no auto-save on external', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1169,7 +1169,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external closed file change');
     });
 
-    test('file changes (opened external write dirtifies without auto-save)', async () => {
+    test('file change - external write dirtifies', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1217,7 +1217,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external open file change');
     });
 
-    test('file save (local -> remote)', async () => {
+    test('file save - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1250,7 +1250,7 @@ suite('Extension Test Suite', () => {
         assert.deepStrictEqual(call.args, [`doc:save:${asset.uniqueId}`], 'sendRaw args should match');
     });
 
-    test('file save (remote -> local)', async () => {
+    test('file save - remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1311,7 +1311,7 @@ suite('Extension Test Suite', () => {
         await assertResolves(saved, 'vscode.onDidSaveTextDocument');
     });
 
-    test('file save empty (remote -> local)', async () => {
+    test('file save - empty remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1393,7 +1393,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), '', 'file content should be empty');
     });
 
-    test('file save (doc:save:success -> local)', async () => {
+    test('file save - doc save success', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1436,7 +1436,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send redundant doc:save to server');
     });
 
-    test('file save (remote op reverts to S3 hash)', async () => {
+    test('file save - remote op reverts to s3 hash', async () => {
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
 
@@ -1479,7 +1479,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(tdoc.getText(), content, 'content should match original');
     });
 
-    test('file delete (remote -> local)', async () => {
+    test('file delete - remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1503,7 +1503,7 @@ suite('Extension Test Suite', () => {
         assert.ok(uri, 'deleted uri should exist');
     });
 
-    test('file delete (local -> remote)', async () => {
+    test('file delete - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1546,7 +1546,7 @@ suite('Extension Test Suite', () => {
         );
     });
 
-    test('file rename (remote -> local)', async () => {
+    test('file rename - remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1587,7 +1587,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), document, 'file content should match');
     });
 
-    test('file rename (local -> remote)', async () => {
+    test('file rename - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1623,7 +1623,7 @@ suite('Extension Test Suite', () => {
         );
     });
 
-    test('file move (remote -> local)', async () => {
+    test('file move - remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1667,7 +1667,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), document, 'file content should match');
     });
 
-    test('file move (local -> remote)', async () => {
+    test('file move - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1717,7 +1717,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(buffer.toString(content), document, 'file content should match');
     });
 
-    test('.pcignore parsing (file)', async () => {
+    test('pcignore - parse file', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1741,7 +1741,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(ignoredFileAsset, undefined, 'ignored file should not exist as asset');
     });
 
-    test('.pcignore dynamic re-parse (remote update blocks new pattern)', async () => {
+    test('pcignore - reparse on remote update', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1777,7 +1777,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(txtAsset, undefined, 'txt file should not exist as asset');
     });
 
-    test('.pcignore path guard (no prompt on non-pcignore file)', async () => {
+    test('pcignore - path guard', async () => {
         infoMessageStub.resetHistory();
 
         // non-pcignore file triggers asset:file:create -> _checkIgnoreUpdated path guard
@@ -1788,7 +1788,7 @@ suite('Extension Test Suite', () => {
         assert.ok(infoMessageStub.notCalled, 'info message should not be shown for non-pcignore file');
     });
 
-    test('file path collision (remote -> local)', async () => {
+    test('collision - file path remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1854,7 +1854,7 @@ suite('Extension Test Suite', () => {
         assert.ok(message.includes('collision'), 'warning message should mention collision');
     });
 
-    test('folder collision causes children to be skipped (remote -> local)', async () => {
+    test('collision - folder skips children', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1962,7 +1962,7 @@ suite('Extension Test Suite', () => {
         assert.strictEqual(childExists, false, 'child file should not exist due to parent collision');
     });
 
-    test('collision on rename (remote -> local)', async () => {
+    test('collision - rename remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -2015,7 +2015,7 @@ suite('Extension Test Suite', () => {
         assert.ok(message.includes('collision'), 'warning message should mention collision');
     });
 
-    test('collision removed on asset delete', async () => {
+    test('collision - removed on delete', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
