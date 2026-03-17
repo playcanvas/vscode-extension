@@ -184,7 +184,7 @@ export const minimalDiff = (a: string, b: string) => {
 };
 
 export const sanitizeName = (name: string) => {
-    let result = name.replace(ILLEGAL_FS_CHARS, '_').replace(/^[. ]+|[. ]+$/g, '');
+    let result = name.replace(ILLEGAL_FS_CHARS, '_').replace(/^ +|[. ]+$/g, '');
     if (WINDOWS_RESERVED.test(result)) {
         result = `_${result}`;
     }

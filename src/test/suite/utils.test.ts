@@ -16,8 +16,8 @@ suite('Utils Test Suite', () => {
         assert.strictEqual(sanitizeName('a<>:"|?*b'), 'a_______b');
     });
 
-    test('sanitizeName trims leading dots', () => {
-        assert.strictEqual(sanitizeName('...hidden'), 'hidden');
+    test('sanitizeName preserves leading dots', () => {
+        assert.strictEqual(sanitizeName('...hidden'), '...hidden');
     });
 
     test('sanitizeName trims trailing dot and space', () => {

@@ -127,7 +127,8 @@ const assertOpsPromise = (key: string, expected: unknown[]) => {
 const waitForAsset = (name: string) => {
     const existing = Array.from(assets.values()).find((v) => v.name === name);
     if (existing) {
-        return Promise.resolve(existing);
+        // yield macrotask to let PM's async handler finish (subscribe + _addFile + asset:create)
+        return new Promise<Asset>((resolve) => setTimeout(() => resolve(existing)));
     }
     return assertResolves(
         new Promise<Asset>((resolve) => {
@@ -141,7 +142,7 @@ const waitForAsset = (name: string) => {
                     const a = Array.from(assets.values()).find((v) => v.name === name);
                     assert.ok(a, `asset ${name} should exist after asset.new`);
                     resolve(a);
-                }, 0);
+                });
             });
         }),
         `waitForAsset(${name})`
