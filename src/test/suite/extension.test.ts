@@ -124,27 +124,27 @@ const assertOpsPromise = (key: string, expected: unknown[]) => {
     });
 };
 
-const waitForAsset = (name: string, timeout = process.env.CI ? 2000 : 1000) => {
-    // resolve immediately if already present
+const waitForAsset = (name: string) => {
     const existing = Array.from(assets.values()).find((v) => v.name === name);
     if (existing) {
         return Promise.resolve(existing);
     }
     return assertResolves(
         new Promise<Asset>((resolve) => {
-            const handler = ({ data }: { data: { asset: { name: string; id: string } } }) => {
+            const handler = messenger.on('asset.new', ({ data }: { data: { asset: { name: string } } }) => {
                 if (data.asset.name !== name) {
                     return;
                 }
                 messenger.off('asset.new', handler);
-                const a = Array.from(assets.values()).find((v) => v.name === name);
-                assert.ok(a, `asset ${name} should exist after asset.new`);
-                resolve(a);
-            };
-            messenger.on('asset.new', handler);
+                // yield macrotask to let PM's async handler finish (subscribe + _addFile + asset:create)
+                setTimeout(() => {
+                    const a = Array.from(assets.values()).find((v) => v.name === name);
+                    assert.ok(a, `asset ${name} should exist after asset.new`);
+                    resolve(a);
+                }, 0);
+            });
         }),
-        `waitForAsset(${name})`,
-        timeout
+        `waitForAsset(${name})`
     );
 };
 
@@ -169,16 +169,10 @@ suite('Extension Test Suite', () => {
         assert.ok(extension.isActive, 'extension should be active');
     });
 
-    // FIXME: increase teardown delay to improve stability in CI environment
-    if (process.env.CI) {
-        teardown(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-        });
-    }
-
-    teardown(() => {
-        // reset stubs and spies after each test
+    teardown(async () => {
         sandbox.resetHistory();
+        // settle deferred queue / mutex between tests
+        await new Promise((resolve) => setTimeout(resolve, process.env.CI ? 2000 : 50));
     });
 
     const assetCreate = async ({ name, content = '', parent }: { name: string; content?: string; parent?: number }) => {
