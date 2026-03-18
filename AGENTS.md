@@ -73,6 +73,7 @@ Local:  VS Code → Disk → ProjectManager → ShareDB
 ## Commands
 
 - `playcanvas.login` - Authenticate
+- `playcanvas.logout` - Log out
 - `playcanvas.openProject` - Open project
 - `playcanvas.reloadProject` - Reload project
 - `playcanvas.switchBranch` - Switch branch
