@@ -1265,22 +1265,15 @@ suite('extension', () => {
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
 
         // open document
-        await vscode.workspace.openTextDocument(uri);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
 
         // make local change by editing the document
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, new vscode.Position(0, 0), '// LOCAL TEST COMMENT\n');
         await vscode.workspace.applyEdit(edit);
 
-        // create save promise
-        const saved = new Promise<void>((resolve) => {
-            const disposable = vscode.workspace.onDidSaveTextDocument((document) => {
-                if (document.uri.toString() === uri.toString()) {
-                    disposable.dispose();
-                    resolve();
-                }
-            });
-        });
+        // watch for disk sync from _update() -> _sync()
+        const diskSynced = watchFilePromise(folderUri, asset.name, 'change');
 
         // make remote save
         assert.ok(asset.file, 'asset.file should exist');
@@ -1307,8 +1300,11 @@ suite('extension', () => {
         asset.file.hash = newHash;
         documents.set(asset.uniqueId, newContent);
 
-        // wait for local file to be saved
-        await assertResolves(saved, 'vscode.onDidSaveTextDocument');
+        // disk synced by _update() via _sync(), no document.save()
+        await assertResolves(diskSynced, 'watcher.change');
+
+        // document stays dirty (user must manually save)
+        assert.strictEqual(tdoc.isDirty, true, 'document should stay dirty after remote save');
     });
 
     test('file save - empty remote to local', async () => {
@@ -1411,25 +1407,13 @@ suite('extension', () => {
         await vscode.workspace.applyEdit(edit);
         assert.strictEqual(tdoc.isDirty, true, 'document should be dirty after local edit');
 
-        // create save promise (fires when _save() -> document.save() runs)
-        const saved = new Promise<void>((resolve) => {
-            const disposable = vscode.workspace.onDidSaveTextDocument((d) => {
-                if (d.uri.toString() === uri.toString()) {
-                    disposable.dispose();
-                    resolve();
-                }
-            });
-        });
-
-        // simulate doc:save:success without hash change (tests the new code path)
+        // simulate doc:save:success without hash change
         sharedb.sendRaw.resetHistory();
         sharedb.emit('doc:save', 'success', asset.uniqueId);
 
-        // wait for _save() to call document.save()
-        await assertResolves(saved, 'vscode.onDidSaveTextDocument');
-
-        // verify dirty indicator is cleared
-        assert.strictEqual(tdoc.isDirty, false, 'document should not be dirty after doc:save:success');
+        // _save() is a no-op for open files — document stays dirty
+        await new Promise((r) => setTimeout(r, 200));
+        assert.strictEqual(tdoc.isDirty, true, 'document should stay dirty after doc:save:success');
 
         // verify no redundant server save was triggered
         const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
@@ -1464,9 +1448,9 @@ suite('extension', () => {
         await assertResolves(changed, 'vscode.onDidChangeTextDocument');
 
         // revert op — hash matches S3 so asset:file:save fires
-        const saved = new Promise<void>((resolve) => {
-            const disposable = vscode.workspace.onDidSaveTextDocument((d) => {
-                if (d.uri.toString() === uri.toString()) {
+        const reverted = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && e.document.getText() === content) {
                     disposable.dispose();
                     resolve();
                 }
@@ -1474,8 +1458,7 @@ suite('extension', () => {
         });
         doc.submitOp([0, { d: insert.length }], { source: 'remote' });
 
-        await assertResolves(saved, 'vscode.onDidSaveTextDocument');
-        assert.strictEqual(tdoc.isDirty, false, 'should not be dirty after revert to S3 hash');
+        await assertResolves(reverted, 'vscode.onDidChangeTextDocument');
         assert.strictEqual(tdoc.getText(), content, 'content should match original');
     });
 

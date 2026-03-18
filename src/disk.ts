@@ -178,8 +178,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         }
         this._debouncer
             .debounce(key, async () => {
-                // note: set echo hash at write time so it matches the actual
-                // file content, not a future debounced write
+                // set echo hash at write time to match actual file content
                 this._echo.set(`${uri}:change`, hash(content));
                 let attempt = 0;
                 while (true) {
@@ -281,9 +280,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._opened.has(uri.path) ||
                 vscode.workspace.textDocuments.some((document) => document.uri.toString() === uri.toString());
             if (viewing) {
-                // note: lock before any await so onDidChangeTextDocument can't
-                // submit ops with stale offsets while doc.data is ahead of the
-                // vscode buffer. mirrors the editor's synchronous ignoreLocalChanges.
+                // lock before any await so onDidChangeTextDocument can't
+                // submit ops with stale offsets while doc.data is ahead of buffer
                 this._locks.add(`${uri}`);
 
                 try {
@@ -292,10 +290,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     workspaceEdit.set(uri, sharedb2vscode(document, [op]));
                     const applied = await vscode.workspace.applyEdit(workspaceEdit);
 
-                    // reconcile: compare buffer against live doc.data (source of truth).
-                    // applyEdit is async so keystrokes or format-on-save transforms can
-                    // slip into the buffer during the await. never push buffer into sharedb
-                    // — force-reset to doc.data instead (mirrors online editor on focus).
+                    // reconcile: applyEdit is async so buffer may drift from doc.data.
+                    // force-reset to doc.data if mismatch.
                     if (this._projectManager && this._folderUri) {
                         const path = relativePath(uri, this._folderUri);
                         const file = this._projectManager.files.get(path);
@@ -328,7 +324,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 }
             }
 
-            // mirror to disk (debounced) — mark as remote so watcher skips the echo
+            // debounce-write to disk (remote flag skips watcher echo)
             this._sync(uri, content, true);
 
             this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri} ${opdiff(op)}`);
@@ -387,61 +383,27 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // for open files, save the document to clear VS Code's dirty indicator
+            // open files: disk already synced by _update() via _sync().
+            // no document.save() to avoid triggering formatOnSave.
             if (this._opened.has(uri.path)) {
                 const document = await vscode.workspace.openTextDocument(uri);
 
-                // "file on disk is newer" prompt shown when empty document is saved
+                // empty documents: flush to disk and revert to clear mtime
+                // mismatch. safe — no content to race with.
                 if (document.getText().length === 0) {
-                    // cancel debounced sync and write immediately
                     this._debouncer.cancel(`${uri}`);
                     await vscode.workspace.fs.writeFile(uri, new Uint8Array());
 
-                    // revert document to reload from disk (clears dirty indicator)
                     const active = vscode.window.activeTextEditor;
                     await vscode.window.showTextDocument(document, { preserveFocus: false });
                     await vscode.commands.executeCommand('workbench.action.files.revert');
 
-                    // restore previous active editor if different
                     if (active && active.document.uri.toString() !== uri.toString()) {
                         await vscode.window.showTextDocument(active.document, { preserveFocus: false });
                     }
 
                     this._log.debug(`save.remote.open.empty ${uri}`);
                 } else {
-                    // cancel pending debounced sync to prevent mtime race
-                    this._debouncer.cancel(`${uri}`);
-
-                    // write ShareDB content to disk first so that document.save() sees
-                    // consistent mtime and doesn't prompt "file on disk is newer".
-                    // note: if the user types between writeFile and save, document.save()
-                    // will write the buffer (including the keystroke) which is correct.
-                    const folderUri = this._folderUri;
-                    const path = folderUri ? relativePath(uri, folderUri) : undefined;
-                    const file = path ? this._projectManager?.files.get(path) : undefined;
-                    if (file?.type === 'file') {
-                        // skip if user has new unsaved changes since save was confirmed
-                        if (file.dirty) {
-                            this._log.debug(`save.remote.skip ${uri} (dirty)`);
-                            return;
-                        }
-
-                        const content = buffer.from(file.doc.data);
-                        this._echo.set(`${uri}:change`, hash(content));
-                        await vscode.workspace.fs.writeFile(uri, content);
-
-                        // recheck: user may have typed during writeFile await
-                        if (file.dirty) {
-                            this._log.debug(`save.remote.skip ${uri} (dirty after write)`);
-                            return;
-                        }
-                    }
-
-                    try {
-                        await document.save();
-                    } catch (err) {
-                        this._log.warn(`save failed for ${uri}`, err);
-                    }
                     this._log.debug(`save.remote.open ${uri}`);
                 }
             } else {
