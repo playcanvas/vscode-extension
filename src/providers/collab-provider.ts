@@ -110,6 +110,18 @@ class CollabProvider
         };
     }
 
+    counts() {
+        const room = this._rooms.get(this._room || '');
+        const same = room ? room.size : 0;
+        let other = 0;
+        for (const [name, users] of this._rooms) {
+            if (name !== this._room) {
+                other += users.size;
+            }
+        }
+        return { same, other };
+    }
+
     refresh(): void {
         this._onDidChangeTreeData.fire();
     }

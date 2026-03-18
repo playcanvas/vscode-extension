@@ -219,6 +219,11 @@ export const setSentryProject = (projectId: number, branchId: string) => {
     scope.setTag('branch_id', branchId);
 };
 
+export const setSentryCollaborators = (same: number, other: number) => {
+    scope.setTag('collab_same', String(same));
+    scope.setTag('collab_other', String(other));
+};
+
 export const closeSentry = async () => {
     await client.close(2000);
 };

@@ -14,7 +14,7 @@ import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
 import { DirtyDecorationProvider } from './providers/dirty-decoration-provider';
-import { closeSentry, setSentryProject, setSentryUser } from './sentry';
+import { closeSentry, setSentryCollaborators, setSentryProject, setSentryUser } from './sentry';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { EventEmitter } from './utils/event-emitter';
@@ -239,6 +239,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     });
     context.subscriptions.push(vscode.window.registerTreeDataProvider('collab-view', collabProvider));
+    const updateCollabTags = () => {
+        const { same, other } = collabProvider.counts();
+        setSentryCollaborators(same, other);
+    };
+    relay.on('room:join', updateCollabTags);
+    relay.on('room:leave', updateCollabTags);
 
     // dirty decoration provider
     const dirtyProvider = new DirtyDecorationProvider({ events });
