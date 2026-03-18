@@ -312,13 +312,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 );
                                 const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
                                 if (!resyncApplied) {
-                                    this._log.error(`resync also failed for ${uri}`);
+                                    this._log.error(`resync.remote.failed ${uri}`);
                                 }
                                 this._sync(uri, buffer.from(docData));
                                 if (dropped) {
-                                    this._log.error(`reconcile.remote.dropped_keystrokes ${uri}`);
+                                    this._log.error(`sync.remote.dropped ${uri} ${opdiff(op)}`);
                                 }
-                                this._log.warn(`reconcile.remote.resync ${uri} applied=${applied} dropped=${dropped}`);
+                                this._log.warn(`sync.remote.resync ${uri} applied=${applied} dropped=${dropped}`);
                                 return;
                             }
                         }
