@@ -386,7 +386,26 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // open files: disk already synced by _update() via _sync().
             // no document.save() to avoid triggering formatOnSave.
             if (this._opened.has(uri.path)) {
-                this._log.debug(`save.remote.open ${uri}`);
+                const document = await vscode.workspace.openTextDocument(uri);
+
+                // empty documents: flush to disk and revert to clear mtime
+                // mismatch. safe — no content to race with.
+                if (document.getText().length === 0) {
+                    this._debouncer.cancel(`${uri}`);
+                    await vscode.workspace.fs.writeFile(uri, new Uint8Array());
+
+                    const active = vscode.window.activeTextEditor;
+                    await vscode.window.showTextDocument(document, { preserveFocus: false });
+                    await vscode.commands.executeCommand('workbench.action.files.revert');
+
+                    if (active && active.document.uri.toString() !== uri.toString()) {
+                        await vscode.window.showTextDocument(active.document, { preserveFocus: false });
+                    }
+
+                    this._log.debug(`save.remote.open.empty ${uri}`);
+                } else {
+                    this._log.debug(`save.remote.open ${uri}`);
+                }
             } else {
                 this._log.debug(`save.remote.closed ${uri}`);
             }
