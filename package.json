@@ -1,7 +1,7 @@
 {
     "name": "playcanvas",
     "displayName": "PlayCanvas",
-    "version": "1.5.6",
+    "version": "1.5.7",
     "description": "PlayCanvas Editor VS Code Extension",
     "categories": [
         "Other"
