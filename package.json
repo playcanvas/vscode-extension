@@ -59,6 +59,10 @@
                 "title": "PlayCanvas: Login"
             },
             {
+                "command": "playcanvas.logout",
+                "title": "PlayCanvas: Logout"
+            },
+            {
                 "command": "playcanvas.openProject",
                 "title": "PlayCanvas: Open Project"
             },

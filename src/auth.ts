@@ -186,6 +186,19 @@ class Auth {
         return accessToken;
     }
 
+    async logout() {
+        const confirmed = await vscode.window.showWarningMessage(
+            'Are you sure you want to log out?',
+            { modal: true },
+            'Logout'
+        );
+        if (confirmed !== 'Logout') {
+            return;
+        }
+        await this._context.secrets.delete(`${NAME}.accessToken`);
+        vscode.commands.executeCommand('workbench.action.reloadWindow');
+    }
+
     async reset(reason = 'unknown reason') {
         await vscode.window.showErrorMessage(
             [reason, 'Token will be reset and the window will be reloaded.'].join('\n\n'),
