@@ -27,13 +27,14 @@ if [[ $(git status --porcelain) ]]; then
     exit 1
 fi
 
-# Check if not on main and not up to date with main
-if [[ $(git rev-parse --abrev-ref HEAD) != "main" ]]; then
-    if [[ $(git rev-list --left-right --count origin/main...HEAD) != "0	0" ]]; then
-        echo "Your branch is not up to date with main. Please pull the latest changes from main before running this script."
-        exit 1
-    fi
+# Check if not on main
+if [[ $(git branch --show-current) != "main" ]]; then
+    echo "You are not on the main branch. Please switch to the main branch before running this script."
+    exit 1
 fi
+
+# Pull latest changes
+git pull origin main
 
 # strip prerelease tag before computing bump so patch goes 1.3.7-beta.0 -> 1.3.8
 CURRENT=$(npm pkg get version | tr -d '"')
