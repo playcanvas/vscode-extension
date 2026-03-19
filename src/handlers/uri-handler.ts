@@ -36,6 +36,8 @@ class UriHandler
 
     protected _projectManager?: ProjectManager;
 
+    private _errorDisposable?: vscode.Disposable;
+
     private _errorDecoration = vscode.window.createTextEditorDecorationType({
         backgroundColor: UriHandler.ERROR_COLOR,
         isWholeLine: true,
@@ -44,6 +46,11 @@ class UriHandler
     });
 
     error = signal<Error | undefined>(undefined);
+
+    private _clearErrorDecoration() {
+        this._errorDisposable?.dispose();
+        this._errorDisposable = undefined;
+    }
 
     constructor({
         context,
@@ -115,9 +122,23 @@ class UriHandler
         // show text document
         const editor = await vscode.window.showTextDocument(openDoc, options);
 
-        // set error decoration
+        // set or clear error decoration
+        this._clearErrorDecoration();
         if (error && selection) {
             editor.setDecorations(this._errorDecoration, [selection]);
+            this._errorDisposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() !== uri.toString()) {
+                    return;
+                }
+                for (const ed of vscode.window.visibleTextEditors) {
+                    if (ed.document.uri.toString() === uri.toString()) {
+                        ed.setDecorations(this._errorDecoration, []);
+                    }
+                }
+                this._clearErrorDecoration();
+            });
+        } else {
+            editor.setDecorations(this._errorDecoration, []);
         }
 
         this._log.info(`opened asset ${assetId} at ${filePath}`);
@@ -232,6 +253,8 @@ class UriHandler
         this._projectManager = projectManager;
 
         this._linked = true;
+
+        this._cleanup.push(async () => this._clearErrorDecoration());
 
         await this._openFile(folderUri, projectManager);
 
