@@ -2,6 +2,7 @@ import ignore from 'ignore';
 import * as vscode from 'vscode';
 
 import { NAME } from './config';
+import { ShareDb } from './connections/sharedb';
 import { simpleNotification } from './notification';
 import type { ProjectManager } from './project-manager';
 import type { EventMap } from './typings/event-map';
@@ -91,7 +92,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _echo: Map<string, string> = new Map<string, string>();
 
-    private _locks: Set<string> = new Set<string>();
+    private _locks = new Set<string>();
 
     private _syncing = new Set<string>();
 
@@ -290,31 +291,53 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     workspaceEdit.set(uri, sharedb2vscode(document, [op]));
                     const applied = await vscode.workspace.applyEdit(workspaceEdit);
 
-                    // reconcile: applyEdit is async so buffer may drift from doc.data.
-                    // force-reset to doc.data if mismatch.
+                    // reconcile: applyEdit is async so buffer may drift from doc.data
+                    // if user typed during the gap, VS Code merges keystrokes into
+                    // the buffer natively — diff doc.data vs buffer to recover them
                     if (this._projectManager && this._folderUri) {
                         const path = relativePath(uri, this._folderUri);
                         const file = this._projectManager.files.get(path);
                         if (file?.type === 'file') {
                             const docData = file.doc.data as string;
                             const currentText = document.getText();
-                            if (!applied || docData !== currentText) {
-                                const dropped = applied && docData !== currentText;
-                                const fullReplace = new vscode.WorkspaceEdit();
-                                fullReplace.replace(
-                                    uri,
-                                    new vscode.Range(document.positionAt(0), document.positionAt(currentText.length)),
-                                    docData
+                            if (!applied) {
+                                // applyEdit failed — force-reset to server state
+                                const reset = new vscode.WorkspaceEdit();
+                                const range = new vscode.Range(
+                                    document.positionAt(0),
+                                    document.positionAt(currentText.length)
                                 );
-                                const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
+                                reset.replace(uri, range, docData);
+                                const resyncApplied = await vscode.workspace.applyEdit(reset);
                                 if (!resyncApplied) {
                                     this._log.error(`resync.remote.failed ${uri}`);
                                 }
                                 this._sync(uri, buffer.from(docData));
-                                if (dropped) {
-                                    this._log.error(`sync.remote.dropped ${uri} ${opdiff(op)}`);
+                                this._log.warn(`sync.remote.resync ${uri} applied=false`);
+                                return;
+                            }
+                            if (docData !== currentText) {
+                                // buffer drifted — user typed during async gap.
+                                // diff against doc.data to extract the net user edit
+                                const { prefix, suffix } = minimalDiff(docData, currentText);
+                                const delLen = docData.length - prefix - suffix;
+                                const insText = currentText.substring(prefix, currentText.length - suffix);
+                                const recovered: ShareDbTextOp =
+                                    delLen > 0 && insText.length > 0
+                                        ? [prefix, insText, { d: delLen }]
+                                        : delLen > 0
+                                          ? [prefix, { d: delLen }]
+                                          : [prefix, insText];
+                                file.doc.submitOp(recovered, { source: ShareDb.SOURCE });
+                                const prev = file.dirty;
+                                file.dirty = true;
+                                if (!prev) {
+                                    this._events.emit('asset:file:dirty', path, true);
                                 }
-                                this._log.warn(`sync.remote.resync ${uri} applied=${applied} dropped=${dropped}`);
+                                this._sync(document.uri, buffer.from(file.doc.data as string));
+                                this._log.info(
+                                    `sync.remote.recovered ${uri} ${opdiff(op)} recovered=${opdiff(recovered)}`
+                                );
                                 return;
                             }
                         }
