@@ -10,6 +10,7 @@ import type { signal } from './signal';
 
 // eslint-disable-next-line no-control-regex
 const ILLEGAL_FS_CHARS = /[<>:"/\\|?*\x00-\x1F\x7F]/g;
+
 const WINDOWS_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 
 export const hash = (data: string | Uint8Array) => {
@@ -88,12 +89,14 @@ export const vscode2sharedb = (changes: readonly vscode.TextDocumentContentChang
         }
 
         // atomic replace, delete, or insert
+        // note: ot-text checkOp rejects skip=0, so omit leading offset when 0
+        const src = { source: ShareDb.SOURCE };
         if (deleteLen > 0 && text.length > 0) {
-            list.push([[adjusted, text, { d: deleteLen }], { source: ShareDb.SOURCE }]);
+            list.push([adjusted ? [adjusted, text, { d: deleteLen }] : [text, { d: deleteLen }], src]);
         } else if (deleteLen > 0) {
-            list.push([[adjusted, { d: deleteLen }], { source: ShareDb.SOURCE }]);
+            list.push([adjusted ? [adjusted, { d: deleteLen }] : [{ d: deleteLen }], src]);
         } else if (text.length > 0) {
-            list.push([[adjusted, text], { source: ShareDb.SOURCE }]);
+            list.push([adjusted ? [adjusted, text] : [text], src]);
         }
 
         effects.push({ origOffset, deleteLen, delta: text.length - deleteLen });
