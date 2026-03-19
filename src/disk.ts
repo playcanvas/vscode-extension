@@ -26,9 +26,6 @@ import {
     minimalDiff
 } from './utils/utils';
 
-const fullRange = (doc: vscode.TextDocument) =>
-    new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
-
 const readDirRecursive = async (uri: vscode.Uri) => {
     const entries = await vscode.workspace.fs.readDirectory(uri);
     const result: vscode.Uri[] = [];
@@ -306,8 +303,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             if (!applied) {
                                 // applyEdit failed — force-reset to server state
                                 const reset = new vscode.WorkspaceEdit();
-                                reset.replace(uri, fullRange(document), docData);
-                                await vscode.workspace.applyEdit(reset);
+                                const range = new vscode.Range(
+                                    document.positionAt(0),
+                                    document.positionAt(currentText.length)
+                                );
+                                reset.replace(uri, range, docData);
+                                const resyncApplied = await vscode.workspace.applyEdit(reset);
+                                if (!resyncApplied) {
+                                    this._log.error(`resync.remote.failed ${uri}`);
+                                }
                                 this._sync(uri, buffer.from(docData));
                                 this._log.warn(`sync.remote.resync ${uri} applied=false`);
                                 return;
@@ -325,6 +329,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                           ? [prefix, { d: delLen }]
                                           : [prefix, insText];
                                 file.doc.submitOp(recovered, { source: ShareDb.SOURCE });
+                                const prev = file.dirty;
+                                file.dirty = true;
+                                if (!prev) {
+                                    this._events.emit('asset:file:dirty', path, true);
+                                }
                                 this._sync(document.uri, buffer.from(file.doc.data as string));
                                 this._log.info(
                                     `sync.remote.recovered ${uri} ${opdiff(op)} recovered=${opdiff(recovered)}`
