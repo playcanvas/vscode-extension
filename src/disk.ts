@@ -281,7 +281,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 vscode.workspace.textDocuments.some((document) => document.uri.toString() === uri.toString());
             if (viewing) {
                 // lock before any await so onDidChangeTextDocument can't
-                // submit ops with stale offsets while doc.data is ahead of buffer
+                // submit ops with stale offsets while canonical state is ahead of buffer
                 this._locks.add(`${uri}`);
 
                 try {
@@ -290,9 +290,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     workspaceEdit.set(uri, sharedb2vscode(document, [op]));
                     const applied = await vscode.workspace.applyEdit(workspaceEdit);
 
-                    // reconcile: applyEdit is async so buffer may drift from doc.data
+                    // reconcile: applyEdit is async so buffer may drift from canonical state
                     // if user typed during the gap, VS Code merges keystrokes into
-                    // the buffer natively — diff doc.data vs buffer to recover them
+                    // the buffer natively — diff canonical state vs buffer to recover them
                     if (this._projectManager && this._folderUri) {
                         const path = relativePath(uri, this._folderUri);
                         const file = this._projectManager.files.get(path);
@@ -583,8 +583,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // submit ops via OTDocument (applies locally + submits to ShareDB)
-            const opOptions = vscode2sharedb(contentChanges);
-            for (const [op] of opOptions) {
+            const ops = vscode2sharedb(contentChanges);
+            for (const op of ops) {
                 file.doc.apply(op);
             }
 
@@ -593,17 +593,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // mark as dirty if any ops submitted (any unsaved changes)
             const prev = file.dirty;
-            file.dirty ||= !!opOptions.length;
+            file.dirty ||= !!ops.length;
             if (!prev && file.dirty) {
                 this._events.emit('asset:file:dirty', path, true);
             }
 
             // external disk change — force dirty indicator
-            if (!document.isDirty && opOptions.length) {
+            if (!document.isDirty && ops.length) {
                 this._dirtify(document);
             }
 
-            this._log.debug(`document.change ${document.uri.path} ${opOptions.map(([o]) => opdiff(o)).join(' ')}`);
+            this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => opdiff(o)).join(' ')}`);
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;

@@ -2,7 +2,6 @@ import crypto from 'crypto';
 
 import * as vscode from 'vscode';
 
-import { ShareDb } from '../connections/sharedb';
 import type { Project } from '../typings/models';
 import type { ShareDbTextOp } from '../typings/sharedb';
 
@@ -68,11 +67,11 @@ export const parsePath = (path: string) => {
 };
 
 export const vscode2sharedb = (changes: readonly vscode.TextDocumentContentChangeEvent[]) => {
-    const list: [ShareDbTextOp, { source: string }][] = [];
+    const list: ShareDbTextOp[] = [];
 
-    // note: all contentChanges reference the original doc state, but submitOp
-    // mutates doc.data after each call, so we adjust subsequent offsets based
-    // on the net effect of previously processed changes.
+    // note: all contentChanges reference the original doc state, but apply
+    // updates canonical state after each call, so we adjust subsequent offsets
+    // based on the net effect of previously processed changes.
     const effects: { origOffset: number; deleteLen: number; delta: number }[] = [];
 
     for (const change of changes) {
@@ -90,13 +89,12 @@ export const vscode2sharedb = (changes: readonly vscode.TextDocumentContentChang
 
         // atomic replace, delete, or insert
         // note: ot-text checkOp rejects skip=0, so omit leading offset when 0
-        const src = { source: ShareDb.SOURCE };
         if (deleteLen > 0 && text.length > 0) {
-            list.push([adjusted ? [adjusted, text, { d: deleteLen }] : [text, { d: deleteLen }], src]);
+            list.push(adjusted ? [adjusted, text, { d: deleteLen }] : [text, { d: deleteLen }]);
         } else if (deleteLen > 0) {
-            list.push([adjusted ? [adjusted, { d: deleteLen }] : [{ d: deleteLen }], src]);
+            list.push(adjusted ? [adjusted, { d: deleteLen }] : [{ d: deleteLen }]);
         } else if (text.length > 0) {
-            list.push([adjusted ? [adjusted, text] : [text], src]);
+            list.push(adjusted ? [adjusted, text] : [text]);
         }
 
         effects.push({ origOffset, deleteLen, delta: text.length - deleteLen });
