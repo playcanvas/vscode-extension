@@ -1,10 +1,12 @@
 import { EventEmitter } from 'events';
 
+import { type as ottext } from 'ot-text';
 import type * as sharedb from 'sharedb/lib/client/index.js';
 import type { Snapshot, Callback, ShareDBSourceOptions, DocEventMap, Error } from 'sharedb/lib/sharedb.js';
 import type sinon from 'sinon';
 
 import { ShareDb } from '../../connections/sharedb';
+import type { ShareDbTextOp } from '../../typings/sharedb';
 
 import type { MockMessenger } from './messenger';
 import { projectSettings, assets, documents } from './models';
@@ -196,57 +198,9 @@ class MockDoc extends Doc {
             return;
         });
         this.submitOp = sandbox.spy((op: unknown, options?: { source: string }) => {
-            // apply the op to the data
-            // FIXME: standardize op format and reuse in extension code
+            // apply op via ot-text (same logic as OTDocument)
             if (Array.isArray(op) && type === 'documents' && typeof this.data === 'string') {
-                switch (op.length) {
-                    case 1: {
-                        const [arg] = op;
-                        switch (typeof arg) {
-                            case 'string': {
-                                // insert at start
-                                this.data = `${arg}${this.data}`;
-                                break;
-                            }
-                            case 'object': {
-                                if ('d' in arg) {
-                                    // delete from start
-                                    this.data = this.data.slice(arg.d);
-                                }
-                                break;
-                            }
-                        }
-                        break;
-                    }
-                    case 2: {
-                        const [index, arg] = op;
-                        switch (typeof arg) {
-                            case 'string': {
-                                // insert at index
-                                this.data = this.data.slice(0, index) + arg + this.data.slice(index);
-                                break;
-                            }
-                            case 'object': {
-                                if ('d' in arg) {
-                                    // delete from index
-                                    this.data = this.data.slice(0, index) + this.data.slice(index + arg.d);
-                                }
-                                break;
-                            }
-                        }
-                        break;
-                    }
-                    case 3: {
-                        const [index, arg1, arg2] = op;
-                        if ('d' in arg2) {
-                            // delete and insert at index
-                            this.data = this.data.slice(0, index) + arg1 + this.data.slice(index + arg2.d);
-                        }
-                        break;
-                    }
-                }
-
-                // write back to documents map
+                this.data = ottext.apply(this.data, op as ShareDbTextOp) as string;
                 documents.set(parseInt(key, 10), this.data as string);
             }
 

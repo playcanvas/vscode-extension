@@ -14,6 +14,7 @@ import * as buffer from './utils/buffer';
 import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
+import { OTDocument } from './utils/ot-document';
 import { signal } from './utils/signal';
 import { hash, parsePath, guard, withTimeout, tryCatch, minimalDiff, sanitizeName } from './utils/utils';
 
@@ -37,7 +38,7 @@ type VirtualFile = {
       }
     | {
           type: 'file';
-          doc: Doc;
+          doc: OTDocument;
           dirty: boolean; // true if hash(doc.data) != asset.file.hash
       }
 );
@@ -303,46 +304,44 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return false;
         }
 
+        // wrap raw doc in OTDocument (canonical state owner)
+        const otdoc = new OTDocument(doc);
+
         const asset = this._assets.get(uniqueId);
         if (!asset?.file) {
             throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
         }
-        const docHash = hash(doc.data);
+        const docHash = hash(otdoc.data);
         const s3Hash = asset.file.hash;
         const dirty = docHash !== s3Hash;
 
         const file: VirtualFile = {
             type: 'file',
             uniqueId,
-            doc,
+            doc: otdoc,
             dirty
         };
         this._files.set(path, file);
 
-        // shareDB -> vscode
-        doc.on('op', (op: ShareDbTextOp, source) => {
-            // avoid echo
-            if (source === ShareDb.SOURCE) {
-                return;
-            }
-
+        // shareDB -> vscode (source filtering is internal to OTDocument)
+        otdoc.on('op', (op) => {
             const path = this._assetPath(uniqueId);
 
             // compute dirty: does doc content still differ from last S3 save?
             // if asset metadata is missing, defaults to dirty (undefined !== hash)
             const asset = this._assets.get(uniqueId);
-            const dirty = asset?.file?.hash !== hash(doc.data);
+            const dirty = asset?.file?.hash !== hash(otdoc.data);
             file.dirty = dirty;
 
             // update must run before save so buffer is written before indicator clears
-            this._events.emit('asset:file:update', path, op, buffer.from(doc.data));
+            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(otdoc.data));
             if (!dirty) {
                 this._events.emit('asset:file:save', path);
             }
         });
 
-        // emit file created event with ShareDB content for disk
-        this._events.emit('asset:file:create', path, 'file', buffer.from(doc.data));
+        // emit file created event with OTDocument content for disk
+        this._events.emit('asset:file:create', path, 'file', buffer.from(otdoc.data));
 
         this._log.debug(`added file ${path} (${dirty ? 'dirty' : 'clean'})`);
 
@@ -1141,7 +1140,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // compute minimal diff and submit as single atomic op
         // note: avoids two-step delete+insert which can lose concurrent remote edits
-        const oldText = file.doc.data as string;
+        const oldText = file.doc.data;
         const newText = buffer.toString(content);
 
         if (oldText === newText) {
@@ -1152,13 +1151,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const delLen = oldText.length - prefix - suffix;
         const insText = newText.substring(prefix, newText.length - suffix);
 
-        // submit single atomic op
+        // submit single atomic op via OTDocument (applies locally + submits to ShareDB)
         if (delLen > 0 && insText.length > 0) {
-            file.doc.submitOp([prefix, insText, { d: delLen }], { source: ShareDb.SOURCE });
+            file.doc.apply([prefix, insText, { d: delLen }]);
         } else if (delLen > 0) {
-            file.doc.submitOp([prefix, { d: delLen }], { source: ShareDb.SOURCE });
+            file.doc.apply([prefix, { d: delLen }]);
         } else if (insText.length > 0) {
-            file.doc.submitOp([prefix, insText], { source: ShareDb.SOURCE });
+            file.doc.apply([prefix, insText]);
         }
 
         // mark as dirty (ops submitted that aren't saved yet)
@@ -1195,10 +1194,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
             this._log.debug(`saved file ${path}`);
         };
-        if (file.doc.hasPending()) {
+        if (file.doc.pending) {
             file.doc.once('nothing pending', send);
-            // re-check: event may have fired between hasPending() and once()
-            if (!file.doc.hasPending()) {
+            // re-check: event may have fired between pending and once()
+            if (!file.doc.pending) {
                 file.doc.off('nothing pending', send);
                 send();
             }
@@ -1242,7 +1241,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async flushPending(timeoutMs = 5000) {
         const pending = Array.from(this._files.values()).filter(
-            (f): f is VirtualFile & { type: 'file' } => f.type === 'file' && f.doc.hasPending()
+            (f): f is VirtualFile & { type: 'file' } => f.type === 'file' && f.doc.pending
         );
         if (!pending.length) {
             return;
@@ -1252,13 +1251,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const waits = pending.map(
             (f) =>
                 new Promise<void>((resolve) => {
-                    if (!f.doc.hasPending()) {
+                    if (!f.doc.pending) {
                         resolve();
                         return;
                     }
                     const done = () => resolve();
                     f.doc.once('nothing pending', done);
-                    if (!f.doc.hasPending()) {
+                    if (!f.doc.pending) {
                         f.doc.off('nothing pending', done);
                         resolve();
                     }
