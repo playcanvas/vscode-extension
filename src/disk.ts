@@ -1,7 +1,10 @@
 import ignore from 'ignore';
+import { type } from 'ot-text';
+import type { Doc } from 'sharedb';
 import * as vscode from 'vscode';
 
 import { NAME } from './config';
+import { ShareDb } from './connections/sharedb';
 import { simpleNotification } from './notification';
 import type { ProjectManager } from './project-manager';
 import type { EventMap } from './typings/event-map';
@@ -24,6 +27,9 @@ import {
     hash,
     minimalDiff
 } from './utils/utils';
+
+const fullRange = (doc: vscode.TextDocument) =>
+    new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
 
 const readDirRecursive = async (uri: vscode.Uri) => {
     const entries = await vscode.workspace.fs.readDirectory(uri);
@@ -91,7 +97,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _echo: Map<string, string> = new Map<string, string>();
 
-    private _locks: Set<string> = new Set<string>();
+    private _pending = new Map<string, { pre: ShareDbTextOp[]; post: ShareDbTextOp[]; applied: boolean }>();
 
     private _syncing = new Set<string>();
 
@@ -207,6 +213,58 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             });
     }
 
+    // drain pending ops queued during an async applyEdit gap.
+    // transformAgainst: the remote op to OT-transform pre-remote ops against (if any).
+    private async _drain(
+        uri: vscode.Uri,
+        file: { doc: Doc },
+        document: vscode.TextDocument,
+        transformAgainst?: ShareDbTextOp
+    ) {
+        const entry = this._pending.get(`${uri}`);
+        if (!entry || (entry.pre.length === 0 && entry.post.length === 0)) {
+            return false;
+        }
+
+        // force-reset to doc.data (clean OT base)
+        const docData = file.doc.data as string;
+        if (document.getText() !== docData) {
+            const reset = new vscode.WorkspaceEdit();
+            reset.replace(uri, fullRange(document), docData);
+            await vscode.workspace.applyEdit(reset);
+        }
+
+        // pre-remote ops: compose + transform against remote op
+        if (entry.pre.length > 0 && transformAgainst) {
+            let composed = entry.pre[0];
+            for (let i = 1; i < entry.pre.length; i++) {
+                composed = type.compose(composed, entry.pre[i]) as ShareDbTextOp;
+            }
+            const transformed = type.transform(composed, transformAgainst, 'left') as ShareDbTextOp;
+            file.doc.submitOp(transformed, { source: ShareDb.SOURCE });
+        }
+
+        // post-remote ops: compose + submit directly (already relative to post-R base)
+        if (entry.post.length > 0) {
+            let composed = entry.post[0];
+            for (let i = 1; i < entry.post.length; i++) {
+                composed = type.compose(composed, entry.post[i]) as ShareDbTextOp;
+            }
+            file.doc.submitOp(composed, { source: ShareDb.SOURCE });
+        }
+
+        // apply final state to buffer
+        const finalText = file.doc.data as string;
+        if (document.getText() !== finalText) {
+            const sync = new vscode.WorkspaceEdit();
+            sync.replace(uri, fullRange(document), finalText);
+            await vscode.workspace.applyEdit(sync);
+        }
+
+        this._sync(uri, buffer.from(finalText));
+        return true;
+    }
+
     private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
@@ -280,9 +338,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._opened.has(uri.path) ||
                 vscode.workspace.textDocuments.some((document) => document.uri.toString() === uri.toString());
             if (viewing) {
-                // lock before any await so onDidChangeTextDocument can't
-                // submit ops with stale offsets while doc.data is ahead of buffer
-                this._locks.add(`${uri}`);
+                // queue pending ops during async gap instead of dropping keystrokes
+                this._pending.set(`${uri}`, { pre: [], post: [], applied: false });
 
                 try {
                     const document = await vscode.workspace.openTextDocument(uri);
@@ -290,37 +347,41 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     workspaceEdit.set(uri, sharedb2vscode(document, [op]));
                     const applied = await vscode.workspace.applyEdit(workspaceEdit);
 
-                    // reconcile: applyEdit is async so buffer may drift from doc.data.
-                    // force-reset to doc.data if mismatch.
+                    // reconcile: drain any keystrokes captured during the async gap
                     if (this._projectManager && this._folderUri) {
                         const path = relativePath(uri, this._folderUri);
                         const file = this._projectManager.files.get(path);
                         if (file?.type === 'file') {
-                            const docData = file.doc.data as string;
-                            const currentText = document.getText();
-                            if (!applied || docData !== currentText) {
-                                const dropped = applied && docData !== currentText;
-                                const fullReplace = new vscode.WorkspaceEdit();
-                                fullReplace.replace(
-                                    uri,
-                                    new vscode.Range(document.positionAt(0), document.positionAt(currentText.length)),
-                                    docData
-                                );
-                                const resyncApplied = await vscode.workspace.applyEdit(fullReplace);
+                            const entry = this._pending.get(`${uri}`);
+                            const hasPending = entry && (entry.pre.length > 0 || entry.post.length > 0);
+
+                            if (hasPending) {
+                                const recovered = await this._drain(uri, file, document, op);
+                                if (recovered) {
+                                    this._log.info(
+                                        `sync.remote.recovered ${uri} ${opdiff(op)} pre=${entry.pre.length} post=${entry.post.length}`
+                                    );
+                                }
+                                return;
+                            }
+
+                            // no pending ops — fall back to force-reset if buffer drifted
+                            if (!applied || (file.doc.data as string) !== document.getText()) {
+                                const docData = file.doc.data as string;
+                                const reset = new vscode.WorkspaceEdit();
+                                reset.replace(uri, fullRange(document), docData);
+                                const resyncApplied = await vscode.workspace.applyEdit(reset);
                                 if (!resyncApplied) {
                                     this._log.error(`resync.remote.failed ${uri}`);
                                 }
                                 this._sync(uri, buffer.from(docData));
-                                if (dropped) {
-                                    this._log.error(`sync.remote.dropped ${uri} ${opdiff(op)}`);
-                                }
-                                this._log.warn(`sync.remote.resync ${uri} applied=${applied} dropped=${dropped}`);
+                                this._log.warn(`sync.remote.resync ${uri} applied=${applied}`);
                                 return;
                             }
                         }
                     }
                 } finally {
-                    this._locks.delete(`${uri}`);
+                    this._pending.delete(`${uri}`);
                 }
             }
 
@@ -467,22 +528,36 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            this._locks.add(`${doc.uri}`);
+            this._pending.set(`${doc.uri}`, { pre: [], post: [], applied: false });
             try {
                 const current = doc.getText();
                 const expected = file.doc.data as string;
 
                 if (current !== expected) {
                     // buffer has stale content -- apply minimal diff
+                    // build correction op for OT transform of queued keystrokes
                     const { prefix, suffix } = minimalDiff(current, expected);
+                    const delLen = current.length - prefix - suffix;
+                    const insText = expected.substring(prefix, expected.length - suffix);
+                    const correctionOp: ShareDbTextOp =
+                        delLen > 0 && insText.length > 0
+                            ? [prefix, insText, { d: delLen }]
+                            : delLen > 0
+                              ? [prefix, { d: delLen }]
+                              : [prefix, insText];
+
                     const edit = new vscode.WorkspaceEdit();
                     edit.replace(
                         doc.uri,
                         new vscode.Range(doc.positionAt(prefix), doc.positionAt(current.length - suffix)),
-                        expected.substring(prefix, expected.length - suffix)
+                        insText
                     );
                     if (await vscode.workspace.applyEdit(edit)) {
-                        this._sync(doc.uri, buffer.from(expected));
+                        // drain pending keystrokes, transforming pre-ops against correction
+                        const recovered = await this._drain(doc.uri, file, doc, correctionOp);
+                        if (!recovered) {
+                            this._sync(doc.uri, buffer.from(expected));
+                        }
                     } else {
                         this._log.warn(`dirtify applyEdit failed for ${doc.uri}`);
                     }
@@ -494,9 +569,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const edit2 = new vscode.WorkspaceEdit();
                     edit2.delete(doc.uri, new vscode.Range(0, 0, 0, 1));
                     await vscode.workspace.applyEdit(edit2);
+
+                    // drain any keystrokes queued during the noop gap (no transform needed)
+                    await this._drain(doc.uri, file, doc);
                 }
             } finally {
-                this._locks.delete(`${doc.uri}`);
+                this._pending.delete(`${doc.uri}`);
             }
 
             this._log.debug(`dirtify ${doc.uri}`);
@@ -549,8 +627,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // check if locked (from remote update)
-            if (this._locks.has(`${document.uri}`)) {
+            // check if pending (from remote update or dirtify) — queue ops with phase tracking
+            const entry = this._pending.get(`${document.uri}`);
+            if (entry) {
+                const text = document.getText();
+                // detect echo from our own applyEdit (remote op applied to buffer)
+                if (file.doc.data === text) {
+                    entry.applied = true;
+                    return;
+                }
+                const ops = vscode2sharedb(contentChanges);
+                const target = entry.applied ? entry.post : entry.pre;
+                for (const [op] of ops) {
+                    target.push(op);
+                }
                 return;
             }
 
