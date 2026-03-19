@@ -626,6 +626,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // cancel pending debounced write to prevent it firing after native save
             this._debouncer.cancel(`${document.uri}`);
 
+            // detect if _sync already wrote to disk (bumping mtime) before save
+            if (this._echo.has(`${document.uri}:change`)) {
+                this._log.error(`save.mtime.risk ${path}`);
+            }
+
             // write buffer to disk so mtime is fresh before native save,
             // preventing "file on disk is newer" when initial sync or
             // remote edits wrote to disk after VS Code last tracked mtime
