@@ -925,7 +925,7 @@ suite('extension', () => {
         const tdoc = await vscode.workspace.openTextDocument(uri);
 
         // create update promise
-        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [[0, '// REMOTE COMMENT\n']]);
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [['// REMOTE COMMENT\n']]);
 
         // create change promise
         const changed = new Promise<void>((resolve) => {
@@ -943,7 +943,7 @@ suite('extension', () => {
         // make remote change
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
         assert.ok(doc, 'sharedb document should exist');
-        doc.submitOp([0, '// REMOTE COMMENT\n'], { source: 'remote' });
+        doc.submitOp(['// REMOTE COMMENT\n'], { source: 'remote' });
         const newDocument = `// REMOTE COMMENT\n${document}`;
 
         // check if remote update was detected
@@ -971,7 +971,7 @@ suite('extension', () => {
         assert.ok(document, 'document should exist');
 
         // create update promise
-        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [[0, '// REMOTE COMMENT\n']]);
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [['// REMOTE COMMENT\n']]);
 
         // create change watcher
         const watcher = watchFilePromise(folderUri, asset.name, 'change');
@@ -979,7 +979,7 @@ suite('extension', () => {
         // make remote change
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
         assert.ok(doc, 'sharedb document should exist');
-        doc.submitOp([0, '// REMOTE COMMENT\n'], { source: 'remote' });
+        doc.submitOp(['// REMOTE COMMENT\n'], { source: 'remote' });
 
         // check if remote update was detected
         await assertResolves(updated, 'sharedb.op');
@@ -1009,7 +1009,7 @@ suite('extension', () => {
 
         // create update promise
         const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [0, '// LOCAL TEST COMMENT\n'] // insert at start
+            ['// LOCAL TEST COMMENT\n'] // insert at start
         ]);
 
         // create change watcher
@@ -1444,7 +1444,7 @@ suite('extension', () => {
                 }
             });
         });
-        doc.submitOp([0, insert], { source: 'remote' });
+        doc.submitOp([insert], { source: 'remote' });
         await assertResolves(changed, 'vscode.onDidChangeTextDocument');
 
         // revert op — hash matches S3 so asset:file:save fires
@@ -1456,7 +1456,7 @@ suite('extension', () => {
                 }
             });
         });
-        doc.submitOp([0, { d: insert.length }], { source: 'remote' });
+        doc.submitOp([{ d: insert.length }], { source: 'remote' });
 
         await assertResolves(reverted, 'vscode.onDidChangeTextDocument');
         assert.strictEqual(tdoc.getText(), content, 'content should match original');

@@ -2,7 +2,6 @@ import ignore from 'ignore';
 import * as vscode from 'vscode';
 
 import { NAME } from './config';
-import { ShareDb } from './connections/sharedb';
 import { simpleNotification } from './notification';
 import type { ProjectManager } from './project-manager';
 import type { EventMap } from './typings/event-map';
@@ -125,7 +124,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         }
 
         const file = pm.files.get(Disk.IGNORE_FILE);
-        const text = deleted ? '' : file?.type === 'file' ? (file.doc.data as string) : '';
+        const text = deleted ? '' : file?.type === 'file' ? (file.doc.data ?? '') : '';
         const h = hash(buffer.from(text));
         if (h === this._ignoreHash) {
             return;
@@ -282,7 +281,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 vscode.workspace.textDocuments.some((document) => document.uri.toString() === uri.toString());
             if (viewing) {
                 // lock before any await so onDidChangeTextDocument can't
-                // submit ops with stale offsets while doc.data is ahead of buffer
+                // submit ops with stale offsets while canonical state is ahead of buffer
                 this._locks.add(`${uri}`);
 
                 try {
@@ -291,36 +290,36 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     workspaceEdit.set(uri, sharedb2vscode(document, [op]));
                     const applied = await vscode.workspace.applyEdit(workspaceEdit);
 
-                    // reconcile: applyEdit is async so buffer may drift from doc.data
+                    // reconcile: applyEdit is async so buffer may drift from canonical state
                     // if user typed during the gap, VS Code merges keystrokes into
-                    // the buffer natively — diff doc.data vs buffer to recover them
+                    // the buffer natively — diff canonical state vs buffer to recover them
                     if (this._projectManager && this._folderUri) {
                         const path = relativePath(uri, this._folderUri);
                         const file = this._projectManager.files.get(path);
                         if (file?.type === 'file') {
-                            const docData = file.doc.data as string;
+                            const docText = file.doc.data;
                             const currentText = document.getText();
                             if (!applied) {
-                                // applyEdit failed — force-reset to server state
+                                // applyEdit failed — force-reset to canonical state
                                 const reset = new vscode.WorkspaceEdit();
                                 const range = new vscode.Range(
                                     document.positionAt(0),
                                     document.positionAt(currentText.length)
                                 );
-                                reset.replace(uri, range, docData);
+                                reset.replace(uri, range, docText);
                                 const resyncApplied = await vscode.workspace.applyEdit(reset);
                                 if (!resyncApplied) {
                                     this._log.error(`resync.remote.failed ${uri}`);
                                 }
-                                this._sync(uri, buffer.from(docData));
+                                this._sync(uri, buffer.from(docText));
                                 this._log.warn(`sync.remote.resync ${uri} applied=false`);
                                 return;
                             }
-                            if (docData !== currentText) {
+                            if (docText !== currentText) {
                                 // buffer drifted — user typed during async gap.
-                                // diff against doc.data to extract the net user edit
-                                const { prefix, suffix } = minimalDiff(docData, currentText);
-                                const delLen = docData.length - prefix - suffix;
+                                // diff against OTDocument.text to extract the net user edit
+                                const { prefix, suffix } = minimalDiff(docText, currentText);
+                                const delLen = docText.length - prefix - suffix;
                                 const insText = currentText.substring(prefix, currentText.length - suffix);
                                 const recovered: ShareDbTextOp =
                                     delLen > 0 && insText.length > 0
@@ -328,13 +327,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         : delLen > 0
                                           ? [prefix, { d: delLen }]
                                           : [prefix, insText];
-                                file.doc.submitOp(recovered, { source: ShareDb.SOURCE });
+                                file.doc.apply(recovered);
                                 const prev = file.dirty;
                                 file.dirty = true;
                                 if (!prev) {
                                     this._events.emit('asset:file:dirty', path, true);
                                 }
-                                this._sync(document.uri, buffer.from(file.doc.data as string));
+                                this._sync(document.uri, buffer.from(file.doc.data));
                                 this._log.info(
                                     `sync.remote.recovered ${uri} ${opdiff(op)} recovered=${opdiff(recovered)}`
                                 );
@@ -493,7 +492,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._locks.add(`${doc.uri}`);
             try {
                 const current = doc.getText();
-                const expected = file.doc.data as string;
+                const expected = file.doc.data;
 
                 if (current !== expected) {
                     // buffer has stale content -- apply minimal diff
@@ -583,10 +582,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // submit ops
-            const opOptions = vscode2sharedb(contentChanges);
-            for (const [op, options] of opOptions) {
-                file.doc.submitOp(op, options);
+            // submit ops via OTDocument (applies locally + submits to ShareDB)
+            const ops = vscode2sharedb(contentChanges);
+            for (const op of ops) {
+                file.doc.apply(op);
             }
 
             // sync to disk (debounced)
@@ -594,17 +593,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // mark as dirty if any ops submitted (any unsaved changes)
             const prev = file.dirty;
-            file.dirty ||= !!opOptions.length;
+            file.dirty ||= !!ops.length;
             if (!prev && file.dirty) {
                 this._events.emit('asset:file:dirty', path, true);
             }
 
             // external disk change — force dirty indicator
-            if (!document.isDirty && opOptions.length) {
+            if (!document.isDirty && ops.length) {
                 this._dirtify(document);
             }
 
-            this._log.debug(`document.change ${document.uri.path} ${opOptions.map(([o]) => opdiff(o)).join(' ')}`);
+            this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => opdiff(o)).join(' ')}`);
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;
