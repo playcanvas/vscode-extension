@@ -192,6 +192,7 @@ const client = new BrowserClient({
 const scope = new Scope();
 scope.setClient(client);
 scope.setTag('page', 'vscode-extension');
+scope.setTag('os', process.platform);
 client.init();
 
 export const captureException = (error: Error, source?: string) => {
