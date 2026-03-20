@@ -304,14 +304,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         const file = this._projectManager.files.get(path);
                         if (file?.type === 'file') {
                             const expectedText = snapshot;
-                            const currentText = normEol(document.getText());
+                            const raw = document.getText();
+                            const currentText = normEol(raw);
                             if (!applied) {
                                 // applyEdit failed — force-reset to emission-time snapshot
                                 const reset = new vscode.WorkspaceEdit();
-                                const range = new vscode.Range(
-                                    document.positionAt(0),
-                                    document.positionAt(currentText.length)
-                                );
+                                const range = new vscode.Range(document.positionAt(0), document.positionAt(raw.length));
                                 reset.replace(uri, range, expectedText);
                                 const resyncApplied = await vscode.workspace.applyEdit(reset);
                                 if (!resyncApplied) {
@@ -496,7 +494,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             this._locks.add(`${doc.uri}`);
             try {
-                const current = normEol(doc.getText());
+                const current = doc.getText();
                 const expected = file.doc.text;
 
                 if (current !== expected) {
