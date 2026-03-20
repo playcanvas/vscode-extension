@@ -272,6 +272,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _update(uri: vscode.Uri, op: ShareDbTextOp, content: Uint8Array) {
+        // decode before mutex so content (Uint8Array) isn't captured in the
+        // closure — queued callbacks only hold the string, not the buffer
+        const snapshot = buffer.toString(content);
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
@@ -299,7 +302,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         const path = relativePath(uri, this._folderUri);
                         const file = this._projectManager.files.get(path);
                         if (file?.type === 'file') {
-                            const expectedText = buffer.toString(content);
+                            const expectedText = snapshot;
                             const currentText = document.getText();
                             if (!applied) {
                                 // applyEdit failed — force-reset to emission-time snapshot
@@ -348,7 +351,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // debounce-write to disk (remote flag skips watcher echo)
-            this._sync(uri, content, true);
+            this._sync(uri, buffer.from(snapshot), true);
 
             this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri} ${opdiff(op)}`);
         });
