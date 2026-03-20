@@ -311,7 +311,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (!asset?.file) {
             throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
         }
-        const docHash = hash(otdoc.data);
+        const docHash = hash(otdoc.text);
         const s3Hash = asset.file.hash;
         const dirty = docHash !== s3Hash;
 
@@ -330,18 +330,18 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // compute dirty: does doc content still differ from last S3 save?
             // if asset metadata is missing, defaults to dirty (undefined !== hash)
             const asset = this._assets.get(uniqueId);
-            const dirty = asset?.file?.hash !== hash(otdoc.data);
+            const dirty = asset?.file?.hash !== hash(otdoc.text);
             file.dirty = dirty;
 
             // update must run before save so buffer is written before indicator clears
-            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(otdoc.data));
+            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(otdoc.text));
             if (!dirty) {
                 this._events.emit('asset:file:save', path);
             }
         });
 
         // emit file created event with OTDocument content for disk
-        this._events.emit('asset:file:create', path, 'file', buffer.from(otdoc.data));
+        this._events.emit('asset:file:create', path, 'file', buffer.from(otdoc.text));
 
         this._log.debug(`added file ${path} (${dirty ? 'dirty' : 'clean'})`);
 
@@ -794,7 +794,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                     // note: only mark clean if local content matches the saved hash,
                     // otherwise local unsaved changes would be silently discarded
-                    const localHash = hash(file.doc.data);
+                    const localHash = hash(file.doc.text);
                     if (fileTo?.hash === localHash) {
                         file.dirty = false;
                     }
@@ -1140,7 +1140,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // compute minimal diff and submit as single atomic op
         // note: avoids two-step delete+insert which can lose concurrent remote edits
-        const oldText = file.doc.data;
+        const oldText = file.doc.text;
         const newText = buffer.toString(content);
 
         if (oldText === newText) {
