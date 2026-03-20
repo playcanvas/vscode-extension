@@ -16,7 +16,7 @@ import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { OTDocument } from './utils/ot-document';
 import { signal } from './utils/signal';
-import { hash, parsePath, guard, withTimeout, tryCatch, diffOp, sanitizeName } from './utils/utils';
+import { hash, parsePath, guard, withTimeout, tryCatch, diffOp, sanitizeName, normEol } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -1140,7 +1140,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // compute minimal diff and submit as single atomic op
         // note: avoids two-step delete+insert which can lose concurrent remote edits
-        const op = diffOp(file.doc.text, buffer.toString(content));
+        const op = diffOp(file.doc.text, normEol(buffer.toString(content)));
         if (!op) {
             return;
         }
