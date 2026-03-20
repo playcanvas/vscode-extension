@@ -7,6 +7,8 @@ import type { ShareDbTextOp } from '../typings/sharedb';
 
 import type { signal } from './signal';
 
+export const normEol = (s: string) => s.replace(/\r\n?/g, '\n');
+
 // eslint-disable-next-line no-control-regex
 const ILLEGAL_FS_CHARS = /[<>:"/\\|?*\x00-\x1F\x7F]/g;
 
@@ -77,7 +79,7 @@ export const vscode2sharedb = (changes: readonly vscode.TextDocumentContentChang
     for (const change of changes) {
         const origOffset = change.rangeOffset;
         const deleteLen = change.rangeLength;
-        const text = change.text;
+        const text = normEol(change.text);
 
         // adjust offset based on previously processed changes
         let adjusted = origOffset;
