@@ -16,7 +16,7 @@ import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { OTDocument } from './utils/ot-document';
 import { signal } from './utils/signal';
-import { hash, parsePath, guard, withTimeout, tryCatch, minimalDiff, sanitizeName } from './utils/utils';
+import { hash, parsePath, guard, withTimeout, tryCatch, diffOp, sanitizeName } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -311,7 +311,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (!asset?.file) {
             throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
         }
-        const docHash = hash(otdoc.data);
+        const docHash = hash(otdoc.text);
         const s3Hash = asset.file.hash;
         const dirty = docHash !== s3Hash;
 
@@ -330,18 +330,18 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // compute dirty: does doc content still differ from last S3 save?
             // if asset metadata is missing, defaults to dirty (undefined !== hash)
             const asset = this._assets.get(uniqueId);
-            const dirty = asset?.file?.hash !== hash(otdoc.data);
+            const dirty = asset?.file?.hash !== hash(otdoc.text);
             file.dirty = dirty;
 
             // update must run before save so buffer is written before indicator clears
-            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(otdoc.data));
+            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(otdoc.text));
             if (!dirty) {
                 this._events.emit('asset:file:save', path);
             }
         });
 
         // emit file created event with OTDocument content for disk
-        this._events.emit('asset:file:create', path, 'file', buffer.from(otdoc.data));
+        this._events.emit('asset:file:create', path, 'file', buffer.from(otdoc.text));
 
         this._log.debug(`added file ${path} (${dirty ? 'dirty' : 'clean'})`);
 
@@ -794,7 +794,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                     // note: only mark clean if local content matches the saved hash,
                     // otherwise local unsaved changes would be silently discarded
-                    const localHash = hash(file.doc.data);
+                    const localHash = hash(file.doc.text);
                     if (fileTo?.hash === localHash) {
                         file.dirty = false;
                     }
@@ -1140,25 +1140,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // compute minimal diff and submit as single atomic op
         // note: avoids two-step delete+insert which can lose concurrent remote edits
-        const oldText = file.doc.data;
-        const newText = buffer.toString(content);
-
-        if (oldText === newText) {
+        const op = diffOp(file.doc.text, buffer.toString(content));
+        if (!op) {
             return;
         }
 
-        const { prefix, suffix } = minimalDiff(oldText, newText);
-        const delLen = oldText.length - prefix - suffix;
-        const insText = newText.substring(prefix, newText.length - suffix);
-
-        // submit single atomic op via OTDocument (applies locally + submits to ShareDB)
-        if (delLen > 0 && insText.length > 0) {
-            file.doc.apply([prefix, insText, { d: delLen }]);
-        } else if (delLen > 0) {
-            file.doc.apply([prefix, { d: delLen }]);
-        } else if (insText.length > 0) {
-            file.doc.apply([prefix, insText]);
-        }
+        file.doc.apply(op);
 
         // mark as dirty (ops submitted that aren't saved yet)
         const prev = file.dirty;

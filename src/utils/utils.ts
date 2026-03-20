@@ -184,6 +184,17 @@ export const minimalDiff = (a: string, b: string) => {
     return { prefix, suffix };
 };
 
+// build a ShareDbTextOp from the minimal diff between two strings
+export const diffOp = (from: string, to: string): ShareDbTextOp | null => {
+    if (from === to) {
+        return null;
+    }
+    const { prefix, suffix } = minimalDiff(from, to);
+    const del = from.length - prefix - suffix;
+    const ins = to.substring(prefix, to.length - suffix);
+    return del > 0 && ins.length > 0 ? [prefix, ins, { d: del }] : del > 0 ? [prefix, { d: del }] : [prefix, ins];
+};
+
 export const sanitizeName = (name: string) => {
     let result = name.replace(ILLEGAL_FS_CHARS, '_').replace(/^ +|[. ]+$/g, '');
     if (WINDOWS_RESERVED.test(result)) {

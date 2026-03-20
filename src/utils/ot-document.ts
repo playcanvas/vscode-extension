@@ -30,7 +30,7 @@ class OTDocument {
         doc.on('nothing pending', () => this._emit('nothing pending'));
     }
 
-    get data() {
+    get text() {
         return this._text;
     }
 
