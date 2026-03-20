@@ -16,7 +16,7 @@ import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { OTDocument } from './utils/ot-document';
 import { signal } from './utils/signal';
-import { hash, parsePath, guard, withTimeout, tryCatch, minimalDiff, sanitizeName } from './utils/utils';
+import { hash, parsePath, guard, withTimeout, tryCatch, diffOp, sanitizeName } from './utils/utils';
 
 const BATCH_SIZE = 256;
 const FILE_TYPES = ['css', 'folder', 'html', 'json', 'script', 'shader', 'text'];
@@ -1140,25 +1140,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // compute minimal diff and submit as single atomic op
         // note: avoids two-step delete+insert which can lose concurrent remote edits
-        const oldText = file.doc.text;
-        const newText = buffer.toString(content);
-
-        if (oldText === newText) {
+        const op = diffOp(file.doc.text, buffer.toString(content));
+        if (!op) {
             return;
         }
 
-        const { prefix, suffix } = minimalDiff(oldText, newText);
-        const delLen = oldText.length - prefix - suffix;
-        const insText = newText.substring(prefix, newText.length - suffix);
-
-        // submit single atomic op via OTDocument (applies locally + submits to ShareDB)
-        if (delLen > 0 && insText.length > 0) {
-            file.doc.apply([prefix, insText, { d: delLen }]);
-        } else if (delLen > 0) {
-            file.doc.apply([prefix, { d: delLen }]);
-        } else if (insText.length > 0) {
-            file.doc.apply([prefix, insText]);
-        }
+        file.doc.apply(op);
 
         // mark as dirty (ops submitted that aren't saved yet)
         const prev = file.dirty;

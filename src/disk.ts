@@ -1,4 +1,5 @@
 import ignore from 'ignore';
+import { type as ottext } from 'ot-text';
 import * as vscode from 'vscode';
 
 import { NAME } from './config';
@@ -22,7 +23,8 @@ import {
     fileExists,
     tryCatch,
     hash,
-    minimalDiff
+    minimalDiff,
+    diffOp
 } from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
@@ -297,37 +299,36 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         const path = relativePath(uri, this._folderUri);
                         const file = this._projectManager.files.get(path);
                         if (file?.type === 'file') {
-                            const docText = file.doc.text;
+                            const expectedText = buffer.toString(content);
                             const currentText = document.getText();
                             if (!applied) {
-                                // applyEdit failed — force-reset to canonical state
+                                // applyEdit failed — force-reset to emission-time snapshot
                                 const reset = new vscode.WorkspaceEdit();
                                 const range = new vscode.Range(
                                     document.positionAt(0),
                                     document.positionAt(currentText.length)
                                 );
-                                reset.replace(uri, range, docText);
+                                reset.replace(uri, range, expectedText);
                                 const resyncApplied = await vscode.workspace.applyEdit(reset);
                                 if (!resyncApplied) {
                                     this._log.error(`resync.remote.failed ${uri}`);
                                 }
-                                this._sync(uri, buffer.from(docText));
+                                this._sync(uri, buffer.from(expectedText));
                                 this._log.warn(`sync.remote.resync ${uri} applied=false`);
                                 return;
                             }
-                            if (docText !== currentText) {
+                            const recovered = diffOp(expectedText, currentText);
+                            if (recovered) {
                                 // buffer drifted — user typed during async gap.
-                                // diff against OTDocument.text to extract the net user edit
-                                const { prefix, suffix } = minimalDiff(docText, currentText);
-                                const delLen = docText.length - prefix - suffix;
-                                const insText = currentText.substring(prefix, currentText.length - suffix);
-                                const recovered: ShareDbTextOp =
-                                    delLen > 0 && insText.length > 0
-                                        ? [prefix, insText, { d: delLen }]
-                                        : delLen > 0
-                                          ? [prefix, { d: delLen }]
-                                          : [prefix, insText];
-                                file.doc.apply(recovered);
+                                // if canonical state advanced past this op's snapshot,
+                                // transform recovered against the advancement to keep
+                                // positions valid relative to current _text
+                                const adv = diffOp(expectedText, file.doc.text);
+                                const op2 = adv
+                                    ? (ottext.transform(recovered, adv, 'left') as ShareDbTextOp)
+                                    : recovered;
+
+                                file.doc.apply(op2);
                                 const prev = file.dirty;
                                 file.dirty = true;
                                 if (!prev) {
