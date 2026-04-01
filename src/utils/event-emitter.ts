@@ -14,6 +14,14 @@ class EventEmitter<T extends EventMap = Record<string, any[]>> {
         return listener;
     }
 
+    once<K extends Key<T>>(event: K, listener: Listener<T, K>) {
+        const wrapper = ((...args: T[K]) => {
+            this.off(event, wrapper as Listener<T, K>);
+            listener(...args);
+        }) as Listener<T, K>;
+        this.on(event, wrapper);
+    }
+
     off<K extends Key<T>>(event: K, listener: Listener<T, K>) {
         if (!this._listeners.has(event)) {
             return this;
