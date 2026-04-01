@@ -9,7 +9,7 @@ import { EventEmitter } from './event-emitter';
 const SOURCE = ShareDb.SOURCE;
 
 type OTDocumentEvents = {
-    op: [ShareDbTextOp];
+    op: [ShareDbTextOp, string];
     'nothing pending': [];
 };
 
@@ -27,8 +27,9 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
             if (source === SOURCE) {
                 return;
             }
+            const prev = this._text;
             this._text = ottext.apply(this._text, op) as string;
-            this.emit('op', op);
+            this.emit('op', op, prev);
         });
 
         doc.on('nothing pending', () => this.emit('nothing pending'));
