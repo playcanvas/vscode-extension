@@ -323,8 +323,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                             if (!applied) {
                                 // applyEdit failed — force-reset to canonical state
+                                const curRaw = document.getText();
                                 const reset = new vscode.WorkspaceEdit();
-                                const range = new vscode.Range(document.positionAt(0), document.positionAt(raw.length));
+                                const range = new vscode.Range(
+                                    document.positionAt(0),
+                                    document.positionAt(curRaw.length)
+                                );
                                 reset.replace(uri, range, file.doc.text);
                                 await vscode.workspace.applyEdit(reset);
                                 this._sync(uri, buffer.from(file.doc.text));
