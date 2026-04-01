@@ -4,18 +4,22 @@ import type { Doc } from 'sharedb';
 import { ShareDb } from '../connections/sharedb';
 import type { ShareDbTextOp } from '../typings/sharedb';
 
+import { EventEmitter } from './event-emitter';
+
 const SOURCE = ShareDb.SOURCE;
 
-type Listener = (...args: unknown[]) => void;
+type OTDocumentEvents = {
+    op: [ShareDbTextOp];
+    'nothing pending': [];
+};
 
-class OTDocument {
+class OTDocument extends EventEmitter<OTDocumentEvents> {
     private _text: string;
 
     private _doc: Doc;
 
-    private _listeners = new Map<string, Set<Listener>>();
-
     constructor(doc: Doc) {
+        super();
         this._text = doc.data as string;
         this._doc = doc;
 
@@ -24,10 +28,10 @@ class OTDocument {
                 return;
             }
             this._text = ottext.apply(this._text, op) as string;
-            this._emit('op', op);
+            this.emit('op', op);
         });
 
-        doc.on('nothing pending', () => this._emit('nothing pending'));
+        doc.on('nothing pending', () => this.emit('nothing pending'));
     }
 
     get text() {
@@ -45,36 +49,8 @@ class OTDocument {
         return this._doc.hasPending();
     }
 
-    on(event: string, fn: Listener) {
-        const set = this._listeners.get(event) ?? new Set();
-        set.add(fn);
-        this._listeners.set(event, set);
-    }
-
-    off(event: string, fn: Listener) {
-        this._listeners.get(event)?.delete(fn);
-    }
-
-    once(event: string, fn: Listener) {
-        const wrapper = (...args: unknown[]) => {
-            this.off(event, wrapper);
-            fn(...args);
-        };
-        this.on(event, wrapper);
-    }
-
     get raw() {
         return this._doc;
-    }
-
-    private _emit(event: string, ...args: unknown[]) {
-        const set = this._listeners.get(event);
-        if (!set) {
-            return;
-        }
-        for (const fn of set) {
-            fn(...args);
-        }
     }
 }
 
