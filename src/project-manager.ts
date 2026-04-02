@@ -334,7 +334,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             file.dirty = dirty;
 
             // update must run before save so buffer is written before indicator clears
-            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(otdoc.text), prev);
+            this._events.emit('asset:file:update', path, op as ShareDbTextOp, otdoc.text, prev);
             if (!dirty) {
                 this._events.emit('asset:file:save', path);
             }

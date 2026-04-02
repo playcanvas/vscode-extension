@@ -272,10 +272,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
-    private _update(uri: vscode.Uri, op: ShareDbTextOp, content: Uint8Array, prev: string) {
-        // decode before mutex so content (Uint8Array) isn't captured in the
-        // closure — queued callbacks only hold the string, not the buffer
-        const snapshot = normEol(buffer.toString(content));
+    private _update(uri: vscode.Uri, op: ShareDbTextOp, content: string, prev: string) {
+        const snapshot = normEol(content);
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
