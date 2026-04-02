@@ -272,10 +272,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
-    private _update(uri: vscode.Uri, op: ShareDbTextOp, content: Uint8Array) {
-        // decode before mutex so content (Uint8Array) isn't captured in the
-        // closure — queued callbacks only hold the string, not the buffer
-        const snapshot = normEol(buffer.toString(content));
+    private _update(uri: vscode.Uri, op: ShareDbTextOp, content: string, prev: string) {
+        const snapshot = normEol(content);
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
@@ -292,54 +290,76 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                 try {
                     const document = await vscode.workspace.openTextDocument(uri);
-                    const workspaceEdit = new vscode.WorkspaceEdit();
-                    workspaceEdit.set(uri, sharedb2vscode(document, [op]));
-                    const applied = await vscode.workspace.applyEdit(workspaceEdit);
+                    const raw = document.getText();
+                    const bufferText = normEol(raw);
 
-                    // reconcile: applyEdit is async so buffer may drift from canonical state
-                    // if user typed during the gap, VS Code merges keystrokes into
-                    // the buffer natively — diff canonical state vs buffer to recover them
+                    // detect unsubmitted keystrokes by diffing pre-op canonical vs buffer
+                    const userOp = diffOp(prev, bufferText);
+
+                    // transform remote op into buffer-space so positions align
+                    const bufferOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
+
+                    // apply remote op to buffer
+                    const edit = new vscode.WorkspaceEdit();
+                    if (document.eol === vscode.EndOfLine.CRLF) {
+                        // CRLF: OT offsets are LF-based and misalign with positionAt() on CRLF buffer.
+                        // compute target in LF, convert to CRLF, diff against raw buffer.
+                        const target = ottext.apply(bufferText, bufferOp) as string;
+                        const crlf = target.replace(/\n/g, '\r\n');
+                        const { prefix, suffix } = minimalDiff(raw, crlf);
+                        const del = raw.length - prefix - suffix;
+                        const ins = crlf.substring(prefix, crlf.length - suffix);
+                        const range = new vscode.Range(document.positionAt(prefix), document.positionAt(prefix + del));
+                        edit.replace(uri, range, ins);
+                    } else {
+                        edit.set(uri, sharedb2vscode(document, [bufferOp]));
+                    }
+                    const applied = await vscode.workspace.applyEdit(edit);
+
                     if (this._projectManager && this._folderUri) {
                         const path = relativePath(uri, this._folderUri);
                         const file = this._projectManager.files.get(path);
                         if (file?.type === 'file') {
-                            const expectedText = snapshot;
-                            const raw = document.getText();
-                            const currentText = normEol(raw);
-                            if (!applied) {
-                                // applyEdit failed — force-reset to emission-time snapshot
-                                const reset = new vscode.WorkspaceEdit();
-                                const range = new vscode.Range(document.positionAt(0), document.positionAt(raw.length));
-                                reset.replace(uri, range, expectedText);
-                                const resyncApplied = await vscode.workspace.applyEdit(reset);
-                                if (!resyncApplied) {
-                                    this._log.error(`resync.remote.failed ${uri}`);
+                            // submit user keystrokes to OT (transformed against remote op)
+                            if (userOp) {
+                                const transformed = ottext.transform(userOp, op, 'left') as ShareDbTextOp;
+                                file.doc.apply(transformed);
+                                const wasDirty = file.dirty;
+                                file.dirty = true;
+                                if (!wasDirty) {
+                                    this._events.emit('asset:file:dirty', path, true);
                                 }
-                                this._sync(uri, buffer.from(expectedText));
+                            }
+
+                            if (!applied) {
+                                // applyEdit failed — force-reset to canonical state
+                                const curRaw = document.getText();
+                                const reset = new vscode.WorkspaceEdit();
+                                const range = new vscode.Range(
+                                    document.positionAt(0),
+                                    document.positionAt(curRaw.length)
+                                );
+                                reset.replace(uri, range, file.doc.text);
+                                await vscode.workspace.applyEdit(reset);
+                                this._sync(uri, buffer.from(file.doc.text));
                                 this._log.warn(`sync.remote.resync ${uri} applied=false`);
                                 return;
                             }
-                            const recovered = diffOp(expectedText, currentText);
-                            if (recovered) {
-                                // buffer drifted — user typed during async gap.
-                                // if canonical state advanced past this op's snapshot,
-                                // transform recovered against the advancement to keep
-                                // positions valid relative to current _text
-                                const adv = diffOp(expectedText, file.doc.text);
-                                const op2 = adv
-                                    ? (ottext.transform(recovered, adv, 'left') as ShareDbTextOp)
-                                    : recovered;
 
-                                file.doc.apply(op2);
-                                const prev = file.dirty;
+                            // reconcile: recover keystrokes typed during applyEdit await
+                            const postRaw = document.getText();
+                            const postText = normEol(postRaw);
+                            const expected = file.doc.text;
+                            const late = diffOp(expected, postText);
+                            if (late) {
+                                file.doc.apply(late);
+                                const wasDirty = file.dirty;
                                 file.dirty = true;
-                                if (!prev) {
+                                if (!wasDirty) {
                                     this._events.emit('asset:file:dirty', path, true);
                                 }
                                 this._sync(document.uri, buffer.from(file.doc.text));
-                                this._log.info(
-                                    `sync.remote.recovered ${uri} ${opdiff(op)} recovered=${opdiff(recovered)}`
-                                );
+                                this._log.info(`sync.remote.recovered ${uri} ${opdiff(op)} recovered=${opdiff(late)}`);
                                 return;
                             }
                         }
@@ -443,10 +463,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._checkIgnoreUpdated(uri);
             await this._create(uri, type, content);
         });
-        const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content) => {
+        const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content, prev) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri);
-            await this._update(uri, op, content);
+            await this._update(uri, op, content, prev);
         });
         const assetFileDelete = this._events.on('asset:file:delete', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);

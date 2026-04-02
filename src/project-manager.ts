@@ -324,7 +324,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._files.set(path, file);
 
         // shareDB -> vscode (source filtering is internal to OTDocument)
-        otdoc.on('op', (op) => {
+        otdoc.on('op', (op, prev) => {
             const path = this._assetPath(uniqueId);
 
             // compute dirty: does doc content still differ from last S3 save?
@@ -334,7 +334,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             file.dirty = dirty;
 
             // update must run before save so buffer is written before indicator clears
-            this._events.emit('asset:file:update', path, op as ShareDbTextOp, buffer.from(otdoc.text));
+            this._events.emit('asset:file:update', path, op as ShareDbTextOp, otdoc.text, prev);
             if (!dirty) {
                 this._events.emit('asset:file:save', path);
             }
