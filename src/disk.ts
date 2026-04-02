@@ -299,9 +299,21 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     // transform remote op into buffer-space so positions align
                     const bufferOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
 
-                    // apply remote op to buffer (positions now correct)
+                    // apply remote op to buffer
                     const edit = new vscode.WorkspaceEdit();
-                    edit.set(uri, sharedb2vscode(document, [bufferOp]));
+                    if (document.eol === vscode.EndOfLine.CRLF) {
+                        // CRLF: OT offsets are LF-based and misalign with positionAt() on CRLF buffer.
+                        // compute target in LF, convert to CRLF, diff against raw buffer.
+                        const target = ottext.apply(bufferText, bufferOp) as string;
+                        const crlf = target.replace(/\n/g, '\r\n');
+                        const { prefix, suffix } = minimalDiff(raw, crlf);
+                        const del = raw.length - prefix - suffix;
+                        const ins = crlf.substring(prefix, crlf.length - suffix);
+                        const range = new vscode.Range(document.positionAt(prefix), document.positionAt(prefix + del));
+                        edit.replace(uri, range, ins);
+                    } else {
+                        edit.set(uri, sharedb2vscode(document, [bufferOp]));
+                    }
                     const applied = await vscode.workspace.applyEdit(edit);
 
                     if (this._projectManager && this._folderUri) {
