@@ -174,14 +174,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._log.debug(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
     }
 
-    private _sync(uri: vscode.Uri, content: Uint8Array, remote = false) {
+    private _sync(uri: vscode.Uri, content: Uint8Array) {
         const key = `${uri}`;
-        if (remote) {
-            this._syncing.add(key);
-        }
+        this._syncing.add(key);
         this._debouncer
             .debounce(key, async () => {
-                // set echo hash at write time to match actual file content
                 this._echo.set(`${uri}:change`, hash(content));
                 let attempt = 0;
                 while (true) {
@@ -194,18 +191,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     }
                     await new Promise((r) => setTimeout(r, 100 * Math.pow(2, attempt - 1)));
                 }
-                if (remote) {
-                    setTimeout(() => this._syncing.delete(key), 200);
-                }
+                setTimeout(() => this._syncing.delete(key), 200);
             })
             .catch((err) => {
-                // ignore cancellation from debounce supersede/cancel/clear
                 if (/debounce/.test(err.message)) {
                     return;
                 }
-                if (remote) {
-                    this._syncing.delete(key);
-                }
+                this._syncing.delete(key);
                 this._log.error(`failed to sync ${uri}: ${err.message}`);
             });
     }
@@ -341,7 +333,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 );
                                 reset.replace(uri, range, file.doc.text);
                                 await vscode.workspace.applyEdit(reset);
-                                this._sync(uri, buffer.from(file.doc.text));
                                 this._log.warn(`sync.remote.resync ${uri} applied=false`);
                                 return;
                             }
@@ -358,7 +349,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 if (!wasDirty) {
                                     this._events.emit('asset:file:dirty', path, true);
                                 }
-                                this._sync(document.uri, buffer.from(file.doc.text));
                                 this._log.info(`sync.remote.recovered ${uri} ${opdiff(op)} recovered=${opdiff(late)}`);
                                 return;
                             }
@@ -369,8 +359,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 }
             }
 
-            // debounce-write to disk (remote flag skips watcher echo)
-            this._sync(uri, buffer.from(snapshot), true);
+            // only sync closed files — open files write on save to avoid mtime desync
+            if (!viewing) {
+                this._sync(uri, buffer.from(snapshot));
+            }
 
             this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri} ${opdiff(op)}`);
         });
@@ -526,9 +518,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         new vscode.Range(doc.positionAt(prefix), doc.positionAt(current.length - suffix)),
                         expected.substring(prefix, expected.length - suffix)
                     );
-                    if (await vscode.workspace.applyEdit(edit)) {
-                        this._sync(doc.uri, buffer.from(expected));
-                    } else {
+                    if (!(await vscode.workspace.applyEdit(edit))) {
                         this._log.warn(`dirtify applyEdit failed for ${doc.uri}`);
                     }
                 } else {
@@ -606,6 +596,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            // skip discard/revert — stale disk content is not a real edit
+            if (!document.isDirty) {
+                return;
+            }
+
             // submit ops via OTDocument (applies locally + submits to ShareDB)
             // when CRLF, contentChanges offsets are CRLF-based and misalign with
             // LF canonical state — fall back to diffOp for correct offsets
@@ -620,19 +615,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 file.doc.apply(op);
             }
 
-            // sync to disk (debounced)
-            this._sync(document.uri, buffer.from(file.doc.text));
-
             // mark as dirty if any ops submitted (any unsaved changes)
             const prev = file.dirty;
             file.dirty ||= !!ops.length;
             if (!prev && file.dirty) {
                 this._events.emit('asset:file:dirty', path, true);
-            }
-
-            // external disk change — force dirty indicator
-            if (!document.isDirty && ops.length) {
-                this._dirtify(document);
             }
 
             this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => opdiff(o)).join(' ')}`);
@@ -657,14 +644,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // cancel pending debounced write to prevent it firing after native save
             this._debouncer.cancel(`${document.uri}`);
 
-            // detect if _sync already wrote to disk (bumping mtime) before save
-            if (this._echo.has(`${document.uri}:change`)) {
-                this._log.error(`save.mtime.risk ${path}`);
-            }
-
-            // write buffer to disk so mtime is fresh before native save,
-            // preventing "file on disk is newer" when initial sync or
-            // remote edits wrote to disk after VS Code last tracked mtime
+            // flush buffer to disk so mtime is fresh before native save
             const content = buffer.from(document.getText());
             this._echo.set(`${document.uri}:change`, hash(content));
             e.waitUntil(vscode.workspace.fs.writeFile(document.uri, content));
