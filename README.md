@@ -37,6 +37,67 @@ The PlayCanvas VS Code Extension is a realtime editing environment for text-base
     - Syntax follows `.gitignore` using file globs (e.g. `*.ts`)
     - Rules re-parse automatically on change; reload to sync files to disk
 
+## Architecture
+
+Data flows bidirectionally between four components: the filesystem (Disk), the VS Code editor buffer (Buffer), the OT document state (OTDocument), and the remote collaboration server (Server).
+
+```mermaid
+sequenceDiagram
+    participant D as Disk
+    participant B as Buffer
+    participant OT as OTDocument
+    participant S as Server
+
+    rect rgb(255, 255, 230)
+    Note over D, S: Realtime Edit — Local (open file)
+    B ->> OT: vscode2sharedb(contentChanges)
+    OT ->> S: doc.submitOp()
+    end
+
+    rect rgb(255, 255, 230)
+    Note over D, S: Realtime Edit — Remote (open file)
+    S ->> OT: ShareDB op event
+    OT ->> B: sharedb2vscode → applyEdit
+    end
+
+    rect rgb(230, 245, 255)
+    Note over D, S: Realtime Edit — Local (closed file)
+    D ->> OT: file watcher → projectManager.write()
+    OT ->> S: doc.submitOp()
+    end
+
+    rect rgb(230, 245, 255)
+    Note over D, S: Realtime Edit — Remote (closed file)
+    S ->> OT: ShareDB op event
+    OT ->> D: _sync() debounced writeFile
+    end
+
+    rect rgb(230, 255, 230)
+    Note over D, S: File Save — Local (Cmd+S)
+    B ->> D: VS Code native save
+    B ->> S: projectManager.save()
+    S -->> OT: asset:file:save → clears dirty flag
+    end
+
+    rect rgb(230, 255, 230)
+    Note over D, S: File Save — Remote
+    S ->> OT: asset:file:save event
+    OT -->> OT: clears dirty flag
+    end
+
+    rect rgb(255, 240, 230)
+    Note over D, S: File Create/Delete/Move — Local
+    D ->> OT: file watcher → projectManager.create/delete/rename()
+    OT ->> S: ShareDB doc create/delete + metadata op
+    end
+
+    rect rgb(255, 240, 230)
+    Note over D, S: File Create/Delete/Move — Remote
+    S ->> OT: asset event via Messenger WebSocket
+    OT ->> D: writeFile / delete / rename on disk
+    end
+```
+
 ## Local Development
 
 To initialize a local development environment for the Editor Frontend, ensure you have [Node.js](https://nodejs.org/) 18 or later installed. Follow these steps:
