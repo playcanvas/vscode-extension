@@ -98,6 +98,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _syncing = new Set<string>();
 
+    private _diskHash = new Map<string, string>();
+
     private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
 
     private _writeMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('writeMutex error', err));
@@ -554,6 +556,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
             const path = relativePath(document.uri, folderUri);
             this._opened.add(document.uri.path);
+            this._diskHash.set(document.uri.path, hash(buffer.from(normEol(document.getText()))));
             this._events.emit('asset:doc:open', path);
             this._dirtify(document);
         });
@@ -563,6 +566,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
             const path = relativePath(document.uri, folderUri);
             this._opened.delete(document.uri.path);
+            this._diskHash.delete(document.uri.path);
             this._events.emit('asset:doc:close', path);
         });
 
@@ -596,8 +600,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // skip discard/revert — stale disk content is not a real edit
-            if (!document.isDirty) {
+            // skip discard/revert: buffer reverted to stale disk content,
+            // not a real edit. external edits change the disk so hash won't match.
+            if (!document.isDirty && hash(buffer.from(text)) === this._diskHash.get(document.uri.path)) {
                 return;
             }
 
@@ -620,6 +625,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             file.dirty ||= !!ops.length;
             if (!prev && file.dirty) {
                 this._events.emit('asset:file:dirty', path, true);
+            }
+
+            // external disk change — force dirty indicator
+            if (!document.isDirty && ops.length) {
+                this._dirtify(document);
             }
 
             this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => opdiff(o)).join(' ')}`);
@@ -646,7 +656,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // flush buffer to disk so mtime is fresh before native save
             const content = buffer.from(document.getText());
-            this._echo.set(`${document.uri}:change`, hash(content));
+            const h = hash(content);
+            this._echo.set(`${document.uri}:change`, h);
+            this._diskHash.set(document.uri.path, h);
             e.waitUntil(vscode.workspace.fs.writeFile(document.uri, content));
 
             // check if ignore updated (only if file has unsaved changes)
