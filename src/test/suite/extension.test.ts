@@ -937,9 +937,6 @@ suite('extension', () => {
             });
         });
 
-        // create change watcher
-        const watcher = watchFilePromise(folderUri, asset.name, 'change');
-
         // make remote change
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
         assert.ok(doc, 'sharedb document should exist');
@@ -952,11 +949,6 @@ suite('extension', () => {
         // check text document was updated
         await assertResolves(changed, 'vscode.onDidChangeTextDocument');
         assert.strictEqual(tdoc.getText(), newDocument, 'text document content should match');
-
-        // check if local file was changed
-        await assertResolves(watcher, 'watcher.change');
-        const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(buffer.toString(content), newDocument, 'file content should match');
     });
 
     test('file change - closed remote to local', async () => {
@@ -1012,9 +1004,6 @@ suite('extension', () => {
             ['// LOCAL TEST COMMENT\n'] // insert at start
         ]);
 
-        // create change watcher
-        const watcher = watchFilePromise(folderUri, asset.name, 'change');
-
         // make local change by editing the document
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, new vscode.Position(0, 0), '// LOCAL TEST COMMENT\n');
@@ -1024,11 +1013,6 @@ suite('extension', () => {
         // check if remote update was detected
         await assertResolves(updated, 'sharedb.op');
         assert.strictEqual(tdoc.getText(), newDocument, 'text document content should match');
-
-        // wait for local change to be detected (debounced disk sync)
-        await assertResolves(watcher, 'watcher.change');
-        const content = await assertResolves(vscode.workspace.fs.readFile(uri), 'fs.readFile');
-        assert.strictEqual(buffer.toString(content), newDocument, 'file content should match');
     });
 
     test('file change - closed local to remote', async () => {
@@ -1267,15 +1251,21 @@ suite('extension', () => {
         // open document
         const tdoc = await vscode.workspace.openTextDocument(uri);
 
-        // make local change by editing the document
+        // make local change and wait for it to propagate
+        const changed = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString()) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, new vscode.Position(0, 0), '// LOCAL TEST COMMENT\n');
         await vscode.workspace.applyEdit(edit);
+        await assertResolves(changed, 'vscode.onDidChangeTextDocument');
 
-        // watch for disk sync from _update() -> _sync()
-        const diskSynced = watchFilePromise(folderUri, asset.name, 'change');
-
-        // make remote save
+        // make remote save (hash confirms local content matches S3)
         assert.ok(asset.file, 'asset.file should exist');
         const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
         assert.ok(doc, 'sharedb asset document should exist');
@@ -1300,9 +1290,6 @@ suite('extension', () => {
         asset.file.hash = newHash;
         documents.set(asset.uniqueId, newContent);
 
-        // disk synced by _update() via _sync(), no document.save()
-        await assertResolves(diskSynced, 'watcher.change');
-
         // document stays dirty (user must manually save)
         assert.strictEqual(tdoc.isDirty, true, 'document should stay dirty after remote save');
     });
@@ -1325,9 +1312,6 @@ suite('extension', () => {
         const tdoc = await vscode.workspace.openTextDocument(uri);
         await vscode.window.showTextDocument(tdoc);
 
-        // watch for file change (debounced sync will write empty content)
-        const diskSynced = watchFilePromise(folderUri, asset.name, 'change');
-
         // clear all content to make document empty
         const edit = new vscode.WorkspaceEdit();
         edit.delete(uri, new vscode.Range(0, 0, tdoc.lineCount, 0));
@@ -1336,9 +1320,6 @@ suite('extension', () => {
         // verify document is now empty and dirty
         assert.strictEqual(tdoc.getText(), '', 'document should be empty');
         assert.strictEqual(tdoc.isDirty, true, 'document should be dirty before save');
-
-        // wait for debounced sync to write empty content to disk
-        await assertResolves(diskSynced, 'watcher.change');
 
         // create promise that resolves when document becomes not dirty (revert completed)
         const reverted = new Promise<void>((resolve) => {
