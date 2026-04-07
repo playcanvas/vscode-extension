@@ -422,7 +422,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // open files: disk already synced by _update() via _sync().
+            // open files: disk writes only via VS Code's native save.
             // no document.save() to avoid triggering formatOnSave.
             if (this._opened.has(uri.path)) {
                 const document = await vscode.workspace.openTextDocument(uri);
@@ -651,15 +651,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // cancel pending debounced write to prevent it firing after native save
-            this._debouncer.cancel(`${document.uri}`);
-
-            // flush buffer to disk so mtime is fresh before native save
-            const content = buffer.from(document.getText());
-            const h = hash(content);
-            this._echo.set(`${document.uri}:change`, h);
+            // update disk hash so discard detection stays in sync after save
+            const h = hash(buffer.from(document.getText()));
             this._diskHash.set(document.uri.path, h);
-            e.waitUntil(vscode.workspace.fs.writeFile(document.uri, content));
 
             // check if ignore updated (only if file has unsaved changes)
             if (file.dirty) {
