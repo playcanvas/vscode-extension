@@ -48,50 +48,50 @@ sequenceDiagram
     participant OT as OTDocument
     participant S as Server
 
-    rect rgb(255, 255, 230)
+    rect rgba(200, 180, 50, 0.15)
     Note over D, S: Realtime Edit — Local (open file)
     B ->> OT: vscode2sharedb(contentChanges)
     OT ->> S: doc.submitOp()
     end
 
-    rect rgb(255, 255, 230)
+    rect rgba(200, 180, 50, 0.15)
     Note over D, S: Realtime Edit — Remote (open file)
     S ->> OT: ShareDB op event
     OT ->> B: sharedb2vscode → applyEdit
     end
 
-    rect rgb(230, 245, 255)
+    rect rgba(50, 120, 200, 0.15)
     Note over D, S: Realtime Edit — Local (closed file)
     D ->> OT: file watcher → projectManager.write()
     OT ->> S: doc.submitOp()
     end
 
-    rect rgb(230, 245, 255)
+    rect rgba(50, 120, 200, 0.15)
     Note over D, S: Realtime Edit — Remote (closed file)
     S ->> OT: ShareDB op event
     OT ->> D: _sync() debounced writeFile
     end
 
-    rect rgb(230, 255, 230)
+    rect rgba(50, 170, 80, 0.15)
     Note over D, S: File Save — Local (Cmd+S)
     B ->> D: VS Code native save
     B ->> S: projectManager.save()
     S -->> OT: asset:file:save → clears dirty flag
     end
 
-    rect rgb(230, 255, 230)
+    rect rgba(50, 170, 80, 0.15)
     Note over D, S: File Save — Remote
     S ->> OT: asset:file:save event
     OT -->> OT: clears dirty flag
     end
 
-    rect rgb(255, 240, 230)
+    rect rgba(210, 120, 50, 0.15)
     Note over D, S: File Create/Delete/Move — Local
     D ->> OT: file watcher → projectManager.create/delete/rename()
     OT ->> S: ShareDB doc create/delete + metadata op
     end
 
-    rect rgb(255, 240, 230)
+    rect rgba(210, 120, 50, 0.15)
     Note over D, S: File Create/Delete/Move — Remote
     S ->> OT: asset event via Messenger WebSocket
     OT ->> D: writeFile / delete / rename on disk
