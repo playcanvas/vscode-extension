@@ -13,20 +13,8 @@ import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { Mutex } from './utils/mutex';
 import { signal } from './utils/signal';
-import {
-    parsePath,
-    sharedb2vscode,
-    vscode2sharedb,
-    opdiff,
-    relativePath,
-    uriStartsWith,
-    fileExists,
-    tryCatch,
-    hash,
-    minimalDiff,
-    diffOp,
-    normEol
-} from './utils/utils';
+import { delta, diff, norm, stat, sharedb2vscode, vscode2sharedb } from './utils/text';
+import { parsePath, relativePath, uriStartsWith, fileExists, tryCatch, hash } from './utils/utils';
 
 const readDirRecursive = async (uri: vscode.Uri) => {
     const entries = await vscode.workspace.fs.readDirectory(uri);
@@ -267,7 +255,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _update(uri: vscode.Uri, op: ShareDbTextOp, content: string, prev: string) {
-        const snapshot = normEol(content);
+        const snapshot = norm(content);
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
@@ -285,29 +273,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 try {
                     const document = await vscode.workspace.openTextDocument(uri);
                     const raw = document.getText();
-                    const bufferText = normEol(raw);
+                    const bufferText = norm(raw);
 
                     // detect unsubmitted keystrokes by diffing pre-op canonical vs buffer
-                    const userOp = diffOp(prev, bufferText);
+                    const userOp = delta(prev, bufferText);
 
                     // transform remote op into buffer-space so positions align
                     const bufferOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
 
-                    // apply remote op to buffer
-                    const edit = new vscode.WorkspaceEdit();
-                    if (document.eol === vscode.EndOfLine.CRLF) {
-                        // CRLF: OT offsets are LF-based and misalign with positionAt() on CRLF buffer.
-                        // compute target in LF, convert to CRLF, diff against raw buffer.
-                        const target = ottext.apply(bufferText, bufferOp) as string;
-                        const crlf = target.replace(/\n/g, '\r\n');
-                        const { prefix, suffix } = minimalDiff(raw, crlf);
-                        const del = raw.length - prefix - suffix;
-                        const ins = crlf.substring(prefix, crlf.length - suffix);
-                        const range = new vscode.Range(document.positionAt(prefix), document.positionAt(prefix + del));
-                        edit.replace(uri, range, ins);
-                    } else {
-                        edit.set(uri, sharedb2vscode(document, [bufferOp]));
-                    }
+                    const edit = sharedb2vscode(document, uri, [bufferOp], bufferText);
                     const applied = await vscode.workspace.applyEdit(edit);
 
                     if (this._projectManager && this._folderUri) {
@@ -341,9 +315,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                             // reconcile: recover keystrokes typed during applyEdit await
                             const postRaw = document.getText();
-                            const postText = normEol(postRaw);
+                            const postText = norm(postRaw);
                             const expected = file.doc.text;
-                            const late = diffOp(expected, postText);
+                            const late = delta(expected, postText);
                             if (late) {
                                 file.doc.apply(late);
                                 const wasDirty = file.dirty;
@@ -351,7 +325,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 if (!wasDirty) {
                                     this._events.emit('asset:file:dirty', path, true);
                                 }
-                                this._log.info(`sync.remote.recovered ${uri} ${opdiff(op)} recovered=${opdiff(late)}`);
+                                this._log.info(`sync.remote.recovered ${uri} ${stat(op)} recovered=${stat(late)}`);
                                 return;
                             }
                         }
@@ -366,7 +340,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._sync(uri, buffer.from(snapshot));
             }
 
-            this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri} ${opdiff(op)}`);
+            this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri} ${stat(op)}`);
         });
     }
 
@@ -513,7 +487,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                 if (current !== expected) {
                     // buffer has stale content -- apply minimal diff
-                    const { prefix, suffix } = minimalDiff(current, expected);
+                    const { prefix, suffix } = diff(current, expected);
                     const edit = new vscode.WorkspaceEdit();
                     edit.replace(
                         doc.uri,
@@ -556,7 +530,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
             const path = relativePath(document.uri, folderUri);
             this._opened.add(document.uri.path);
-            this._diskHash.set(document.uri.path, hash(buffer.from(normEol(document.getText()))));
+            this._diskHash.set(document.uri.path, hash(buffer.from(norm(document.getText()))));
             this._events.emit('asset:doc:open', path);
             this._dirtify(document);
         });
@@ -595,7 +569,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // check if content actually changed (avoid echo and discard)
             // normalize to LF — canonical OT state is always LF
-            const text = normEol(document.getText());
+            const text = norm(document.getText());
             if (file.doc.text === text) {
                 return;
             }
@@ -607,15 +581,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // submit ops via OTDocument (applies locally + submits to ShareDB)
-            // when CRLF, contentChanges offsets are CRLF-based and misalign with
-            // LF canonical state — fall back to diffOp for correct offsets
-            const ops =
-                document.eol === vscode.EndOfLine.CRLF
-                    ? (() => {
-                          const op = diffOp(file.doc.text, text);
-                          return op ? [op] : [];
-                      })()
-                    : vscode2sharedb(contentChanges);
+            const ops = vscode2sharedb(document, contentChanges, file.doc.text);
             for (const op of ops) {
                 file.doc.apply(op);
             }
@@ -632,7 +598,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._dirtify(document);
             }
 
-            this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => opdiff(o)).join(' ')}`);
+            this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => stat(o)).join(' ')}`);
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;
@@ -771,7 +737,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     // producing create events for existing files — treat as change
                                     const existing = projectManager.files.get(path);
                                     if (existing && existing.type === 'file' && type === 'file' && content) {
-                                        if (existing.doc.text === normEol(buffer.toString(content))) {
+                                        if (existing.doc.text === norm(buffer.toString(content))) {
                                             return;
                                         }
                                         this._log.debug(`change.local (atomic) ${op.uri}`);
@@ -819,7 +785,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     if (
                                         file &&
                                         file.type === 'file' &&
-                                        file.doc.text === normEol(buffer.toString(content))
+                                        file.doc.text === norm(buffer.toString(content))
                                     ) {
                                         this._log.trace(`echo.skip.equal ${op.uri}`);
                                         return;
