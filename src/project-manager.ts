@@ -51,7 +51,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private static readonly SAVE_RETRY_DELAY_MS = 2000;
 
-    private _pendingRetries = new Map<number, NodeJS.Timeout>();
+    private _pendingDocRetries = new Set<number>();
 
     private _pendingSaveRetries = new Map<number, NodeJS.Timeout>();
 
@@ -379,60 +379,50 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return true;
     }
 
-    private _retryDocSubscription(uniqueId: number, attempt = 1) {
-        // cancel any existing retry for this uniqueId
-        const existing = this._pendingRetries.get(uniqueId);
-        if (existing) {
-            clearTimeout(existing);
-            this._pendingRetries.delete(uniqueId);
+    private async _retrySubscription(type: string, uniqueId: number) {
+        // skip if already retrying this uniqueId
+        if (this._pendingDocRetries.has(uniqueId)) {
+            return undefined;
         }
+        this._pendingDocRetries.add(uniqueId);
 
-        if (attempt > ProjectManager.MAX_RETRIES) {
-            this._log.error(
-                `giving up subscribing to document ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`
-            );
-            return;
-        }
+        let doc: Doc | undefined;
+        for (let attempt = 1; attempt <= ProjectManager.MAX_RETRIES; attempt++) {
+            const delay = ProjectManager.RETRY_BASE_MS * Math.pow(2, attempt - 1);
+            this._log.debug(`retrying subscription to ${type} ${uniqueId} in ${delay}ms (attempt ${attempt})`);
+            await new Promise<void>((r) => setTimeout(r, delay));
 
-        const delay = ProjectManager.RETRY_BASE_MS * Math.pow(2, attempt - 1);
-        this._log.debug(`retrying subscription to document ${uniqueId} in ${delay}ms (attempt ${attempt})`);
-
-        const timeout = setTimeout(async () => {
-            this._pendingRetries.delete(uniqueId);
-
-            // bail out if project was unlinked while waiting
             if (!this._linked) {
-                return;
+                break;
             }
 
-            // re-open the document on the server before resubscribing
-            await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
+            // re-open documents on the server before resubscribing
+            if (type === 'documents') {
+                await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
+            }
 
-            const doc = await this._sharedb.resubscribe('documents', `${uniqueId}`);
+            doc = await this._sharedb.resubscribe(type, `${uniqueId}`);
 
-            // re-check after await — unlink may have happened during resubscribe
             if (!this._linked) {
                 if (doc) {
                     doc.destroy();
                 }
-                return;
+                doc = undefined;
+                break;
             }
 
-            if (!doc) {
-                this._retryDocSubscription(uniqueId, attempt + 1);
-                return;
+            if (doc) {
+                break;
             }
+        }
 
-            this._cleanup.push(async () => {
-                await this._sharedb.unsubscribe('documents', `${uniqueId}`);
-            });
+        this._pendingDocRetries.delete(uniqueId);
 
-            if (this._addFile(uniqueId, doc)) {
-                this._log.info(`retry succeeded for document ${uniqueId} on attempt ${attempt}`);
-            }
-        }, delay);
-
-        this._pendingRetries.set(uniqueId, timeout);
+        if (!doc) {
+            const kind = type === 'assets' ? 'asset' : 'document';
+            this._log.error(`giving up subscribing to ${kind} ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
+        }
+        return doc;
     }
 
     private _retrySave(uniqueId: number) {
@@ -584,11 +574,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 }
 
                 // subscribe to asset document
-                const doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
+                let doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
                 if (!doc2) {
                     this._log.warn(`failed to subscribe to new document ${uniqueId}, scheduling retry`);
-                    this._retryDocSubscription(uniqueId);
-                    return;
+                    doc2 = await this._retrySubscription('documents', uniqueId);
+                    if (!doc2) {
+                        return;
+                    }
                 }
 
                 // check if asset was deleted during doc subscribe
@@ -1266,10 +1258,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (this._cleanup.length > 0) {
             await Promise.allSettled(this._cleanup.map((fn) => fn()));
             this._cleanup.length = 0;
-            for (const timeout of this._pendingRetries.values()) {
-                clearTimeout(timeout);
-            }
-            this._pendingRetries.clear();
+            this._pendingDocRetries.clear();
             for (const timeout of this._pendingSaveRetries.values()) {
                 clearTimeout(timeout);
             }
@@ -1300,6 +1289,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // subscribe to all assets in batches
         const ordered: { uniqueId: number; data: Record<string, unknown> }[] = [];
+        const failed: number[] = [];
         for (let i = 0; i < assets.length; i += BATCH_SIZE) {
             const batch = assets.slice(i, i + BATCH_SIZE);
             const subscriptions: [string, string][] = batch.map((asset) => ['assets', `${asset.uniqueId}`]);
@@ -1311,7 +1301,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 const doc = docs[j];
                 const uniqueId = batch[j].uniqueId;
                 if (!doc) {
-                    this.error.set(() => new Error(`failed to subscribe to asset ${uniqueId}`));
+                    failed.push(uniqueId);
                     loadAssetNext();
                     continue;
                 }
@@ -1326,8 +1316,21 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
         }
 
+        // retry failed asset subscriptions individually
+        for (const uniqueId of failed) {
+            const doc = await this._retrySubscription('assets', uniqueId);
+            if (!doc) {
+                continue;
+            }
+            this._cleanup.push(async () => {
+                await this._sharedb.unsubscribe('assets', `${uniqueId}`);
+            });
+            this._addAsset(uniqueId, doc);
+            ordered.push({ uniqueId, data: doc.data });
+        }
+
         // split folder and files
-        const { folders, files } = ordered.reduce(
+        const { folders: folders0, files: files0 } = ordered.reduce(
             (acc, asset) => {
                 // check if supported file type
                 const type = asset.data.type as string;
@@ -1350,22 +1353,54 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // sort folders and files by path depth (parents before children)
         // this ensures parent collisions are detected before processing children
-        // note: use _assetPath to get true depth since path arrays can be corrupted
+        // note: walk parent chain directly to get depth; missing parents sort to end
         const depthCache = new Map<number, number>();
         const getDepth = (uniqueId: number): number => {
             if (depthCache.has(uniqueId)) {
                 return depthCache.get(uniqueId)!;
             }
-            const path = this._assetPath(uniqueId);
-            const depth = (path.match(/\//g) || []).length;
+            let depth = 0;
+            const asset = this._assets.get(uniqueId);
+            if (!asset) {
+                depthCache.set(uniqueId, Infinity);
+                return Infinity;
+            }
+            let parent = (asset.path ?? [])[asset.path?.length - 1];
+            while (parent) {
+                const parentUniqueId = this._idUniqueId.getL(parent);
+                if (!parentUniqueId) {
+                    depthCache.set(uniqueId, Infinity);
+                    return Infinity;
+                }
+                const parentAsset = this._assets.get(parentUniqueId);
+                if (!parentAsset) {
+                    depthCache.set(uniqueId, Infinity);
+                    return Infinity;
+                }
+                depth++;
+                const parentPath = parentAsset.path ?? [];
+                parent = parentPath[parentPath.length - 1];
+            }
             depthCache.set(uniqueId, depth);
             return depth;
         };
         const sortByPathDepth = (a: (typeof ordered)[0], b: (typeof ordered)[0]) => {
             return getDepth(a.uniqueId) - getDepth(b.uniqueId);
         };
-        folders.sort(sortByPathDepth);
-        files.sort(sortByPathDepth);
+        folders0.sort(sortByPathDepth);
+        files0.sort(sortByPathDepth);
+
+        // drop assets whose parent chain is broken (subscription failed even after retries)
+        const reachable = (a: (typeof ordered)[0]) => {
+            const depth = getDepth(a.uniqueId);
+            if (depth === Infinity) {
+                this._log.warn(`skipping asset ${a.uniqueId} — missing parent in chain`);
+                return false;
+            }
+            return true;
+        };
+        const folders = folders0.filter(reachable);
+        const files = files0.filter(reachable);
 
         const loadFileNext = await progressNotification('Loading Files', folders.length + files.length);
         let skipsDirty = false;
@@ -1387,13 +1422,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 await this._sharedb.bulkUnsubscribe(subscriptions);
             });
             for (let j = 0; j < docs.length; j++) {
-                const doc = docs[j];
+                let doc = docs[j];
                 const { uniqueId } = batch[j];
                 if (!doc) {
                     this._log.warn(`failed to subscribe to document ${uniqueId}, scheduling retry`);
-                    this._retryDocSubscription(uniqueId);
-                    loadFileNext();
-                    continue;
+                    doc = await this._retrySubscription('documents', uniqueId);
+                    if (!doc) {
+                        loadFileNext();
+                        continue;
+                    }
                 }
 
                 // add file to file system
@@ -1424,11 +1461,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchSharedb();
             unwatchMessenger();
 
-            // cancel pending retries
-            for (const timeout of this._pendingRetries.values()) {
-                clearTimeout(timeout);
-            }
-            this._pendingRetries.clear();
+            // cancel pending retries (in-flight retries check _linked and bail out)
+            this._pendingDocRetries.clear();
 
             // cancel pending save retries
             for (const timeout of this._pendingSaveRetries.values()) {
