@@ -1330,7 +1330,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // split folder and files
-        const { folders, files } = ordered.reduce(
+        const { folders: folders0, files: files0 } = ordered.reduce(
             (acc, asset) => {
                 // check if supported file type
                 const type = asset.data.type as string;
@@ -1387,8 +1387,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const sortByPathDepth = (a: (typeof ordered)[0], b: (typeof ordered)[0]) => {
             return getDepth(a.uniqueId) - getDepth(b.uniqueId);
         };
-        folders.sort(sortByPathDepth);
-        files.sort(sortByPathDepth);
+        folders0.sort(sortByPathDepth);
+        files0.sort(sortByPathDepth);
 
         // drop assets whose parent chain is broken (subscription failed even after retries)
         const reachable = (a: (typeof ordered)[0]) => {
@@ -1399,14 +1399,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
             return true;
         };
-        const okFolders = folders.filter(reachable);
-        const okFiles = files.filter(reachable);
+        const folders = folders0.filter(reachable);
+        const files = files0.filter(reachable);
 
-        const loadFileNext = await progressNotification('Loading Files', okFolders.length + okFiles.length);
+        const loadFileNext = await progressNotification('Loading Files', folders.length + files.length);
         let skipsDirty = false;
 
         // add all folders first
-        for (const asset of okFolders) {
+        for (const asset of folders) {
             if (!this._addFolder(asset.uniqueId)) {
                 skipsDirty = true;
             }
@@ -1414,8 +1414,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // add all files next in batches
-        for (let i = 0; i < okFiles.length; i += BATCH_SIZE) {
-            const batch = okFiles.slice(i, i + BATCH_SIZE);
+        for (let i = 0; i < files.length; i += BATCH_SIZE) {
+            const batch = files.slice(i, i + BATCH_SIZE);
             const subscriptions: [string, string][] = batch.map((asset) => ['documents', `${asset.uniqueId}`]);
             const docs = await this._sharedb.bulkSubscribe(subscriptions);
             this._cleanup.push(async () => {
