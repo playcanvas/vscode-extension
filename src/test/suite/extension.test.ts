@@ -1272,6 +1272,24 @@ suite('extension', () => {
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
         const tdoc = await vscode.workspace.openTextDocument(uri);
         await vscode.window.showTextDocument(tdoc);
+        await assertResolves(
+            new Promise<void>((resolve) => {
+                if (!tdoc.isDirty && tdoc.getText() === '// ORIGINAL') {
+                    resolve();
+                    return;
+                }
+                const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                    if (e.document.uri.toString() !== uri.toString()) {
+                        return;
+                    }
+                    if (!tdoc.isDirty && tdoc.getText() === '// ORIGINAL') {
+                        disposable.dispose();
+                        resolve();
+                    }
+                });
+            }),
+            'initial document settle'
+        );
 
         // edit and save to establish a saved baseline
         const edit1 = new vscode.WorkspaceEdit();
