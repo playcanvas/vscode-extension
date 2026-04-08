@@ -712,8 +712,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                         // collect paths to remove (don't modify map during iteration)
                         // note: children are not added to collisions - they are implicitly
-                        // inaccessible because their parent is colliding. when the parent
-                        // collision resolves, children will be reloaded via project reload.
+                        // note: inaccessible because their parent is colliding. when the parent
+                        // note: collision resolves, children will be reloaded via project reload.
                         const remove: string[] = [];
                         for (const [path] of this._files) {
                             if (path === from || path.startsWith(from + '/')) {
@@ -786,7 +786,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     }
 
                     // note: only mark clean if local content matches the saved hash,
-                    // otherwise local unsaved changes would be silently discarded
+                    // note: otherwise local unsaved changes would be silently discarded
                     const localHash = hash(file.doc.text);
                     if (fileTo?.hash === localHash) {
                         file.dirty = false;
@@ -950,7 +950,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // register folder optimistically — don't depend on messenger round-trip
         // note: only _files is populated; _assets/_idUniqueId require ShareDB doc
-        // shape (item_id, path[]) which differs from REST response (id, parent)
+        // note: shape (item_id, path[]) which differs from REST response (id, parent)
         if (type === 'folder') {
             this._files.set(path, { type: 'folder', uniqueId: asset.uniqueId });
         }
