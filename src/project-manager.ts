@@ -390,12 +390,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._pendingDocRetries.add(uniqueId);
 
         let doc: Doc | undefined;
+        let cancelled = false;
         for (let attempt = 1; attempt <= ProjectManager.MAX_RETRIES; attempt++) {
             const delay = ProjectManager.DOC_RETRY_MS * Math.pow(2, attempt - 1);
             this._log.debug(`retrying subscription to ${type} ${uniqueId} in ${delay}ms (attempt ${attempt})`);
             await new Promise<void>((r) => setTimeout(r, delay));
 
             if (this._epoch !== epoch) {
+                cancelled = true;
                 break;
             }
 
@@ -411,6 +413,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     doc.destroy();
                 }
                 doc = undefined;
+                cancelled = true;
                 break;
             }
 
@@ -421,7 +424,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         this._pendingDocRetries.delete(uniqueId);
 
-        if (!doc) {
+        if (!doc && !cancelled) {
             const kind = type === 'assets' ? 'asset' : 'document';
             this._log.error(`giving up subscribing to ${kind} ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
         }
@@ -1464,7 +1467,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchSharedb();
             unwatchMessenger();
 
-            // cancel pending retries (in-flight retries check _projectId and bail out)
+            // cancel pending retries (in-flight retries check _epoch and bail out)
             this._pendingDocRetries.clear();
 
             // cancel pending save retries
