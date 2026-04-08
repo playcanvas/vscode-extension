@@ -4,7 +4,7 @@ import packageJson from '../package.json';
 
 import { DEBUG, ENV, SENTRY_DSN } from './config';
 
-// note: sensitive keys to scrub from event data (matches monorepo sentry-utils.js)
+// NOTE: sensitive keys to scrub from event data (matches monorepo sentry-utils.js)
 const SANITIZE_KEYS = /password|token|secret|passwd|authorization|api_key|apikey|sentry_dsn|access_token|credentials/i;
 
 const URI_TOKEN = /\b[a-z][a-z0-9+.-]*:(?:\/\/)?[^\s'"`]+/gi;
@@ -162,7 +162,7 @@ const client = new BrowserClient({
         const exceptionValue = typedEvent.exception?.values?.[0];
         const raw = typedEvent.message || exceptionValue?.value;
         if (raw) {
-            // note: group by normalized message template while retaining raw debug context
+            // NOTE: group by normalized message template while retaining raw debug context
             const { normalized, paths, assetIds, documentIds, timestamps } = normalizeMessage(raw);
             typedEvent.extra = {
                 // previous extra data is preserved

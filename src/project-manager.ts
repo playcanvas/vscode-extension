@@ -185,7 +185,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // ancestor has a collision - skip without adding to collisions
-        // note: check if any collided path is a prefix of this asset's path
+        // NOTE: check if any collided path is a prefix of this asset's path
         for (const collidedPath of this._collidedByPath.keys()) {
             if (filePath.startsWith(`${collidedPath}/`)) {
                 this._log.warn(
@@ -353,7 +353,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = this._assetPath(uniqueId);
 
         // already registered with same uniqueId (from create's optimistic add)
-        // note: skip asset:file:create — folder was created locally, disk doesn't need notification
+        // NOTE: skip asset:file:create — folder was created locally, disk doesn't need notification
         const existing = this._files.get(path);
         if (existing?.uniqueId === uniqueId) {
             return true;
@@ -711,9 +711,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         skipsDirty = true;
 
                         // collect paths to remove (don't modify map during iteration)
-                        // note: children are not added to collisions - they are implicitly
-                        // note: inaccessible because their parent is colliding. when the parent
-                        // note: collision resolves, children will be reloaded via project reload.
+                        // NOTE: children are not added to collisions - they are implicitly
+                        // NOTE: inaccessible because their parent is colliding. when the parent
+                        // NOTE: collision resolves, children will be reloaded via project reload.
                         const remove: string[] = [];
                         for (const [path] of this._files) {
                             if (path === from || path.startsWith(from + '/')) {
@@ -785,8 +785,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         return;
                     }
 
-                    // note: only mark clean if local content matches the saved hash,
-                    // note: otherwise local unsaved changes would be silently discarded
+                    // NOTE: only mark clean if local content matches the saved hash,
+                    // NOTE: otherwise local unsaved changes would be silently discarded
                     const localHash = hash(file.doc.text);
                     if (fileTo?.hash === localHash) {
                         file.dirty = false;
@@ -949,8 +949,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const asset = await guard(this._rest.assetCreate(this._projectId, this._branchId, data), this.error);
 
         // register folder optimistically — don't depend on messenger round-trip
-        // note: only _files is populated; _assets/_idUniqueId require ShareDB doc
-        // note: shape (item_id, path[]) which differs from REST response (id, parent)
+        // NOTE: only _files is populated; _assets/_idUniqueId require ShareDB doc
+        // NOTE: shape (item_id, path[]) which differs from REST response (id, parent)
         if (type === 'folder') {
             this._files.set(path, { type: 'folder', uniqueId: asset.uniqueId });
         }
@@ -1132,7 +1132,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // compute minimal diff and submit as single atomic op
-        // note: avoids two-step delete+insert which can lose concurrent remote edits
+        // NOTE: avoids two-step delete+insert which can lose concurrent remote edits
         const op = delta(file.doc.text, norm(buffer.toString(content)));
         if (!op) {
             return;
@@ -1355,7 +1355,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // sort folders and files by path depth (parents before children)
         // this ensures parent collisions are detected before processing children
-        // note: walk parent chain directly to get depth; missing parents sort to end
+        // NOTE: walk parent chain directly to get depth; missing parents sort to end
         const depthCache = new Map<number, number>();
         const getDepth = (uniqueId: number): number => {
             if (depthCache.has(uniqueId)) {
