@@ -69,8 +69,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _rest: Rest;
 
-    private _linked = false;
-
     private _projectId?: number;
 
     private _branchId?: string;
@@ -394,7 +392,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._log.debug(`retrying subscription to ${type} ${uniqueId} in ${delay}ms (attempt ${attempt})`);
             await new Promise<void>((r) => setTimeout(r, delay));
 
-            if (!this._linked) {
+            if (this._projectId === undefined) {
                 break;
             }
 
@@ -405,7 +403,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             doc = await this._sharedb.resubscribe(type, `${uniqueId}`);
 
-            if (!this._linked) {
+            if (this._projectId === undefined) {
                 if (doc) {
                     doc.destroy();
                 }
@@ -446,7 +444,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._pendingSaveRetries.delete(uniqueId);
 
             // bail out if project was unlinked while waiting
-            if (!this._linked) {
+            if (this._projectId === undefined) {
                 return;
             }
 
@@ -454,7 +452,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
 
             // re-check after await — unlink may have happened during sendRaw
-            if (!this._linked) {
+            if (this._projectId === undefined) {
                 return;
             }
 
@@ -1254,7 +1252,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
-        if (this._linked) {
+        if (this._projectId !== undefined) {
             throw this.error.set(() => new Error('project already linked'));
         }
 
@@ -1455,17 +1453,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const unwatchSharedb = this._watchSharedb();
         const unwatchMessenger = this._watchMessenger(branchId);
 
-        // store state
-        this._projectId = projectId;
-        this._branchId = branchId;
-
         // register cleanup
         this._cleanup.push(async () => {
             unwatchEvents();
             unwatchSharedb();
             unwatchMessenger();
 
-            // cancel pending retries (in-flight retries check _linked and bail out)
+            // cancel pending retries (in-flight retries check _projectId and bail out)
             this._pendingDocRetries.clear();
 
             // cancel pending save retries
@@ -1482,25 +1476,23 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._collidedByPath.clear();
         });
 
-        this._linked = true;
+        this._projectId = projectId;
+        this._branchId = branchId;
 
-        this._log.info(`project ${this._projectId} (branch ${this._branchId}) loaded`);
+        this._log.info(`project ${projectId} (branch ${branchId}) loaded`);
     }
 
     async unlink() {
         const projectId = this._projectId;
         const branchId = this._branchId;
-        if (!this._linked) {
-            this._log.warn('unlink called when not linked');
-            if (projectId === undefined || branchId === undefined) {
-                throw this.error.set(() => new Error('unlink called before link'));
-            }
-            return { projectId, branchId };
+        if (projectId === undefined || branchId === undefined) {
+            throw this.error.set(() => new Error('unlink called before link'));
         }
         await super.unlink();
-        this._linked = false;
+        this._projectId = undefined;
+        this._branchId = undefined;
         this._log.info(`project ${projectId} (branch ${branchId}) unloaded`);
-        return { projectId: projectId!, branchId: branchId! };
+        return { projectId, branchId };
     }
 }
 
