@@ -51,7 +51,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private static readonly SAVE_RETRY_DELAY_MS = 2000;
 
-    private _pendingRetries = new Set<number>();
+    private _pendingDocRetries = new Set<number>();
 
     private _pendingSaveRetries = new Map<number, NodeJS.Timeout>();
 
@@ -381,10 +381,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private async _retrySubscription(type: string, uniqueId: number) {
         // skip if already retrying this uniqueId
-        if (this._pendingRetries.has(uniqueId)) {
+        if (this._pendingDocRetries.has(uniqueId)) {
             return undefined;
         }
-        this._pendingRetries.add(uniqueId);
+        this._pendingDocRetries.add(uniqueId);
 
         let doc: Doc | undefined;
         for (let attempt = 1; attempt <= ProjectManager.MAX_RETRIES; attempt++) {
@@ -416,7 +416,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
         }
 
-        this._pendingRetries.delete(uniqueId);
+        this._pendingDocRetries.delete(uniqueId);
 
         if (!doc) {
             const kind = type === 'assets' ? 'asset' : 'document';
@@ -1258,7 +1258,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (this._cleanup.length > 0) {
             await Promise.allSettled(this._cleanup.map((fn) => fn()));
             this._cleanup.length = 0;
-            this._pendingRetries.clear();
+            this._pendingDocRetries.clear();
             for (const timeout of this._pendingSaveRetries.values()) {
                 clearTimeout(timeout);
             }
@@ -1462,7 +1462,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchMessenger();
 
             // cancel pending retries (in-flight retries check _linked and bail out)
-            this._pendingRetries.clear();
+            this._pendingDocRetries.clear();
 
             // cancel pending save retries
             for (const timeout of this._pendingSaveRetries.values()) {
