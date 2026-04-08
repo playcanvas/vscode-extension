@@ -51,6 +51,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private static readonly SAVE_RETRY_DELAY_MS = 2000;
 
+    private static readonly FLUSH_TIMEOUT_MS = 5000;
+
     private _pendingDocRetries = new Set<number>();
 
     private _pendingSaveRetries = new Map<number, NodeJS.Timeout>();
@@ -1219,7 +1221,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return result;
     }
 
-    async flushPending(timeoutMs = 5000) {
+    async flush() {
         const pending = Array.from(this._files.values()).filter(
             (f): f is VirtualFile & { type: 'file' } => f.type === 'file' && f.doc.pending
         );
@@ -1243,7 +1245,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     }
                 })
         );
-        const [err] = await tryCatch(withTimeout(Promise.all(waits), timeoutMs, 'flush pending ops timed out'));
+        const [err] = await tryCatch(
+            withTimeout(Promise.all(waits), ProjectManager.FLUSH_TIMEOUT_MS, 'flush pending ops timed out')
+        );
         if (err) {
             this._log.warn(err.message);
         }
