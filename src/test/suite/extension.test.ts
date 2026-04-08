@@ -2183,4 +2183,83 @@ suite('extension', () => {
         }
         // NOTE: if quickPickStub wasn't called, there are no collisions at all, which is also valid
     });
+
+    test('echo create - local recreate after remote create propagates', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // remote creates file (sets create echo, watcher consumes it)
+        const asset = await assetCreate({ name: 'echo_create_test.js', content: '// remote' });
+        assert.ok(asset, 'asset should be created');
+
+        // local deletes file
+        const deleted = new Promise<void>((resolve) => {
+            const ondelete = messenger.on('assets.delete', (data) => {
+                if (data.data.assets.includes(`${asset.uniqueId}`)) {
+                    messenger.off('assets.delete', ondelete);
+                    setTimeout(resolve, 0);
+                }
+            });
+        });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        await assertResolves(vscode.workspace.fs.delete(uri), 'fs.delete');
+        await assertResolves(deleted, 'assets.delete');
+
+        // reset spy history
+        rest.assetCreate.resetHistory();
+
+        // local creates file at the same path — must propagate, not be suppressed by stale echo
+        const recreated = new Promise<void>((resolve) => {
+            const onnew = messenger.on('asset.new', (data) => {
+                if (data.data.asset.name === asset.name) {
+                    messenger.off('asset.new', onnew);
+                    setTimeout(resolve, 0);
+                }
+            });
+        });
+        await assertResolves(vscode.workspace.fs.writeFile(uri, buffer.from('// local recreate')), 'fs.writeFile');
+        await assertResolves(recreated, 'asset.new');
+
+        assert.ok(rest.assetCreate.called, 'local recreate should propagate to remote');
+    });
+
+    test('echo delete - local redelete after remote delete propagates', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // remote creates file
+        const asset = await assetCreate({ name: 'echo_delete_test.js', content: '// remote' });
+        assert.ok(asset, 'asset should be created');
+
+        // remote deletes file (sets delete echo, watcher consumes it)
+        const deleteWatcher = watchFilePromise(folderUri, asset.name, 'delete');
+        messenger.emit('assets.delete', {
+            data: {
+                assets: [asset.item_id]
+            }
+        });
+        await assertResolves(deleteWatcher, 'watcher.delete');
+
+        // remote recreates file at same path
+        const asset2 = await assetCreate({ name: 'echo_delete_test.js', content: '// remote again' });
+        assert.ok(asset2, 'asset should be recreated');
+
+        // reset spy history
+        sharedb.sendRaw.resetHistory();
+
+        // local deletes file — must propagate, not be suppressed by stale echo
+        const deleted = new Promise<void>((resolve) => {
+            const ondelete = messenger.on('assets.delete', (data) => {
+                if (data.data.assets.includes(`${asset2.uniqueId}`)) {
+                    messenger.off('assets.delete', ondelete);
+                    setTimeout(resolve, 0);
+                }
+            });
+        });
+        const uri = vscode.Uri.joinPath(folderUri, asset2.name);
+        await assertResolves(vscode.workspace.fs.delete(uri), 'fs.delete');
+        await assertResolves(deleted, 'assets.delete');
+
+        assert.ok(sharedb.sendRaw.called, 'local redelete should propagate to remote');
+    });
 });
