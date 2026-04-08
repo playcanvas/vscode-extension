@@ -1226,12 +1226,104 @@ suite('extension', () => {
         // reset sharedb ops spy call history
         sharedb.sendRaw.resetHistory();
 
+        const willsave = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onWillSaveTextDocument((e) => {
+                if (e.document.uri.toString() !== uri.toString()) {
+                    return;
+                }
+                disposable.dispose();
+                const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+                assert.strictEqual(saveCalls.length, 0, 'should not send doc:save during onWillSave');
+                resolve();
+            });
+        });
+        const didsave = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidSaveTextDocument((document) => {
+                if (document.uri.toString() !== uri.toString()) {
+                    return;
+                }
+                disposable.dispose();
+                resolve();
+            });
+        });
+
         // save the document
         await tdoc.save();
+        await assertResolves(willsave, 'vscode.onWillSaveTextDocument');
+        await assertResolves(didsave, 'vscode.onDidSaveTextDocument');
 
         // check if sharedb sendRaw was called for document update
-        const call = sharedb.sendRaw.getCall(0);
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        assert.strictEqual(saveCalls.length, 1, 'should send one doc:save after native save');
+        const call = saveCalls[0];
         assert.deepStrictEqual(call.args, [`doc:save:${asset.uniqueId}`], 'sendRaw args should match');
+    });
+
+    test('file change - undo to saved state preserves OT sync', async () => {
+        // regression: undo back to saved state was misclassified as discard,
+        // silently dropping the OT op and corrupting subsequent edits
+
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'undo_ot_sync.js', content: '// ORIGINAL' });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        // edit and save to establish a saved baseline
+        const edit1 = new vscode.WorkspaceEdit();
+        edit1.insert(uri, new vscode.Position(0, 0), '// SAVED\n');
+        await vscode.workspace.applyEdit(edit1);
+        await tdoc.save();
+
+        const saved = tdoc.getText();
+        assert.strictEqual(saved, '// SAVED\n// ORIGINAL', 'saved content should match');
+
+        // edit after save
+        const edit2 = new vscode.WorkspaceEdit();
+        edit2.insert(uri, new vscode.Position(0, 0), '// TEMP\n');
+        await vscode.workspace.applyEdit(edit2);
+        assert.strictEqual(tdoc.isDirty, true, 'should be dirty after edit');
+
+        // undo back to saved state
+        const undone = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && e.reason === vscode.TextDocumentChangeReason.Undo) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+        await vscode.commands.executeCommand('undo');
+        await assertResolves(undone, 'undo change event');
+
+        assert.strictEqual(tdoc.getText(), saved, 'buffer should match saved content after undo');
+
+        // edit again — this must apply against correct OT base
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
+            ['// FINAL\n'] // insert at start
+        ]);
+        const edit3 = new vscode.WorkspaceEdit();
+        edit3.insert(uri, new vscode.Position(0, 0), '// FINAL\n');
+        await vscode.workspace.applyEdit(edit3);
+        await assertResolves(updated, 'sharedb.op after undo');
+
+        // verify OT doc has correct content (no corruption)
+        const expected = `// FINAL\n${saved}`;
+        assert.strictEqual(tdoc.getText(), expected, 'buffer should have final edit');
+        assert.strictEqual(documents.get(asset.uniqueId), expected, 'OT doc should match buffer (no corruption)');
+
+        // final save should persist the same content without divergence
+        sharedb.sendRaw.resetHistory();
+        await tdoc.save();
+
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        assert.strictEqual(saveCalls.length, 1, 'should send one doc:save for final save');
+        assert.deepStrictEqual(saveCalls[0].args, [`doc:save:${asset.uniqueId}`], 'final save args should match');
+        assert.strictEqual(documents.get(asset.uniqueId), expected, 'saved OT doc should still match buffer');
     });
 
     test('file save - remote to local', async () => {

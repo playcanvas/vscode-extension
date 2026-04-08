@@ -86,6 +86,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _diskHash = new Map<string, string>();
 
+    private _saving = new Set<string>();
+
     private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
 
     private _writeMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('writeMutex error', err));
@@ -116,7 +118,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         const file = pm.files.get(Disk.IGNORE_FILE);
         const text = deleted ? '' : file?.type === 'file' ? (file.doc.text ?? '') : '';
-        const h = hash(buffer.from(text));
+        const h = hash(text);
         if (h === this._ignoreHash) {
             return;
         }
@@ -134,7 +136,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             });
     }
 
-    private _parseIgnoreText(text: string, folderUri: vscode.Uri, h = hash(buffer.from(text))) {
+    private _parseIgnoreText(text: string, folderUri: vscode.Uri, h = hash(text)) {
         this._ignoreHash = h;
 
         if (!text) {
@@ -528,7 +530,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
             const path = relativePath(document.uri, folderUri);
             this._opened.add(document.uri.path);
-            this._diskHash.set(document.uri.path, hash(buffer.from(norm(document.getText()))));
+            this._diskHash.set(document.uri.path, hash(norm(document.getText())));
             this._events.emit('asset:doc:open', path);
             this._dirtify(document);
         });
@@ -539,11 +541,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(document.uri, folderUri);
             this._opened.delete(document.uri.path);
             this._diskHash.delete(document.uri.path);
+            this._saving.delete(document.uri.path);
             this._events.emit('asset:doc:close', path);
         });
 
         const onchange = vscode.workspace.onDidChangeTextDocument((e) => {
-            const { document, contentChanges } = e;
+            const { document, contentChanges, reason } = e;
             if (contentChanges.length === 0) {
                 return;
             }
@@ -573,8 +576,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // skip discard/revert: buffer reverted to stale disk content,
-            // not a real edit. external edits change the disk so hash won't match.
-            if (!document.isDirty && hash(buffer.from(text)) === this._diskHash.get(document.uri.path)) {
+            // not a real edit. undo/redo are real edits that must reconcile OT state.
+            if (!reason && !document.isDirty && hash(text) === this._diskHash.get(document.uri.path)) {
                 return;
             }
 
@@ -616,15 +619,33 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // update disk hash so discard detection stays in sync after save
-            const h = hash(buffer.from(document.getText()));
+            // defer projectManager.save() to onDidSaveTextDocument so VS Code's
+            // native save completes before the remote save is triggered.
+            const h = hash(norm(document.getText()));
             this._diskHash.set(document.uri.path, h);
+            this._saving.add(document.uri.path);
 
             // check if ignore updated (only if file has unsaved changes)
             if (file.dirty) {
                 this._checkIgnoreUpdated(document.uri);
             }
+        });
+        const ondidsave = vscode.workspace.onDidSaveTextDocument((document) => {
+            if (!uriStartsWith(document.uri, folderUri)) {
+                return;
+            }
 
-            // save file in project manager
+            if (!this._saving.has(document.uri.path)) {
+                return;
+            }
+            this._saving.delete(document.uri.path);
+
+            const path = relativePath(document.uri, folderUri);
+            const file = projectManager.files.get(path);
+            if (!file || file.type !== 'file') {
+                return;
+            }
+
             projectManager.save(path);
         });
 
@@ -634,6 +655,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             onchange.dispose();
             onsave.dispose();
+            ondidsave.dispose();
         };
     }
 
@@ -1018,6 +1040,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             this._echo.clear();
             this._syncing.clear();
+            this._saving.clear();
             await this._readMutex.clear();
             await this._writeMutex.clear();
             this._debouncer.clear();
