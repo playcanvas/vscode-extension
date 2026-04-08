@@ -615,6 +615,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // save and mtime refresh. auto-save would clear the dirtify marker
             // set on load for files dirty on the server.
             if (e.reason !== vscode.TextDocumentSaveReason.Manual) {
+                this._saving.delete(document.uri.path);
                 return;
             }
 

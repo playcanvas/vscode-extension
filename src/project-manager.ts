@@ -53,6 +53,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private static readonly FLUSH_TIMEOUT_MS = 5000;
 
+    // increments on each link/unlink cycle so stale retries can bail out
+    private _epoch = 0;
+
     private _pendingDocRetries = new Set<number>();
 
     private _pendingSaveRetries = new Map<number, NodeJS.Timeout>();
@@ -379,7 +382,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return true;
     }
 
-    private async _retrySubscription(type: string, uniqueId: number) {
+    private async _retrySubscription(type: string, uniqueId: number, epoch: number) {
         // skip if already retrying this uniqueId
         if (this._pendingDocRetries.has(uniqueId)) {
             return undefined;
@@ -387,12 +390,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._pendingDocRetries.add(uniqueId);
 
         let doc: Doc | undefined;
+        let cancelled = false;
         for (let attempt = 1; attempt <= ProjectManager.MAX_RETRIES; attempt++) {
             const delay = ProjectManager.DOC_RETRY_MS * Math.pow(2, attempt - 1);
             this._log.debug(`retrying subscription to ${type} ${uniqueId} in ${delay}ms (attempt ${attempt})`);
             await new Promise<void>((r) => setTimeout(r, delay));
 
-            if (this._projectId === undefined) {
+            if (this._epoch !== epoch) {
+                cancelled = true;
                 break;
             }
 
@@ -403,11 +408,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             doc = await this._sharedb.resubscribe(type, `${uniqueId}`);
 
-            if (this._projectId === undefined) {
+            if (this._epoch !== epoch) {
                 if (doc) {
                     doc.destroy();
                 }
                 doc = undefined;
+                cancelled = true;
                 break;
             }
 
@@ -418,7 +424,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         this._pendingDocRetries.delete(uniqueId);
 
-        if (!doc) {
+        if (!doc && !cancelled) {
             const kind = type === 'assets' ? 'asset' : 'document';
             this._log.error(`giving up subscribing to ${kind} ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
         }
@@ -577,7 +583,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 let doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
                 if (!doc2) {
                     this._log.warn(`failed to subscribe to new document ${uniqueId}, scheduling retry`);
-                    doc2 = await this._retrySubscription('documents', uniqueId);
+                    doc2 = await this._retrySubscription('documents', uniqueId, this._epoch);
                     if (!doc2) {
                         return;
                     }
@@ -1256,6 +1262,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             throw this.error.set(() => new Error('project already linked'));
         }
 
+        const epoch = ++this._epoch;
+
         // clean up partial state from a previously failed link attempt
         if (this._cleanup.length > 0) {
             await Promise.allSettled(this._cleanup.map((fn) => fn()));
@@ -1320,7 +1328,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // retry failed asset subscriptions individually
         for (const uniqueId of failed) {
-            const doc = await this._retrySubscription('assets', uniqueId);
+            const doc = await this._retrySubscription('assets', uniqueId, epoch);
             if (!doc) {
                 continue;
             }
@@ -1428,7 +1436,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 const { uniqueId } = batch[j];
                 if (!doc) {
                     this._log.warn(`failed to subscribe to document ${uniqueId}, scheduling retry`);
-                    doc = await this._retrySubscription('documents', uniqueId);
+                    doc = await this._retrySubscription('documents', uniqueId, epoch);
                     if (!doc) {
                         loadFileNext();
                         continue;
@@ -1459,7 +1467,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchSharedb();
             unwatchMessenger();
 
-            // cancel pending retries (in-flight retries check _projectId and bail out)
+            // cancel pending retries (in-flight retries check _epoch and bail out)
             this._pendingDocRetries.clear();
 
             // cancel pending save retries
@@ -1488,6 +1496,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (projectId === undefined || branchId === undefined) {
             throw this.error.set(() => new Error('unlink called before link'));
         }
+        this._epoch++;
         await super.unlink();
         this._projectId = undefined;
         this._branchId = undefined;
