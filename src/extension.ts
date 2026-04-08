@@ -181,7 +181,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await tryCatch(reloading);
         }
         reloading = (async () => {
-            await projectManager.flushPending();
+            await projectManager.flush();
             const collabState = await collabProvider.unlink();
             const uriState = await uriHandler.unlink();
             const dirtyState = await dirtyProvider.unlink();

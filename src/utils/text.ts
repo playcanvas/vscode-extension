@@ -74,7 +74,7 @@ export const vscode2sharedb = (
         }
 
         // atomic replace, delete, or insert
-        // note: ot-text checkOp rejects skip=0, so omit leading offset when 0
+        // NOTE: ot-text checkOp rejects skip=0, so omit leading offset when 0
         if (deleteLen > 0 && text.length > 0) {
             list.push(adjusted ? [adjusted, text, { d: deleteLen }] : [text, { d: deleteLen }]);
         } else if (deleteLen > 0) {

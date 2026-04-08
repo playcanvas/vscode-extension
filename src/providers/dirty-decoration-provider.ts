@@ -14,8 +14,6 @@ class DirtyDecorationProvider
 {
     private _events: EventEmitter<EventMap>;
 
-    private _linked = false;
-
     private _folderUri?: vscode.Uri;
 
     private _projectManager?: ProjectManager;
@@ -33,7 +31,7 @@ class DirtyDecorationProvider
     provideFileDecoration(uri: vscode.Uri) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
-        if (!folderUri || !pm || !this._linked) {
+        if (!folderUri || !pm) {
             return undefined;
         }
 
@@ -60,12 +58,9 @@ class DirtyDecorationProvider
     }
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
-        if (this._linked) {
+        if (this._folderUri !== undefined) {
             throw this.error.set(() => new Error('already linked'));
         }
-
-        this._folderUri = folderUri;
-        this._projectManager = projectManager;
 
         // listen for dirty transitions
         const onDirty = this._events.on('asset:file:dirty', (path) => this._fire(path));
@@ -101,7 +96,8 @@ class DirtyDecorationProvider
             this._onDidChangeFileDecorations.fire(undefined);
         });
 
-        this._linked = true;
+        this._folderUri = folderUri;
+        this._projectManager = projectManager;
 
         this._log.info(`linked to ${folderUri.toString()}`);
     }
@@ -109,17 +105,14 @@ class DirtyDecorationProvider
     async unlink() {
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
-        if (!this._linked) {
-            this._log.warn('unlink called when not linked');
-            if (!folderUri || !projectManager) {
-                throw this.error.set(() => new Error('unlink called before link'));
-            }
-            return { folderUri, projectManager };
+        if (!folderUri || !projectManager) {
+            throw this.error.set(() => new Error('unlink called before link'));
         }
         await super.unlink();
-        this._linked = false;
-        this._log.info(`unlinked from ${folderUri!.toString()}`);
-        return { folderUri: folderUri!, projectManager: projectManager! };
+        this._folderUri = undefined;
+        this._projectManager = undefined;
+        this._log.info(`unlinked from ${folderUri.toString()}`);
+        return { folderUri, projectManager };
     }
 }
 

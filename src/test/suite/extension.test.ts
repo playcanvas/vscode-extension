@@ -2071,6 +2071,6 @@ suite('extension', () => {
                 'deleted collision path should not appear in collisions list'
             );
         }
-        // note: if quickPickStub wasn't called, there are no collisions at all, which is also valid
+        // NOTE: if quickPickStub wasn't called, there are no collisions at all, which is also valid
     });
 });

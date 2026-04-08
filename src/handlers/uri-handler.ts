@@ -30,8 +30,6 @@ class UriHandler
 
     private _rest: Rest;
 
-    private _linked = false;
-
     private _folderUri?: vscode.Uri;
 
     protected _projectManager?: ProjectManager;
@@ -222,7 +220,7 @@ class UriHandler
         const folderUri = vscode.Uri.joinPath(this._rootUri, projectToName(project));
 
         // check if current workspace already has the project opened
-        if (this._linked && this._projectManager && this._folderUri?.toString() === folderUri.toString()) {
+        if (this._folderUri && this._projectManager && this._folderUri.toString() === folderUri.toString()) {
             // open file if asset id is provided
             if (assetId) {
                 await this._openDocument(folderUri, this._projectManager, { assetId, line, col, error });
@@ -245,18 +243,16 @@ class UriHandler
     }
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
-        if (this._linked) {
+        if (this._folderUri !== undefined) {
             throw this.error.set(() => new Error('manager already linked'));
         }
-
-        this._folderUri = folderUri;
-        this._projectManager = projectManager;
-
-        this._linked = true;
 
         this._cleanup.push(async () => this._clearErrorDecoration());
 
         await this._openFile(folderUri, projectManager);
+
+        this._folderUri = folderUri;
+        this._projectManager = projectManager;
 
         this._log.info(`linked to ${folderUri.toString()}`);
     }
@@ -264,17 +260,14 @@ class UriHandler
     async unlink() {
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
-        if (!this._linked) {
-            this._log.warn('unlink called when not linked');
-            if (!folderUri || !projectManager) {
-                throw this.error.set(() => new Error('unlink called before link'));
-            }
-            return { folderUri, projectManager };
+        if (!folderUri || !projectManager) {
+            throw this.error.set(() => new Error('unlink called before link'));
         }
         await super.unlink();
-        this._linked = false;
-        this._log.info(`unlinked from ${folderUri!.toString()}`);
-        return { folderUri: folderUri!, projectManager: projectManager! };
+        this._folderUri = undefined;
+        this._projectManager = undefined;
+        this._log.info(`unlinked from ${folderUri.toString()}`);
+        return { folderUri, projectManager };
     }
 }
 

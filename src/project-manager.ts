@@ -47,9 +47,11 @@ type VirtualFile = {
 class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private static readonly MAX_RETRIES = 5;
 
-    private static readonly RETRY_BASE_MS = 1000;
+    private static readonly DOC_RETRY_MS = 1000;
 
     private static readonly SAVE_RETRY_DELAY_MS = 2000;
+
+    private static readonly FLUSH_TIMEOUT_MS = 5000;
 
     private _pendingDocRetries = new Set<number>();
 
@@ -66,8 +68,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _relay: Relay;
 
     private _rest: Rest;
-
-    private _linked = false;
 
     private _projectId?: number;
 
@@ -185,7 +185,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // ancestor has a collision - skip without adding to collisions
-        // note: check if any collided path is a prefix of this asset's path
+        // NOTE: check if any collided path is a prefix of this asset's path
         for (const collidedPath of this._collidedByPath.keys()) {
             if (filePath.startsWith(`${collidedPath}/`)) {
                 this._log.warn(
@@ -353,7 +353,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = this._assetPath(uniqueId);
 
         // already registered with same uniqueId (from create's optimistic add)
-        // note: skip asset:file:create — folder was created locally, disk doesn't need notification
+        // NOTE: skip asset:file:create — folder was created locally, disk doesn't need notification
         const existing = this._files.get(path);
         if (existing?.uniqueId === uniqueId) {
             return true;
@@ -388,11 +388,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         let doc: Doc | undefined;
         for (let attempt = 1; attempt <= ProjectManager.MAX_RETRIES; attempt++) {
-            const delay = ProjectManager.RETRY_BASE_MS * Math.pow(2, attempt - 1);
+            const delay = ProjectManager.DOC_RETRY_MS * Math.pow(2, attempt - 1);
             this._log.debug(`retrying subscription to ${type} ${uniqueId} in ${delay}ms (attempt ${attempt})`);
             await new Promise<void>((r) => setTimeout(r, delay));
 
-            if (!this._linked) {
+            if (this._projectId === undefined) {
                 break;
             }
 
@@ -403,7 +403,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             doc = await this._sharedb.resubscribe(type, `${uniqueId}`);
 
-            if (!this._linked) {
+            if (this._projectId === undefined) {
                 if (doc) {
                     doc.destroy();
                 }
@@ -444,7 +444,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._pendingSaveRetries.delete(uniqueId);
 
             // bail out if project was unlinked while waiting
-            if (!this._linked) {
+            if (this._projectId === undefined) {
                 return;
             }
 
@@ -452,7 +452,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
 
             // re-check after await — unlink may have happened during sendRaw
-            if (!this._linked) {
+            if (this._projectId === undefined) {
                 return;
             }
 
@@ -711,9 +711,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         skipsDirty = true;
 
                         // collect paths to remove (don't modify map during iteration)
-                        // note: children are not added to collisions - they are implicitly
-                        // inaccessible because their parent is colliding. when the parent
-                        // collision resolves, children will be reloaded via project reload.
+                        // NOTE: children are not added to collisions - they are implicitly
+                        // NOTE: inaccessible because their parent is colliding. when the parent
+                        // NOTE: collision resolves, children will be reloaded via project reload.
                         const remove: string[] = [];
                         for (const [path] of this._files) {
                             if (path === from || path.startsWith(from + '/')) {
@@ -785,8 +785,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         return;
                     }
 
-                    // note: only mark clean if local content matches the saved hash,
-                    // otherwise local unsaved changes would be silently discarded
+                    // NOTE: only mark clean if local content matches the saved hash,
+                    // NOTE: otherwise local unsaved changes would be silently discarded
                     const localHash = hash(file.doc.text);
                     if (fileTo?.hash === localHash) {
                         file.dirty = false;
@@ -949,8 +949,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const asset = await guard(this._rest.assetCreate(this._projectId, this._branchId, data), this.error);
 
         // register folder optimistically — don't depend on messenger round-trip
-        // note: only _files is populated; _assets/_idUniqueId require ShareDB doc
-        // shape (item_id, path[]) which differs from REST response (id, parent)
+        // NOTE: only _files is populated; _assets/_idUniqueId require ShareDB doc
+        // NOTE: shape (item_id, path[]) which differs from REST response (id, parent)
         if (type === 'folder') {
             this._files.set(path, { type: 'folder', uniqueId: asset.uniqueId });
         }
@@ -1132,7 +1132,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // compute minimal diff and submit as single atomic op
-        // note: avoids two-step delete+insert which can lose concurrent remote edits
+        // NOTE: avoids two-step delete+insert which can lose concurrent remote edits
         const op = delta(file.doc.text, norm(buffer.toString(content)));
         if (!op) {
             return;
@@ -1219,7 +1219,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return result;
     }
 
-    async flushPending(timeoutMs = 5000) {
+    async flush() {
         const pending = Array.from(this._files.values()).filter(
             (f): f is VirtualFile & { type: 'file' } => f.type === 'file' && f.doc.pending
         );
@@ -1243,14 +1243,16 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     }
                 })
         );
-        const [err] = await tryCatch(withTimeout(Promise.all(waits), timeoutMs, 'flush pending ops timed out'));
+        const [err] = await tryCatch(
+            withTimeout(Promise.all(waits), ProjectManager.FLUSH_TIMEOUT_MS, 'flush pending ops timed out')
+        );
         if (err) {
             this._log.warn(err.message);
         }
     }
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
-        if (this._linked) {
+        if (this._projectId !== undefined) {
             throw this.error.set(() => new Error('project already linked'));
         }
 
@@ -1353,7 +1355,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // sort folders and files by path depth (parents before children)
         // this ensures parent collisions are detected before processing children
-        // note: walk parent chain directly to get depth; missing parents sort to end
+        // NOTE: walk parent chain directly to get depth; missing parents sort to end
         const depthCache = new Map<number, number>();
         const getDepth = (uniqueId: number): number => {
             if (depthCache.has(uniqueId)) {
@@ -1451,17 +1453,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const unwatchSharedb = this._watchSharedb();
         const unwatchMessenger = this._watchMessenger(branchId);
 
-        // store state
-        this._projectId = projectId;
-        this._branchId = branchId;
-
         // register cleanup
         this._cleanup.push(async () => {
             unwatchEvents();
             unwatchSharedb();
             unwatchMessenger();
 
-            // cancel pending retries (in-flight retries check _linked and bail out)
+            // cancel pending retries (in-flight retries check _projectId and bail out)
             this._pendingDocRetries.clear();
 
             // cancel pending save retries
@@ -1478,25 +1476,23 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._collidedByPath.clear();
         });
 
-        this._linked = true;
+        this._projectId = projectId;
+        this._branchId = branchId;
 
-        this._log.info(`project ${this._projectId} (branch ${this._branchId}) loaded`);
+        this._log.info(`project ${projectId} (branch ${branchId}) loaded`);
     }
 
     async unlink() {
         const projectId = this._projectId;
         const branchId = this._branchId;
-        if (!this._linked) {
-            this._log.warn('unlink called when not linked');
-            if (projectId === undefined || branchId === undefined) {
-                throw this.error.set(() => new Error('unlink called before link'));
-            }
-            return { projectId, branchId };
+        if (projectId === undefined || branchId === undefined) {
+            throw this.error.set(() => new Error('unlink called before link'));
         }
         await super.unlink();
-        this._linked = false;
+        this._projectId = undefined;
+        this._branchId = undefined;
         this._log.info(`project ${projectId} (branch ${branchId}) unloaded`);
-        return { projectId: projectId!, branchId: branchId! };
+        return { projectId, branchId };
     }
 }
 
