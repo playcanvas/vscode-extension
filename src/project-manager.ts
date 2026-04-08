@@ -389,7 +389,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         let doc: Doc | undefined;
         for (let attempt = 1; attempt <= ProjectManager.MAX_RETRIES; attempt++) {
             const delay = ProjectManager.RETRY_BASE_MS * Math.pow(2, attempt - 1);
-            this._log.debug(`retrying ${type} ${uniqueId} subscription in ${delay}ms (attempt ${attempt})`);
+            this._log.debug(`retrying subscription to ${type} ${uniqueId} in ${delay}ms (attempt ${attempt})`);
             await new Promise<void>((r) => setTimeout(r, delay));
 
             if (!this._linked) {
@@ -419,7 +419,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._pendingRetries.delete(uniqueId);
 
         if (!doc) {
-            this._log.error(`giving up subscribing to ${type} ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
+            const kind = type === 'assets' ? 'asset' : 'document';
+            this._log.error(`giving up subscribing to ${kind} ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
         }
         return doc;
     }
