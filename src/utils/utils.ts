@@ -3,11 +3,8 @@ import crypto from 'crypto';
 import * as vscode from 'vscode';
 
 import type { Project } from '../typings/models';
-import type { ShareDbTextOp } from '../typings/sharedb';
 
 import type { signal } from './signal';
-
-export const normEol = (s: string) => s.replace(/\r\n?/g, '\n');
 
 // eslint-disable-next-line no-control-regex
 const ILLEGAL_FS_CHARS = /[<>:"/\\|?*\x00-\x1F\x7F]/g;
@@ -66,135 +63,6 @@ export const parsePath = (path: string) => {
     const name = path.substring(i + 1);
     const folder = path.substring(0, i) || '';
     return [folder, name];
-};
-
-export const vscode2sharedb = (changes: readonly vscode.TextDocumentContentChangeEvent[]) => {
-    const list: ShareDbTextOp[] = [];
-
-    // note: all contentChanges reference the original doc state, but apply
-    // updates canonical state after each call, so we adjust subsequent offsets
-    // based on the net effect of previously processed changes.
-    const effects: { origOffset: number; deleteLen: number; delta: number }[] = [];
-
-    for (const change of changes) {
-        const origOffset = change.rangeOffset;
-        const deleteLen = change.rangeLength;
-        const text = normEol(change.text);
-
-        // adjust offset based on previously processed changes
-        let adjusted = origOffset;
-        for (const e of effects) {
-            if (origOffset >= e.origOffset + e.deleteLen) {
-                adjusted += e.delta;
-            }
-        }
-
-        // atomic replace, delete, or insert
-        // note: ot-text checkOp rejects skip=0, so omit leading offset when 0
-        if (deleteLen > 0 && text.length > 0) {
-            list.push(adjusted ? [adjusted, text, { d: deleteLen }] : [text, { d: deleteLen }]);
-        } else if (deleteLen > 0) {
-            list.push(adjusted ? [adjusted, { d: deleteLen }] : [{ d: deleteLen }]);
-        } else if (text.length > 0) {
-            list.push(adjusted ? [adjusted, text] : [text]);
-        }
-
-        effects.push({ origOffset, deleteLen, delta: text.length - deleteLen });
-    }
-    return list;
-};
-
-// derived from custom ot-text
-export const sharedb2vscode = (doc: vscode.TextDocument, ops: ShareDbTextOp[]) => {
-    const edits: vscode.TextEdit[] = [];
-
-    const add = (cleanOp: [number, string | { d: number }]) => {
-        const [index, data] = cleanOp;
-        switch (typeof data) {
-            case 'string': {
-                // insert
-                edits.push(vscode.TextEdit.insert(doc.positionAt(index), data));
-                break;
-            }
-            case 'object': {
-                // delete
-                edits.push(
-                    vscode.TextEdit.delete(new vscode.Range(doc.positionAt(index), doc.positionAt(index + data.d)))
-                );
-                break;
-            }
-        }
-    };
-    for (const op of ops) {
-        switch (op.length) {
-            case 1: {
-                const [data] = op as [string | { d: number }];
-                add([0, data]);
-                break;
-            }
-            case 2: {
-                const [index, data] = op as [number, string | { d: number }];
-                add([index, data]);
-                break;
-            }
-            default: {
-                // note: walk components with a cursor tracking position in the
-                // original doc. handles atomic replaces, line moves, and any
-                // multi-component ot-text op regardless of element ordering.
-                let cursor = 0;
-                for (const component of op) {
-                    if (typeof component === 'number') {
-                        cursor += component;
-                    } else if (typeof component === 'string') {
-                        add([cursor, component]);
-                    } else {
-                        add([cursor, component]);
-                        cursor += component.d;
-                    }
-                }
-                break;
-            }
-        }
-    }
-
-    return edits;
-};
-
-export const opdiff = (op: ShareDbTextOp) => {
-    let ins = 0;
-    let del = 0;
-    for (const c of op) {
-        if (typeof c === 'string') {
-            ins += c.length;
-        } else if (typeof c === 'object') {
-            del += c.d;
-        }
-    }
-    return `+${ins} -${del}`;
-};
-
-export const minimalDiff = (a: string, b: string) => {
-    const minLen = Math.min(a.length, b.length);
-    let prefix = 0;
-    while (prefix < minLen && a[prefix] === b[prefix]) {
-        prefix++;
-    }
-    let suffix = 0;
-    while (suffix < minLen - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) {
-        suffix++;
-    }
-    return { prefix, suffix };
-};
-
-// build a ShareDbTextOp from the minimal diff between two strings
-export const diffOp = (from: string, to: string): ShareDbTextOp | null => {
-    if (from === to) {
-        return null;
-    }
-    const { prefix, suffix } = minimalDiff(from, to);
-    const del = from.length - prefix - suffix;
-    const ins = to.substring(prefix, to.length - suffix);
-    return del > 0 && ins.length > 0 ? [prefix, ins, { d: del }] : del > 0 ? [prefix, { d: del }] : [prefix, ins];
 };
 
 export const sanitizeName = (name: string) => {
