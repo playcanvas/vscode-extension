@@ -47,7 +47,7 @@ type VirtualFile = {
 class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private static readonly MAX_RETRIES = 5;
 
-    private static readonly RETRY_BASE_MS = 1000;
+    private static readonly DOC_RETRY_MS = 1000;
 
     private static readonly SAVE_RETRY_DELAY_MS = 2000;
 
@@ -388,7 +388,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         let doc: Doc | undefined;
         for (let attempt = 1; attempt <= ProjectManager.MAX_RETRIES; attempt++) {
-            const delay = ProjectManager.RETRY_BASE_MS * Math.pow(2, attempt - 1);
+            const delay = ProjectManager.DOC_RETRY_MS * Math.pow(2, attempt - 1);
             this._log.debug(`retrying subscription to ${type} ${uniqueId} in ${delay}ms (attempt ${attempt})`);
             await new Promise<void>((r) => setTimeout(r, delay));
 
