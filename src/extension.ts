@@ -205,7 +205,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
         if (reloading) {
             void vscode.window.showWarningMessage('Dropping reload request to avoid overlapping reloads');
-            return;
+            return false;
         }
         reloading = true;
         const [err] = await tryCatch(async () => {
@@ -234,6 +234,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         if (err) {
             throw err;
         }
+        return true;
     };
 
     // uri handler
@@ -397,10 +398,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const branchSwitchDone = await simpleNotification(`Switching to branch ${name}...`);
 
             // reload project
-            const [reloadErr] = await tryCatch(reload(projectManager, branch_id));
+            const [reloadErr, reloaded] = await tryCatch(reload(projectManager, branch_id));
             branchSwitchDone();
             if (reloadErr) {
                 throw reloadErr;
+            }
+            if (!reloaded) {
+                return;
             }
 
             // update cache
@@ -469,10 +473,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const checkpointDone = await simpleNotification(`Restoring to checkpoint ${checkpoint_id}. Reloading...`);
 
             // reload project
-            const [reloadErr] = await tryCatch(reload(projectManager));
+            const [reloadErr, reloaded] = await tryCatch(reload(projectManager));
             checkpointDone();
             if (reloadErr) {
                 throw reloadErr;
+            }
+            if (!reloaded) {
+                return;
             }
         });
         if (err) {
@@ -542,12 +549,15 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const reloadDone = await simpleNotification('Reloading project...');
 
             // reload project
-            const [err] = await tryCatch(reload(projectManager));
+            const [err, reloaded] = await tryCatch(reload(projectManager));
             reloadDone();
             if (err) {
                 void handleError(err).catch((e) => {
                     return log.error(e.message);
                 });
+                return;
+            }
+            if (!reloaded) {
                 return;
             }
         })
