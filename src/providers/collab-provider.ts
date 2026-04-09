@@ -82,7 +82,7 @@ class CollabProvider
 
             // wait for file to be available
             const path = relativePath(uri, folderUri);
-            projectManager
+            void projectManager
                 .waitForFile(path, 'file')
                 .then((file) => {
                     // set room

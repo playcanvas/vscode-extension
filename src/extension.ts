@@ -19,14 +19,14 @@ import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect } from './utils/signal';
-import { projectToName, retry, tryCatch, uriStartsWith } from './utils/utils';
+import { projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
-const PING_SAMPLE_MS = 60_000;
+const PING_SAMPLE_MS = 60 * 1000;
 
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wait(0);
 
     // register log channel and sentry for cleanup
     context.subscriptions.push(Log.channel);
@@ -56,7 +56,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             if (selection !== confirmation) {
                 return;
             }
-            vscode.commands.executeCommand('workbench.action.reloadWindow');
+            void vscode.commands.executeCommand('workbench.action.reloadWindow');
         })
     );
 
@@ -96,7 +96,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await auth.reset(`Auth Error: ${error.message}`);
         }
 
-        vscode.window.showErrorMessage(`PlayCanvas Error: ${error.message}`);
+        void vscode.window.showErrorMessage(`PlayCanvas Error: ${error.message}`);
     };
 
     // create events
@@ -165,6 +165,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     >();
 
+    // disk
     const disk = new Disk({
         events
     });
@@ -175,41 +176,41 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     });
 
-    let reloading: Promise<void> | null = null;
+    // reload function
+    let reloading = false;
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
-        while (reloading) {
-            await tryCatch(reloading);
+        if (reloading) {
+            void vscode.window.showWarningMessage('Dropping reload request to avoid overlapping reloads');
+            return false;
         }
-        reloading = (async () => {
+        reloading = true;
+        const [err] = await tryCatch(async () => {
+            // unlink everything
             await projectManager.flush();
             const collabState = await collabProvider.unlink();
             const uriState = await uriHandler.unlink();
             const dirtyState = await dirtyProvider.unlink();
             const diskState = await disk.unlink();
             const projectState = await projectManager.unlink();
+
+            // update branch id if provided (branch switch flow)
             projectState.branchId = branchId ?? projectState.branchId;
 
             // TODO: figure out why this is needed to avoid ShareDB issues
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+            await wait(1000);
 
-            // retry link phase — transient network failures during reload
-            // should not leave the extension in a broken unlinked state
-            await retry(() => projectManager.link(projectState), {
-                retries: 2,
-                delay: (i) => 3000 * (i + 1),
-                warn: (err, attempt) => log.warn(`reload link failed (attempt ${attempt}/3): ${err.message}`)
-            });
-
+            // relink everything
+            await projectManager.link(projectState);
             await disk.link(diskState);
             await dirtyProvider.link(dirtyState);
             await collabProvider.link(collabState);
             await uriHandler.link(uriState);
-        })();
-        const [err] = await tryCatch(reloading);
-        reloading = null;
+        });
+        reloading = false;
         if (err) {
             throw err;
         }
+        return true;
     };
 
     // uri handler
@@ -271,27 +272,27 @@ export const activate = async (context: vscode.ExtensionContext) => {
         return sharedb.connected.get() && messenger.connected.get() && relay.connected.get();
     });
     const services = [
-        { name: 'sharedb', sig: sharedb.connected },
-        { name: 'messenger', sig: messenger.connected },
-        { name: 'relay', sig: relay.connected }
+        { service: 'sharedb', connected: sharedb.connected },
+        { service: 'messenger', connected: messenger.connected },
+        { service: 'relay', connected: relay.connected }
     ] as const;
-    for (const { name, sig } of services) {
+    for (const { service, connected } of services) {
         let prev: boolean | null = null;
-        let wasConnected = false;
+        let seen = false;
         effect(() => {
-            const val = sig.get();
+            const next = connected.get();
             if (prev !== null) {
-                if (prev && !val) {
-                    metrics.increment('connection.down', { service: name });
+                if (prev && !next) {
+                    metrics.increment('connection.down', { service });
                 }
-                if (wasConnected && !prev && val) {
-                    metrics.increment('reconnect', { service: name });
+                if (seen && !prev && next) {
+                    metrics.increment('reconnect', { service });
                 }
             }
-            if (val) {
-                wasConnected = true;
+            if (next) {
+                seen = true;
             }
-            prev = val;
+            prev = next;
         });
     }
     effect(() => {
@@ -342,65 +343,64 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // watch for version control changes
     const branchSwitch = messenger.on('branch.switch', async (e) => {
-        const [err] = await tryCatch(
-            (async () => {
-                const { project_id, branch_id, name } = e.data;
+        const [err] = await tryCatch(async () => {
+            const { project_id, branch_id, name } = e.data;
 
-                // fetch project and disk from cache
-                const { projectManager } = cache.get(project_id) ?? {};
-                if (!projectManager) {
-                    return;
-                }
+            // fetch project and disk from cache
+            const { projectManager } = cache.get(project_id) ?? {};
+            if (!projectManager) {
+                return;
+            }
 
-                metrics.increment('branch.switch');
-                const branchSwitchDone = await simpleNotification(`Switching to branch ${name}...`);
+            metrics.increment('branch.switch');
+            const branchSwitchDone = await simpleNotification(`Switching to branch ${name}...`);
 
-                // reload project
-                const [reloadErr] = await tryCatch(reload(projectManager, branch_id));
-                branchSwitchDone();
-                if (reloadErr) {
-                    throw reloadErr;
-                }
+            // reload project
+            const [reloadErr, reloaded] = await tryCatch(reload(projectManager, branch_id));
+            branchSwitchDone();
+            if (reloadErr) {
+                throw reloadErr;
+            }
+            if (!reloaded) {
+                return;
+            }
 
-                // update cache
-                cache.set(project_id, { branchId: branch_id, projectManager });
+            // update cache
+            cache.set(project_id, { branchId: branch_id, projectManager });
 
-                // update branch status bar item
-                branchStatusBarItem.text = `$(git-branch) ${name}`;
-            })()
-        );
+            // update branch status bar item
+            branchStatusBarItem.text = `$(git-branch) ${name}`;
+        });
         if (err) {
-            handleError(err);
+            void handleError(err);
         }
     });
     const branchClose = messenger.on('branch.close', async (e) => {
-        const [err] = await tryCatch(
-            (async () => {
-                const { project_id, branch_id } = e.data;
+        const [err] = await tryCatch(async () => {
+            const { project_id, branch_id } = e.data;
 
-                // fetch project and disk from cache
-                const { projectManager, branchId } = cache.get(project_id) ?? {};
-                if (!projectManager) {
-                    return;
-                }
-                if (branchId !== branch_id) {
-                    return;
-                }
+            // fetch project and disk from cache
+            const { projectManager, branchId } = cache.get(project_id) ?? {};
+            if (!projectManager) {
+                return;
+            }
+            if (branchId !== branch_id) {
+                return;
+            }
 
-                // find main branch
-                const branches = await rest.projectBranches(project_id);
-                const main = branches.find((b) => b.permanent);
-                if (!main) {
-                    throw new Error(`Failed to find main branch to switch to`);
-                }
+            // find main branch
+            const branches = await rest.projectBranches(project_id);
+            const main = branches.find((b) => b.permanent);
+            if (!main) {
+                throw new Error(`Failed to find main branch to switch to`);
+            }
 
-                // checkout main branch
-                // NOTE: branch switch flow continues in messenger event above
-                await rest.branchCheckout(main.id);
-            })()
-        );
+            // checkout main branch
+            // NOTE: branch switch flow continues in messenger event above
+            await rest.branchCheckout(main.id);
+        });
         if (err) {
-            handleError(err);
+            void handleError(err);
         }
     });
     const checkpointRestore = async (data: {
@@ -409,38 +409,37 @@ export const activate = async (context: vscode.ExtensionContext) => {
         checkpoint_id: string;
         status: 'success' | 'error';
     }) => {
-        const [err] = await tryCatch(
-            (async () => {
-                const { project_id, branch_id, checkpoint_id, status } = data;
+        const [err] = await tryCatch(async () => {
+            const { project_id, branch_id, checkpoint_id, status } = data;
 
-                // check status
-                if (status !== 'success') {
-                    throw new Error(`Failed to restore to checkpoint ${checkpoint_id}`);
-                }
+            // check status
+            if (status !== 'success') {
+                throw new Error(`Failed to restore to checkpoint ${checkpoint_id}`);
+            }
 
-                // fetch project and disk from cache
-                const { projectManager, branchId } = cache.get(project_id) ?? {};
-                if (!projectManager) {
-                    return;
-                }
-                if (branchId !== branch_id) {
-                    return;
-                }
+            // fetch project and disk from cache
+            const { projectManager, branchId } = cache.get(project_id) ?? {};
+            if (!projectManager) {
+                return;
+            }
+            if (branchId !== branch_id) {
+                return;
+            }
 
-                const checkpointDone = await simpleNotification(
-                    `Restoring to checkpoint ${checkpoint_id}. Reloading...`
-                );
+            const checkpointDone = await simpleNotification(`Restoring to checkpoint ${checkpoint_id}. Reloading...`);
 
-                // reload project
-                const [reloadErr] = await tryCatch(reload(projectManager));
-                checkpointDone();
-                if (reloadErr) {
-                    throw reloadErr;
-                }
-            })()
-        );
+            // reload project
+            const [reloadErr, reloaded] = await tryCatch(reload(projectManager));
+            checkpointDone();
+            if (reloadErr) {
+                throw reloadErr;
+            }
+            if (!reloaded) {
+                return;
+            }
+        });
         if (err) {
-            handleError(err);
+            void handleError(err);
         }
     };
     const checkpointRevert = messenger.on('checkpoint.revertEnded', (e) => checkpointRestore(e.data));
@@ -496,10 +495,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const reloadDone = await simpleNotification('Reloading project...');
 
             // reload project
-            const [err] = await tryCatch(reload(projectManager));
+            const [err, reloaded] = await tryCatch(reload(projectManager));
             reloadDone();
             if (err) {
                 void handleError(err).catch((e) => log.error(e.message));
+                return;
+            }
+            if (!reloaded) {
                 return;
             }
         })
@@ -568,7 +570,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
             // show warning message
             const options = ['Show Path Collisions', 'Reload project'];
-            vscode.window
+            void vscode.window
                 .showWarningMessage(
                     [
                         `${collisions.size} asset path collision${collisions.size !== 1 ? 's' : ''} found.`,
@@ -583,7 +585,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
                                 label: path,
                                 description: `(${ids.join(', ')})`
                             }));
-                            vscode.window.showQuickPick(list, {
+                            void vscode.window.showQuickPick(list, {
                                 title: 'Asset Path Collisions',
                                 placeHolder: 'Filter paths',
                                 canPickMany: false
@@ -591,7 +593,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
                             break;
                         }
                         case options[1]: {
-                            vscode.commands.executeCommand(`${NAME}.reloadProject`);
+                            void vscode.commands.executeCommand(`${NAME}.reloadProject`);
                             break;
                         }
                     }
@@ -665,12 +667,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // load branch info
         const doc = await sharedb.subscribe('settings', `project_${project.id}_${userId}`);
         if (!doc) {
-            handleError(new Error(`Failed to load project settings for project ${project.id}`));
+            void handleError(new Error(`Failed to load project settings for project ${project.id}`));
             return;
         }
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                sharedb.unsubscribe('settings', `project_${project.id}_${userId}`);
+                void sharedb.unsubscribe('settings', `project_${project.id}_${userId}`);
             })
         );
         const branchId = doc.data?.branch ?? '';
@@ -714,7 +716,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // store in cache early so messenger events during loading can find it
         cache.set(project.id, { branchId, projectManager });
 
+        // notify sentry of project and branch for better error context
         setSentryProject(project.id, branchId);
+
+        // link project manager (loads project)
         const t0 = Date.now();
         await projectManager.link({
             projectId: project.id,
@@ -724,7 +729,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         metrics.addHistogram('project.assets', projectManager.files.size - 1);
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                projectManager.unlink();
+                void projectManager.unlink();
             })
         );
 
@@ -737,7 +742,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                disk.unlink();
+                void disk.unlink();
             })
         );
 
@@ -745,7 +750,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         await dirtyProvider.link({ folderUri, projectManager });
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                dirtyProvider.unlink();
+                void dirtyProvider.unlink();
             })
         );
 
@@ -755,7 +760,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const f = vscode.workspace.getConfiguration('files');
             if (f.get('autoSave') !== 'off') {
                 log.debug('disabling files.autoSave for workspace');
-                f.update('autoSave', 'off', vscode.ConfigurationTarget.Workspace);
+                void f.update('autoSave', 'off', vscode.ConfigurationTarget.Workspace);
             }
         };
         disableAutosave();
@@ -768,13 +773,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
         );
 
         // link collab provider
-        collabProvider.link({
+        void collabProvider.link({
             folderUri,
             projectManager
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                collabProvider.unlink();
+                void collabProvider.unlink();
             })
         );
 
@@ -785,7 +790,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                uriHandler.unlink();
+                void uriHandler.unlink();
             })
         );
 

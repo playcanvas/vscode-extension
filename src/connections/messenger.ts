@@ -259,7 +259,7 @@ class Messenger extends EventEmitter<EventMap> {
         }
 
         // send watch request
-        this.send({
+        void this.send({
             name: 'project.watch',
             target: { type: 'general' },
             env: ['*'],
@@ -284,7 +284,7 @@ class Messenger extends EventEmitter<EventMap> {
         }
 
         // send unwatch request
-        this.send({
+        void this.send({
             name: 'project.unwatch',
             target: { type: 'general' },
             env: ['*'],

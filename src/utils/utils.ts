@@ -11,6 +11,10 @@ const ILLEGAL_FS_CHARS = /[<>:"/\\|?*\x00-\x1F\x7F]/g;
 
 const WINDOWS_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 
+export const wait = (ms: number) => {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+};
+
 export const hash = (data: string | Uint8Array) => {
     return crypto.createHash('md5').update(data).digest('hex');
 };
@@ -23,9 +27,9 @@ export const withTimeout = <T>(promise: Promise<T>, ms: number, msg: string) => 
     return Promise.race([promise, timer]).finally(() => clearTimeout(id));
 };
 
-export const tryCatch = async <T>(promise: Promise<T>): Promise<[Error, null] | [null, T]> => {
+export const tryCatch = async <T>(task: Promise<T> | (() => Promise<T>)): Promise<[Error, null] | [null, T]> => {
     try {
-        return [null, await promise];
+        return [null, await (typeof task === 'function' ? task() : task)];
     } catch (err: unknown) {
         return [err as Error, null];
     }
@@ -93,28 +97,4 @@ export const summarize = (data: unknown): string => {
         return `{${keys.join(', ')}}`;
     }
     return String(data);
-};
-
-export const retry = async <T>(
-    fn: () => Promise<T>,
-    opts: {
-        retries: number;
-        delay: (attempt: number) => number;
-        warn?: (err: Error, attempt: number) => void;
-    }
-) => {
-    for (let i = 0; i <= opts.retries; i++) {
-        const [err, result] = await tryCatch(fn());
-        if (!err) {
-            return result!;
-        }
-        opts.warn?.(err, i + 1);
-        if (i < opts.retries) {
-            const d = opts.delay(i);
-            await new Promise((resolve) => setTimeout(resolve, d));
-        } else {
-            throw err;
-        }
-    }
-    throw new Error('unreachable');
 };

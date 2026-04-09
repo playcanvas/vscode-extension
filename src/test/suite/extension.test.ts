@@ -12,7 +12,7 @@ import * as sharedbModule from '../../connections/sharedb';
 import * as uriHandlerModule from '../../handlers/uri-handler';
 import type { Asset } from '../../typings/models';
 import * as buffer from '../../utils/buffer';
-import { hash } from '../../utils/utils';
+import { hash, wait } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
 import { assets, documents, branches, projectSettings, project, user, uniqueId } from '../mocks/models';
@@ -173,7 +173,7 @@ suite('extension', () => {
     teardown(async () => {
         sandbox.resetHistory();
         // settle deferred queue / mutex between tests
-        await new Promise((resolve) => setTimeout(resolve, process.env.CI ? 2000 : 50));
+        await wait(process.env.CI ? 2000 : 50);
     });
 
     const assetCreate = async ({ name, content = '', parent }: { name: string; content?: string; parent?: number }) => {
@@ -335,7 +335,7 @@ suite('extension', () => {
         assert.ok(message.includes('collision'), 'warning message should mention collision');
 
         // give time for the .then() callback to execute
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await wait(50);
 
         // check if quick pick was shown after clicking "Show Path Collisions"
         assert.ok(quickPickStub.called, 'quick pick should have been shown after clicking button');
@@ -445,7 +445,7 @@ suite('extension', () => {
         await vscode.env.openExternal(externalUri);
 
         // give time for uri handler to process
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await wait(200);
 
         // check if warning dialog was shown for collision
         assert.ok(
@@ -1107,7 +1107,7 @@ suite('extension', () => {
         await vscode.workspace.fs.rename(tmpUri, uri, { overwrite: true });
 
         // wait for deferred handler to process (10ms defer + margin)
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await wait(200);
 
         // verify no ops submitted (content unchanged)
         assert.strictEqual(doc.submitOp.callCount, 0, 'should not submit ops for identical content');
@@ -1146,7 +1146,7 @@ suite('extension', () => {
         await assertResolves(updated, 'sharedb.op');
 
         // wait for any deferred save to fire
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await wait(200);
 
         // verify no doc:save was sent (no auto-save on external change)
         const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
@@ -1191,7 +1191,7 @@ suite('extension', () => {
         await assertResolves(changed, 'vscode.onDidChangeTextDocument');
 
         // wait for dirtify and any deferred handlers
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await wait(200);
 
         // verify document is dirty (dirtify worked)
         assert.strictEqual(tdoc.isDirty, true, 'document should be dirty after external edit');
@@ -2168,7 +2168,7 @@ suite('extension', () => {
         await vscode.commands.executeCommand(`${NAME}.showPathCollisions`);
 
         // give time for .then() callback
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await wait(50);
 
         // check if our specific collision path is no longer in the list
         if (quickPickStub.called) {
