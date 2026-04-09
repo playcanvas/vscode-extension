@@ -838,6 +838,38 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         };
     }
 
+    private async _flush() {
+        const pending = Array.from(this._files.values()).filter(
+            (f): f is VirtualFile & { type: 'file' } => f.type === 'file' && f.doc.pending
+        );
+        if (!pending.length) {
+            return;
+        }
+
+        this._log.info(`flushing ${pending.length} pending ops before unlink`);
+        const waits = pending.map(
+            (f) =>
+                new Promise<void>((resolve) => {
+                    if (!f.doc.pending) {
+                        resolve();
+                        return;
+                    }
+                    const done = () => resolve();
+                    f.doc.once('nothing pending', done);
+                    if (!f.doc.pending) {
+                        f.doc.off('nothing pending', done);
+                        resolve();
+                    }
+                })
+        );
+        const [err] = await tryCatch(
+            withTimeout(Promise.all(waits), ProjectManager.FLUSH_TIMEOUT_MS, 'flush pending ops timed out')
+        );
+        if (err) {
+            this._log.warn(err.message);
+        }
+    }
+
     async waitForFile(path: string, type: 'file' | 'folder') {
         // check if file already exists
         const file = this._files.get(path);
@@ -1225,38 +1257,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return result;
     }
 
-    async flush() {
-        const pending = Array.from(this._files.values()).filter(
-            (f): f is VirtualFile & { type: 'file' } => f.type === 'file' && f.doc.pending
-        );
-        if (!pending.length) {
-            return;
-        }
-
-        this._log.info(`flushing ${pending.length} pending ops before unlink`);
-        const waits = pending.map(
-            (f) =>
-                new Promise<void>((resolve) => {
-                    if (!f.doc.pending) {
-                        resolve();
-                        return;
-                    }
-                    const done = () => resolve();
-                    f.doc.once('nothing pending', done);
-                    if (!f.doc.pending) {
-                        f.doc.off('nothing pending', done);
-                        resolve();
-                    }
-                })
-        );
-        const [err] = await tryCatch(
-            withTimeout(Promise.all(waits), ProjectManager.FLUSH_TIMEOUT_MS, 'flush pending ops timed out')
-        );
-        if (err) {
-            this._log.warn(err.message);
-        }
-    }
-
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
         if (this._projectId !== undefined) {
             throw this.error.set(() => new Error('project already linked'));
@@ -1497,6 +1497,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             throw this.error.set(() => new Error('unlink called before link'));
         }
         this._epoch++;
+        await this._flush();
         await super.unlink();
         this._projectId = undefined;
         this._branchId = undefined;
