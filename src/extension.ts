@@ -22,7 +22,7 @@ import { computed, effect } from './utils/signal';
 import { projectToName, retry, tryCatch, uriStartsWith, wait } from './utils/utils';
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
-const PING_SAMPLE_MS = 60000;
+const PING_SAMPLE_MS = 60 * 1000;
 
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
