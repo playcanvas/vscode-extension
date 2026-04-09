@@ -11,6 +11,10 @@ const ILLEGAL_FS_CHARS = /[<>:"/\\|?*\x00-\x1F\x7F]/g;
 
 const WINDOWS_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 
+export const wait = (ms: number) => {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+};
+
 export const hash = (data: string | Uint8Array) => {
     return crypto.createHash('md5').update(data).digest('hex');
 };
@@ -111,7 +115,7 @@ export const retry = async <T>(
         opts.warn?.(err, i + 1);
         if (i < opts.retries) {
             const d = opts.delay(i);
-            await new Promise((resolve) => setTimeout(resolve, d));
+            await wait(d);
         } else {
             throw err;
         }
