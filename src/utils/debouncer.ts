@@ -15,9 +15,7 @@ class Debouncer<T> {
                     fn()
                         .then(resolve)
                         .catch(reject)
-                        .finally(() => {
-                            return this._pending.delete(key);
-                        });
+                        .finally(() => this._pending.delete(key));
                 }, this._delay),
                 reject
             });

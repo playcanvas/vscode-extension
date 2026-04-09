@@ -86,9 +86,7 @@ class Rest {
             }
 
             const ctrl = new AbortController();
-            const timer = setTimeout(() => {
-                return ctrl.abort();
-            }, FETCH_TIMEOUT_MS);
+            const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
             const [fetchErr, res] = await tryCatch(
                 fetch(`${this.url}/${path}`, {
                     method,
@@ -107,9 +105,7 @@ class Rest {
                     this._log.warn(
                         `Request failed with network error, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${method} ${path}`
                     );
-                    await new Promise((r) => {
-                        return setTimeout(r, delay);
-                    });
+                    await new Promise((r) => setTimeout(r, delay));
                     continue;
                 }
                 throw fetchErr;
@@ -125,9 +121,7 @@ class Rest {
                     this._log.warn(
                         `Request failed with ${res.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES}): ${method} ${path}`
                     );
-                    await new Promise((r) => {
-                        return setTimeout(r, delay);
-                    });
+                    await new Promise((r) => setTimeout(r, delay));
                     continue;
                 }
                 throw error;

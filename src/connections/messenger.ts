@@ -168,9 +168,7 @@ class Messenger extends EventEmitter<EventMap> {
             // reject pending callers then reset
             this._active.reject(new Error('connection reset'));
             this._active = new Deferred();
-            this.connected.set(() => {
-                return false;
-            });
+            this.connected.set(() => false);
 
             // clear keep alive
             if (this._alive) {
@@ -217,9 +215,7 @@ class Messenger extends EventEmitter<EventMap> {
                 this._lastPong = Date.now();
                 const sent = this._pings.shift();
                 if (sent) {
-                    this.ping.set(() => {
-                        return this._lastPong - sent;
-                    });
+                    this.ping.set(() => this._lastPong - sent);
                 }
                 return;
             }
@@ -250,9 +246,7 @@ class Messenger extends EventEmitter<EventMap> {
 
         // resolve active
         this._active.resolve(socket);
-        this.connected.set(() => {
-            return true;
-        });
+        this.connected.set(() => true);
 
         this._log.info('socket.connected');
     }

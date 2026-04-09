@@ -34,9 +34,7 @@ export const computed = <T>(fn: () => T): { get: () => T } => {
     const result = signal<T>(fn());
 
     const dispose = effect(() => {
-        result.set(() => {
-            return fn();
-        });
+        result.set(() => fn());
     });
     void dispose;
 

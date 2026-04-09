@@ -32,9 +32,7 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
             this.emit('op', op, prev);
         });
 
-        doc.on('nothing pending', () => {
-            return this.emit('nothing pending');
-        });
+        doc.on('nothing pending', () => this.emit('nothing pending'));
     }
 
     get text() {

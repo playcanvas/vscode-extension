@@ -66,9 +66,7 @@ export const assets = new Map<number, Asset>(
             path: [],
             type: 'folder'
         }
-    ].map((asset) => {
-        return [asset.uniqueId, asset];
-    })
+    ].map((asset) => [asset.uniqueId, asset])
 );
 
 export const uniqueId = (function* () {

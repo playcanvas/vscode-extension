@@ -208,9 +208,7 @@ class GrapheneSender implements vscode.TelemetrySender {
 
     private async _postBatch(events: MetricEvent[]): Promise<PostBatchResult> {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => {
-            return ctrl.abort();
-        }, FETCH_TIMEOUT_MS);
+        const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
         const res = await fetch(this._url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

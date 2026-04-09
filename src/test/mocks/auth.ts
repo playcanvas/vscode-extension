@@ -13,12 +13,8 @@ class MockAuth extends Auth {
     constructor(sandbox: sinon.SinonSandbox) {
         super({} as vscode.ExtensionContext);
 
-        this.getAccessToken = sandbox.spy(async () => {
-            return accessToken;
-        });
-        this.reset = sandbox.spy(async () => {
-            return undefined;
-        });
+        this.getAccessToken = sandbox.spy(async () => accessToken);
+        this.reset = sandbox.spy(async () => undefined);
     }
 }
 

@@ -20,24 +20,14 @@ class MockMessenger extends Messenger {
         });
 
         this.connect = sandbox.spy(async (_getToken: () => string) => {
-            this.connected.set(() => {
-                return true;
-            });
+            this.connected.set(() => true);
         });
         this.disconnect = sandbox.spy(() => {
-            this.connected.set(() => {
-                return false;
-            });
+            this.connected.set(() => false);
         });
-        this.watch = sandbox.spy((_projectId: number) => {
-            return undefined;
-        });
-        this.unwatch = sandbox.spy((_projectId: number) => {
-            return undefined;
-        });
-        this.send = sandbox.spy(async () => {
-            return undefined;
-        });
+        this.watch = sandbox.spy((_projectId: number) => undefined);
+        this.unwatch = sandbox.spy((_projectId: number) => undefined);
+        this.send = sandbox.spy(async () => undefined);
     }
 }
 

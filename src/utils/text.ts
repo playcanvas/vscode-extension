@@ -3,9 +3,7 @@ import * as vscode from 'vscode';
 
 import type { ShareDbTextOp } from '../typings/sharedb';
 
-export const norm = (s: string) => {
-    return s.replace(/\r\n?/g, '\n');
-};
+export const norm = (s: string) => s.replace(/\r\n?/g, '\n');
 
 export const diff = (a: string, b: string) => {
     const minLen = Math.min(a.length, b.length);
@@ -156,9 +154,7 @@ export const sharedb2vscode = (document: vscode.TextDocument, uri: vscode.Uri, o
 
     // crlf: apply ops in lf space, convert to crlf, then diff against raw buffer
     const raw = document.getText();
-    const target = ops.reduce((value, op) => {
-        return ottext.apply(value, op) as string;
-    }, text);
+    const target = ops.reduce((value, op) => ottext.apply(value, op) as string, text);
     const next = target.replace(/\n/g, '\r\n');
     const { prefix, suffix } = diff(raw, next);
     const del = raw.length - prefix - suffix;

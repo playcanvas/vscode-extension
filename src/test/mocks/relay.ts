@@ -20,24 +20,14 @@ class MockRelay extends Relay {
         });
 
         this.connect = sandbox.spy(async (_getToken: () => string) => {
-            this.connected.set(() => {
-                return true;
-            });
+            this.connected.set(() => true);
         });
         this.disconnect = sandbox.spy(() => {
-            this.connected.set(() => {
-                return false;
-            });
+            this.connected.set(() => false);
         });
-        this.join = sandbox.spy(() => {
-            return undefined;
-        });
-        this.leave = sandbox.spy(() => {
-            return undefined;
-        });
-        this.message = sandbox.spy(() => {
-            return undefined;
-        });
+        this.join = sandbox.spy(() => undefined);
+        this.leave = sandbox.spy(() => undefined);
+        this.message = sandbox.spy(() => undefined);
     }
 }
 

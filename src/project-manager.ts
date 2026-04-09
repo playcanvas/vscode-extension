@@ -119,9 +119,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _assetPath(uniqueId: number, override: { path?: number[]; name?: string } = {}) {
         const asset = this._assets.get(uniqueId);
         if (!asset) {
-            throw this.error.set(() => {
-                return new Error(`missing child asset ${uniqueId}`);
-            });
+            throw this.error.set(() => new Error(`missing child asset ${uniqueId}`));
         }
 
         const path = override.path ?? asset.path;
@@ -133,15 +131,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         while (parent) {
             const parentUniqueId = this._idUniqueId.getL(parent);
             if (!parentUniqueId) {
-                throw this.error.set(() => {
-                    return new Error(`missing id mapping for parent asset ${parent}`);
-                });
+                throw this.error.set(() => new Error(`missing id mapping for parent asset ${parent}`));
             }
             const parentAsset = this._assets.get(parentUniqueId);
             if (!parentAsset) {
-                throw this.error.set(() => {
-                    return new Error(`missing parent asset ${parentUniqueId}`);
-                });
+                throw this.error.set(() => new Error(`missing parent asset ${parentUniqueId}`));
             }
             segments.unshift(sanitizeName(parentAsset.name));
 
@@ -228,9 +222,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // update signal
-        this.collisions.set(() => {
-            return this._collidedByPath.size;
-        });
+        this.collisions.set(() => this._collidedByPath.size);
     }
 
     private _addAsset(uniqueId: number, doc: Doc) {
@@ -321,9 +313,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         const asset = this._assets.get(uniqueId);
         if (!asset?.file) {
-            throw this.error.set(() => {
-                return new Error(`missing file data for asset ${uniqueId}`);
-            });
+            throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
         }
         const docHash = hash(otdoc.text);
         const s3Hash = asset.file.hash;
@@ -404,9 +394,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         for (let attempt = 1; attempt <= ProjectManager.MAX_RETRIES; attempt++) {
             const delay = ProjectManager.DOC_RETRY_MS * Math.pow(2, attempt - 1);
             this._log.debug(`retrying subscription to ${type} ${uniqueId} in ${delay}ms (attempt ${attempt})`);
-            await new Promise<void>((r) => {
-                return setTimeout(r, delay);
-            });
+            await new Promise<void>((r) => setTimeout(r, delay));
 
             if (this._epoch !== epoch) {
                 cancelled = true;
@@ -543,9 +531,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // subscribe to asset document
             const doc1 = await this._sharedb.subscribe('assets', `${uniqueId}`);
             if (!doc1) {
-                this.error.set(() => {
-                    return new Error(`failed to subscribe to new asset ${uniqueId}`);
-                });
+                this.error.set(() => new Error(`failed to subscribe to new asset ${uniqueId}`));
                 return;
             }
 
@@ -889,18 +875,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
         if (!this._projectId || !this._branchId) {
-            throw this.error.set(() => {
-                return new Error('project not loaded');
-            });
+            throw this.error.set(() => new Error('project not loaded'));
         }
 
         const [parentPath, name] = parsePath(path);
 
         // validate name
         if (!name) {
-            throw this.error.set(() => {
-                return new Error(`missing name for ${path}`);
-            });
+            throw this.error.set(() => new Error(`missing name for ${path}`));
         }
 
         // check if file already exists
@@ -914,9 +896,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (parentPath !== '') {
             const file = this._files.get(parentPath);
             if (!file || file.type !== 'folder') {
-                throw this.error.set(() => {
-                    return new Error(`missing parent folder ${parentPath} of ${path}`);
-                });
+                throw this.error.set(() => new Error(`missing parent folder ${parentPath} of ${path}`));
             }
             parent = file.uniqueId;
         }
@@ -1037,9 +1017,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async rename(oldPath: string, newPath: string) {
         if (!this._projectId || !this._branchId) {
-            throw this.error.set(() => {
-                return new Error('project not loaded');
-            });
+            throw this.error.set(() => new Error('project not loaded'));
         }
 
         // skip if paths are identical
@@ -1049,23 +1027,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // check if moving root
         if (oldPath === '') {
-            throw this.error.set(() => {
-                return new Error('cannot move root folder');
-            });
+            throw this.error.set(() => new Error('cannot move root folder'));
         }
 
         // check if src file exists
         if (!this._files.has(oldPath)) {
-            throw this.error.set(() => {
-                return new Error(`file not found ${oldPath}`);
-            });
+            throw this.error.set(() => new Error(`file not found ${oldPath}`));
         }
 
         // check if dest file already exists
         if (this._files.has(newPath)) {
-            throw this.error.set(() => {
-                return new Error(`file already exists ${newPath}`);
-            });
+            throw this.error.set(() => new Error(`file already exists ${newPath}`));
         }
 
         // parse old file path
@@ -1077,9 +1049,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // find file to rename
             const file = this._files.get(oldPath);
             if (!file) {
-                throw this.error.set(() => {
-                    return new Error(`file not found ${oldPath}`);
-                });
+                throw this.error.set(() => new Error(`file not found ${oldPath}`));
             }
 
             // file update
@@ -1118,17 +1088,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // find src file
         const srcFile = this._files.get(oldPath);
         if (!srcFile) {
-            throw this.error.set(() => {
-                return new Error(`file not found ${oldPath}`);
-            });
+            throw this.error.set(() => new Error(`file not found ${oldPath}`));
         }
 
         // find dest folder
         const destFile = this._files.get(newParent);
         if (!destFile || destFile.type !== 'folder') {
-            throw this.error.set(() => {
-                return new Error(`destination folder not found ${newParent}`);
-            });
+            throw this.error.set(() => new Error(`destination folder not found ${newParent}`));
         }
 
         // file updated
@@ -1260,30 +1226,29 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     async flush() {
-        const pending = Array.from(this._files.values()).filter((f): f is VirtualFile & { type: 'file' } => {
-            return f.type === 'file' && f.doc.pending;
-        });
+        const pending = Array.from(this._files.values()).filter(
+            (f): f is VirtualFile & { type: 'file' } => f.type === 'file' && f.doc.pending
+        );
         if (!pending.length) {
             return;
         }
 
         this._log.info(`flushing ${pending.length} pending ops before unlink`);
-        const waits = pending.map((f) => {
-            return new Promise<void>((resolve) => {
-                if (!f.doc.pending) {
-                    resolve();
-                    return;
-                }
-                const done = () => {
-                    return resolve();
-                };
-                f.doc.once('nothing pending', done);
-                if (!f.doc.pending) {
-                    f.doc.off('nothing pending', done);
-                    resolve();
-                }
-            });
-        });
+        const waits = pending.map(
+            (f) =>
+                new Promise<void>((resolve) => {
+                    if (!f.doc.pending) {
+                        resolve();
+                        return;
+                    }
+                    const done = () => resolve();
+                    f.doc.once('nothing pending', done);
+                    if (!f.doc.pending) {
+                        f.doc.off('nothing pending', done);
+                        resolve();
+                    }
+                })
+        );
         const [err] = await tryCatch(
             withTimeout(Promise.all(waits), ProjectManager.FLUSH_TIMEOUT_MS, 'flush pending ops timed out')
         );
@@ -1294,20 +1259,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
         if (this._projectId !== undefined) {
-            throw this.error.set(() => {
-                return new Error('project already linked');
-            });
+            throw this.error.set(() => new Error('project already linked'));
         }
 
         const epoch = ++this._epoch;
 
         // clean up partial state from a previously failed link attempt
         if (this._cleanup.length > 0) {
-            await Promise.allSettled(
-                this._cleanup.map((fn) => {
-                    return fn();
-                })
-            );
+            await Promise.allSettled(this._cleanup.map((fn) => fn()));
             this._cleanup.length = 0;
             this._pendingDocRetries.clear();
             for (const timeout of this._pendingSaveRetries.values()) {
@@ -1327,9 +1286,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // validate token scope by checking for uniqueId presence
         if (!Array.isArray(assets) || (assets.length > 0 && !('uniqueId' in assets[0]))) {
-            throw this.error.set(() => {
-                return new Error('invalid access token scope');
-            });
+            throw this.error.set(() => new Error('invalid access token scope'));
         }
 
         // add root folder
@@ -1345,9 +1302,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const failed: number[] = [];
         for (let i = 0; i < assets.length; i += BATCH_SIZE) {
             const batch = assets.slice(i, i + BATCH_SIZE);
-            const subscriptions: [string, string][] = batch.map((asset) => {
-                return ['assets', `${asset.uniqueId}`];
-            });
+            const subscriptions: [string, string][] = batch.map((asset) => ['assets', `${asset.uniqueId}`]);
             const docs = await this._sharedb.bulkSubscribe(subscriptions);
             this._cleanup.push(async () => {
                 await this._sharedb.bulkUnsubscribe(subscriptions);
@@ -1471,9 +1426,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // add all files next in batches
         for (let i = 0; i < files.length; i += BATCH_SIZE) {
             const batch = files.slice(i, i + BATCH_SIZE);
-            const subscriptions: [string, string][] = batch.map((asset) => {
-                return ['documents', `${asset.uniqueId}`];
-            });
+            const subscriptions: [string, string][] = batch.map((asset) => ['documents', `${asset.uniqueId}`]);
             const docs = await this._sharedb.bulkSubscribe(subscriptions);
             this._cleanup.push(async () => {
                 await this._sharedb.bulkUnsubscribe(subscriptions);
@@ -1541,9 +1494,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const projectId = this._projectId;
         const branchId = this._branchId;
         if (projectId === undefined || branchId === undefined) {
-            throw this.error.set(() => {
-                return new Error('unlink called before link');
-            });
+            throw this.error.set(() => new Error('unlink called before link'));
         }
         this._epoch++;
         await super.unlink();

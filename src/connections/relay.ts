@@ -86,9 +86,7 @@ class Relay extends EventEmitter<EventMap> {
             const reason = `[${this.constructor.name}] invalid access token`;
             // TODO: figure out why this triggers 1006 not 3000
             socket.close(3000, reason);
-            this.error.set(() => {
-                return new Error(reason);
-            });
+            this.error.set(() => new Error(reason));
         }, 5000);
         socket.addEventListener('open', () => {
             this._log.debug('socket.open');
@@ -118,9 +116,7 @@ class Relay extends EventEmitter<EventMap> {
             // reject pending callers then reset
             this._active.reject(new Error('connection reset'));
             this._active = new Deferred();
-            this.connected.set(() => {
-                return false;
-            });
+            this.connected.set(() => false);
 
             // clear keep alive
             if (this._alive) {
@@ -172,9 +168,7 @@ class Relay extends EventEmitter<EventMap> {
                 this._lastPong = Date.now();
                 const sent = this._pings.shift();
                 if (sent) {
-                    this.ping.set(() => {
-                        return this._lastPong - sent;
-                    });
+                    this.ping.set(() => this._lastPong - sent);
                 }
                 return;
             }
@@ -214,9 +208,7 @@ class Relay extends EventEmitter<EventMap> {
 
         // resolve active
         this._active.resolve(socket);
-        this.connected.set(() => {
-            return true;
-        });
+        this.connected.set(() => true);
 
         this._log.info('socket.connected');
     }

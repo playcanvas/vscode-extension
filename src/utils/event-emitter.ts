@@ -32,9 +32,7 @@ class EventEmitter<T extends EventMap = Record<string, any[]>> {
         }
         this._listeners.set(
             event,
-            this._listeners.get(event)!.filter((l) => {
-                return l !== listener;
-            })
+            this._listeners.get(event)!.filter((l) => l !== listener)
         );
         return this;
     }

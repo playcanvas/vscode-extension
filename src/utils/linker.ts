@@ -8,11 +8,7 @@ abstract class Linker<T> {
     abstract link(params: T): Promise<void>;
 
     async unlink() {
-        await Promise.allSettled(
-            this._cleanup.map((fn) => {
-                return fn();
-            })
-        );
+        await Promise.allSettled(this._cleanup.map((fn) => fn()));
         this._cleanup.length = 0;
 
         return {} as T;

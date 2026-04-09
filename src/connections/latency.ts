@@ -4,9 +4,7 @@ import type { MessageEvent } from 'ws';
 import { JITTER, LATENCY } from '../config';
 
 /** computed delay with optional jitter */
-const delay = () => {
-    return LATENCY > 0 ? LATENCY + Math.round((Math.random() * 2 - 1) * JITTER) : 0;
-};
+const delay = () => (LATENCY > 0 ? LATENCY + Math.round((Math.random() * 2 - 1) * JITTER) : 0);
 
 type SendArgs = Parameters<WebSocket['send']>;
 type MessageListener = (event: MessageEvent) => void;
@@ -21,9 +19,7 @@ const latency = <T extends WebSocket>(socket: T): T => {
     // delay outgoing
     const send = socket.send.bind(socket) as (...args: SendArgs) => void;
     socket.send = ((...args: SendArgs) => {
-        setTimeout(() => {
-            return send(...args);
-        }, delay());
+        setTimeout(() => send(...args), delay());
     }) as typeof socket.send;
 
     // track original→wrapped listeners so removeEventListener works
@@ -37,11 +33,7 @@ const latency = <T extends WebSocket>(socket: T): T => {
         ...rest: [WebSocket.EventListenerOptions?]
     ) => {
         if (event === 'message') {
-            const delayed: MessageListener = (ev) => {
-                return setTimeout(() => {
-                    return (fn as MessageListener)(ev);
-                }, delay());
-            };
+            const delayed: MessageListener = (ev) => setTimeout(() => (fn as MessageListener)(ev), delay());
             listeners.set(fn as MessageListener, delayed);
             return add('message', delayed, ...rest);
         }

@@ -77,9 +77,7 @@ class UriHandler
         // get file path
         const filePath = projectManager.path(assetId);
         if (!filePath) {
-            throw this.error.set(() => {
-                return new Error(`asset ${assetId} not found in project`);
-            });
+            throw this.error.set(() => new Error(`asset ${assetId} not found in project`));
         }
 
         // check if file is loaded
@@ -212,13 +210,9 @@ class UriHandler
         const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);
 
         // find matching project
-        const project = projects.find((p) => {
-            return p.id === projectId;
-        });
+        const project = projects.find((p) => p.id === projectId);
         if (!project) {
-            this.error.set(() => {
-                return new Error(`project ${projectId} not found`);
-            });
+            this.error.set(() => new Error(`project ${projectId} not found`));
             return;
         }
 
@@ -250,14 +244,10 @@ class UriHandler
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri !== undefined) {
-            throw this.error.set(() => {
-                return new Error('manager already linked');
-            });
+            throw this.error.set(() => new Error('manager already linked'));
         }
 
-        this._cleanup.push(async () => {
-            return this._clearErrorDecoration();
-        });
+        this._cleanup.push(async () => this._clearErrorDecoration());
 
         await this._openFile(folderUri, projectManager);
 
@@ -271,9 +261,7 @@ class UriHandler
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
         if (!folderUri || !projectManager) {
-            throw this.error.set(() => {
-                return new Error('unlink called before link');
-            });
+            throw this.error.set(() => new Error('unlink called before link'));
         }
         await super.unlink();
         this._folderUri = undefined;
