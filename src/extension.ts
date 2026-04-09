@@ -19,7 +19,7 @@ import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect } from './utils/signal';
-import { projectToName, retry, tryCatch, uriStartsWith, wait } from './utils/utils';
+import { projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
 const PING_SAMPLE_MS = 60 * 1000;
@@ -165,6 +165,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     >();
 
+    // disk
     const disk = new Disk({
         events
     });
@@ -175,41 +176,37 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     });
 
-    let reloading: Promise<void> | null = null;
+    // reload function
+    let reloading = false;
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
-        while (reloading) {
-            await tryCatch(reloading);
+        if (reloading) {
+            log.warn('dropping reload request - already reloading');
+            return;
         }
-        reloading = (async () => {
-            await projectManager.flush();
-            const collabState = await collabProvider.unlink();
-            const uriState = await uriHandler.unlink();
-            const dirtyState = await dirtyProvider.unlink();
-            const diskState = await disk.unlink();
-            const projectState = await projectManager.unlink();
-            projectState.branchId = branchId ?? projectState.branchId;
+        reloading = true;
 
-            // TODO: figure out why this is needed to avoid ShareDB issues
-            await wait(1000);
+        // unlink everything
+        await projectManager.flush();
+        const collabState = await collabProvider.unlink();
+        const uriState = await uriHandler.unlink();
+        const dirtyState = await dirtyProvider.unlink();
+        const diskState = await disk.unlink();
+        const projectState = await projectManager.unlink();
 
-            // retry link phase — transient network failures during reload
-            // should not leave the extension in a broken unlinked state
-            await retry(() => projectManager.link(projectState), {
-                retries: 2,
-                delay: (i) => 3000 * (i + 1),
-                warn: (err, attempt) => log.warn(`reload link failed (attempt ${attempt}/3): ${err.message}`)
-            });
+        // update branch id if provided (branch switch flow)
+        projectState.branchId = branchId ?? projectState.branchId;
 
-            await disk.link(diskState);
-            await dirtyProvider.link(dirtyState);
-            await collabProvider.link(collabState);
-            await uriHandler.link(uriState);
-        })();
-        const [err] = await tryCatch(reloading);
-        reloading = null;
-        if (err) {
-            throw err;
-        }
+        // TODO: figure out why this is needed to avoid ShareDB issues
+        await wait(1000);
+
+        // relink everything
+        await projectManager.link(projectState);
+        await disk.link(diskState);
+        await dirtyProvider.link(dirtyState);
+        await collabProvider.link(collabState);
+        await uriHandler.link(uriState);
+
+        reloading = false;
     };
 
     // uri handler

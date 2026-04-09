@@ -1,10 +1,14 @@
 class Mutex<T> {
+    private _match: (key1: string, key2: string) => boolean;
+
+    private _onerror: (err: unknown) => void;
+
     private _chains = new Map<string, Promise<T | undefined>>();
 
-    constructor(
-        private readonly _match: (key1: string, key2: string) => boolean,
-        private readonly _onError?: (err: unknown) => void
-    ) {}
+    constructor(match = (k1: string, k2: string) => k1 === k2, onerror: (err: unknown) => void = () => void 0) {
+        this._match = match;
+        this._onerror = onerror;
+    }
 
     async atomic(keys: string[], fn: () => Promise<T>): Promise<T | undefined> {
         // snapshot dependencies before registering this chain to avoid deadlocks
@@ -17,7 +21,7 @@ class Mutex<T> {
         );
         const chain = Promise.allSettled(deps).then(() =>
             fn().catch((err) => {
-                this._onError?.(err);
+                this._onerror(err);
                 return undefined;
             })
         );

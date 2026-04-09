@@ -98,27 +98,3 @@ export const summarize = (data: unknown): string => {
     }
     return String(data);
 };
-
-export const retry = async <T>(
-    fn: () => Promise<T>,
-    opts: {
-        retries: number;
-        delay: (attempt: number) => number;
-        warn?: (err: Error, attempt: number) => void;
-    }
-) => {
-    for (let i = 0; i <= opts.retries; i++) {
-        const [err, result] = await tryCatch(fn());
-        if (!err) {
-            return result!;
-        }
-        opts.warn?.(err, i + 1);
-        if (i < opts.retries) {
-            const d = opts.delay(i);
-            await wait(d);
-        } else {
-            throw err;
-        }
-    }
-    throw new Error('unreachable');
-};
