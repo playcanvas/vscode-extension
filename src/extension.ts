@@ -110,7 +110,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await auth.reset(`Auth Error: ${error.message}`);
         }
 
-        vscode.window.showErrorMessage(`PlayCanvas Error: ${error.message}`);
+        void vscode.window.showErrorMessage(`PlayCanvas Error: ${error.message}`);
     };
 
     // create events
