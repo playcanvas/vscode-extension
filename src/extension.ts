@@ -773,7 +773,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         );
 
         // link collab provider
-        void collabProvider.link({
+        await collabProvider.link({
             folderUri,
             projectManager
         });
