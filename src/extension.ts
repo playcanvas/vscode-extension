@@ -301,27 +301,27 @@ export const activate = async (context: vscode.ExtensionContext) => {
         return sharedb.connected.get() && messenger.connected.get() && relay.connected.get();
     });
     const services = [
-        { name: 'sharedb', connected: sharedb.connected },
-        { name: 'messenger', sig: messenger.connected },
-        { name: 'relay', sig: relay.connected }
+        { service: 'sharedb', connected: sharedb.connected },
+        { service: 'messenger', connected: messenger.connected },
+        { service: 'relay', connected: relay.connected }
     ] as const;
-    for (const { name, connected: sig } of services) {
+    for (const { service, connected } of services) {
         let prev: boolean | null = null;
-        let wasConnected = false;
+        let seen = false;
         effect(() => {
-            const val = sig.get();
+            const next = connected.get();
             if (prev !== null) {
-                if (prev && !val) {
-                    metrics.increment('connection.down', { service: name });
+                if (prev && !next) {
+                    metrics.increment('connection.down', { service });
                 }
-                if (wasConnected && !prev && val) {
-                    metrics.increment('reconnect', { service: name });
+                if (seen && !prev && next) {
+                    metrics.increment('reconnect', { service });
                 }
             }
-            if (val) {
-                wasConnected = true;
+            if (next) {
+                seen = true;
             }
-            prev = val;
+            prev = next;
         });
     }
     effect(() => {
