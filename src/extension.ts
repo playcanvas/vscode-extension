@@ -792,7 +792,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // store in cache early so messenger events during loading can find it
         cache.set(project.id, { branchId, projectManager });
 
+        // notify sentry of project and branch for better error context
         setSentryProject(project.id, branchId);
+
+        // link project manager (loads project)
         const t0 = Date.now();
         await projectManager.link({
             projectId: project.id,
