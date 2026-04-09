@@ -6,7 +6,7 @@ import { FETCH_TIMEOUT_MS } from './constants';
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
-const MAX_DELAY_MS = 30000;
+const MAX_DELAY_MS = 30 * 1000;
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
 class Rest {

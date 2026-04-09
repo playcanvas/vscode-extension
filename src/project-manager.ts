@@ -49,9 +49,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private static readonly DOC_RETRY_MS = 1000;
 
-    private static readonly SAVE_RETRY_DELAY_MS = 2000;
+    private static readonly SAVE_RETRY_DELAY_MS = 2 * 1000;
 
-    private static readonly FLUSH_TIMEOUT_MS = 5000;
+    private static readonly FLUSH_TIMEOUT_MS = 5 * 1000;
 
     // increments on each link/unlink cycle so stale retries can bail out
     private _epoch = 0;

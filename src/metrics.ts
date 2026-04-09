@@ -4,7 +4,7 @@ import { HOME_URL, NAME, PUBLISHER } from './config.js';
 import { FETCH_TIMEOUT_MS } from './connections/constants';
 import { Log } from './log';
 
-const FLUSH_INTERVAL = 5000;
+const FLUSH_INTERVAL = 5 * 1000;
 const MAX_BATCH_EVENTS = 50;
 const MAX_BUFFER_EVENTS = 500;
 const MAX_PAYLOAD_BYTES = 80 * 1024;
