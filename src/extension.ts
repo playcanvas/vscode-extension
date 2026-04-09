@@ -384,65 +384,61 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // watch for version control changes
     const branchSwitch = messenger.on('branch.switch', async (e) => {
-        const [err] = await tryCatch(
-            (async () => {
-                const { project_id, branch_id, name } = e.data;
+        const [err] = await tryCatch(async () => {
+            const { project_id, branch_id, name } = e.data;
 
-                // fetch project and disk from cache
-                const { projectManager } = cache.get(project_id) ?? {};
-                if (!projectManager) {
-                    return;
-                }
+            // fetch project and disk from cache
+            const { projectManager } = cache.get(project_id) ?? {};
+            if (!projectManager) {
+                return;
+            }
 
-                metrics.increment('branch.switch');
-                const branchSwitchDone = await simpleNotification(`Switching to branch ${name}...`);
+            metrics.increment('branch.switch');
+            const branchSwitchDone = await simpleNotification(`Switching to branch ${name}...`);
 
-                // reload project
-                const [reloadErr] = await tryCatch(reload(projectManager, branch_id));
-                branchSwitchDone();
-                if (reloadErr) {
-                    throw reloadErr;
-                }
+            // reload project
+            const [reloadErr] = await tryCatch(reload(projectManager, branch_id));
+            branchSwitchDone();
+            if (reloadErr) {
+                throw reloadErr;
+            }
 
-                // update cache
-                cache.set(project_id, { branchId: branch_id, projectManager });
+            // update cache
+            cache.set(project_id, { branchId: branch_id, projectManager });
 
-                // update branch status bar item
-                branchStatusBarItem.text = `$(git-branch) ${name}`;
-            })()
-        );
+            // update branch status bar item
+            branchStatusBarItem.text = `$(git-branch) ${name}`;
+        });
         if (err) {
             void handleError(err);
         }
     });
     const branchClose = messenger.on('branch.close', async (e) => {
-        const [err] = await tryCatch(
-            (async () => {
-                const { project_id, branch_id } = e.data;
+        const [err] = await tryCatch(async () => {
+            const { project_id, branch_id } = e.data;
 
-                // fetch project and disk from cache
-                const { projectManager, branchId } = cache.get(project_id) ?? {};
-                if (!projectManager) {
-                    return;
-                }
-                if (branchId !== branch_id) {
-                    return;
-                }
+            // fetch project and disk from cache
+            const { projectManager, branchId } = cache.get(project_id) ?? {};
+            if (!projectManager) {
+                return;
+            }
+            if (branchId !== branch_id) {
+                return;
+            }
 
-                // find main branch
-                const branches = await rest.projectBranches(project_id);
-                const main = branches.find((b) => {
-                    return b.permanent;
-                });
-                if (!main) {
-                    throw new Error(`Failed to find main branch to switch to`);
-                }
+            // find main branch
+            const branches = await rest.projectBranches(project_id);
+            const main = branches.find((b) => {
+                return b.permanent;
+            });
+            if (!main) {
+                throw new Error(`Failed to find main branch to switch to`);
+            }
 
-                // checkout main branch
-                // NOTE: branch switch flow continues in messenger event above
-                await rest.branchCheckout(main.id);
-            })()
-        );
+            // checkout main branch
+            // NOTE: branch switch flow continues in messenger event above
+            await rest.branchCheckout(main.id);
+        });
         if (err) {
             void handleError(err);
         }
@@ -453,36 +449,32 @@ export const activate = async (context: vscode.ExtensionContext) => {
         checkpoint_id: string;
         status: 'success' | 'error';
     }) => {
-        const [err] = await tryCatch(
-            (async () => {
-                const { project_id, branch_id, checkpoint_id, status } = data;
+        const [err] = await tryCatch(async () => {
+            const { project_id, branch_id, checkpoint_id, status } = data;
 
-                // check status
-                if (status !== 'success') {
-                    throw new Error(`Failed to restore to checkpoint ${checkpoint_id}`);
-                }
+            // check status
+            if (status !== 'success') {
+                throw new Error(`Failed to restore to checkpoint ${checkpoint_id}`);
+            }
 
-                // fetch project and disk from cache
-                const { projectManager, branchId } = cache.get(project_id) ?? {};
-                if (!projectManager) {
-                    return;
-                }
-                if (branchId !== branch_id) {
-                    return;
-                }
+            // fetch project and disk from cache
+            const { projectManager, branchId } = cache.get(project_id) ?? {};
+            if (!projectManager) {
+                return;
+            }
+            if (branchId !== branch_id) {
+                return;
+            }
 
-                const checkpointDone = await simpleNotification(
-                    `Restoring to checkpoint ${checkpoint_id}. Reloading...`
-                );
+            const checkpointDone = await simpleNotification(`Restoring to checkpoint ${checkpoint_id}. Reloading...`);
 
-                // reload project
-                const [reloadErr] = await tryCatch(reload(projectManager));
-                checkpointDone();
-                if (reloadErr) {
-                    throw reloadErr;
-                }
-            })()
-        );
+            // reload project
+            const [reloadErr] = await tryCatch(reload(projectManager));
+            checkpointDone();
+            if (reloadErr) {
+                throw reloadErr;
+            }
+        });
         if (err) {
             void handleError(err);
         }
