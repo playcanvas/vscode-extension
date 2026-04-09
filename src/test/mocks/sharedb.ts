@@ -230,10 +230,14 @@ class MockShareDb extends ShareDb {
         super({ url: '', origin: '' });
 
         this.connect = sandbox.spy(async (_getToken: () => string) => {
-            this.connected.set(() => true);
+            this.connected.set(() => {
+                return true;
+            });
         });
         this.disconnect = sandbox.spy(() => {
-            this.connected.set(() => false);
+            this.connected.set(() => {
+                return false;
+            });
         });
         this.subscribe = sandbox.spy(async (type: string, key: string) => {
             const doc = new MockDoc(sandbox, type, key);
@@ -241,13 +245,21 @@ class MockShareDb extends ShareDb {
             return doc;
         });
         this.bulkSubscribe = sandbox.spy(async (subscriptions: [string, string][]) => {
-            return Promise.all(subscriptions.map(([type, key]) => this.subscribe(type, key)));
+            return Promise.all(
+                subscriptions.map(([type, key]) => {
+                    return this.subscribe(type, key);
+                })
+            );
         });
         this.unsubscribe = sandbox.spy(async (type: string, key: string) => {
             this.subscriptions.delete(`${type}:${key}`);
         });
         this.bulkUnsubscribe = sandbox.spy(async (subscriptions: [string, string][]) => {
-            await Promise.all(subscriptions.map(([type, key]) => this.unsubscribe(type, key)));
+            await Promise.all(
+                subscriptions.map(([type, key]) => {
+                    return this.unsubscribe(type, key);
+                })
+            );
         });
         this.sendRaw = sandbox.spy(async (data: Parameters<WebSocket['send']>[0]) => {
             // check for fs operations
@@ -265,7 +277,9 @@ class MockShareDb extends ShareDb {
                     }
                     messenger.emit('assets.delete', {
                         data: {
-                            assets: json.ids.map((id) => id.toString())
+                            assets: json.ids.map((id) => {
+                                return id.toString();
+                            })
                         }
                     });
                     return;

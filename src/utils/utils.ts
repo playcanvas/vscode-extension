@@ -12,7 +12,9 @@ const ILLEGAL_FS_CHARS = /[<>:"/\\|?*\x00-\x1F\x7F]/g;
 const WINDOWS_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
 
 export const wait = (ms: number) => {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return new Promise((resolve) => {
+        return setTimeout(resolve, ms);
+    });
 };
 
 export const hash = (data: string | Uint8Array) => {
@@ -22,9 +24,13 @@ export const hash = (data: string | Uint8Array) => {
 export const withTimeout = <T>(promise: Promise<T>, ms: number, msg: string) => {
     let id: ReturnType<typeof setTimeout>;
     const timer = new Promise<never>((_, reject) => {
-        id = setTimeout(() => reject(new Error(msg)), ms);
+        id = setTimeout(() => {
+            return reject(new Error(msg));
+        }, ms);
     });
-    return Promise.race([promise, timer]).finally(() => clearTimeout(id));
+    return Promise.race([promise, timer]).finally(() => {
+        return clearTimeout(id);
+    });
 };
 
 export const tryCatch = async <T>(promise: Promise<T>): Promise<[Error, null] | [null, T]> => {
@@ -37,7 +43,9 @@ export const tryCatch = async <T>(promise: Promise<T>): Promise<[Error, null] | 
 
 export const guard = <T>(promise: Promise<T>, error: ReturnType<typeof signal<Error | undefined>>) => {
     return promise.catch((err: Error) => {
-        error.set(() => err);
+        error.set(() => {
+            return err;
+        });
         throw err;
     });
 };

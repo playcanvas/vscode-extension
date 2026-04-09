@@ -88,13 +88,19 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _saving = new Set<string>();
 
-    private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
+    private _readMutex = new Mutex<void>(pathsRelated, (err) => {
+        return this._log.warn('readMutex error', err);
+    });
 
-    private _writeMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('writeMutex error', err));
+    private _writeMutex = new Mutex<void>(pathsRelated, (err) => {
+        return this._log.warn('writeMutex error', err);
+    });
 
     private _debouncer = new Debouncer<void>(50);
 
-    private _ignoring = (_uri: vscode.Uri) => false;
+    private _ignoring = (_uri: vscode.Uri) => {
+        return false;
+    };
 
     private _ignoreHash = '';
 
@@ -140,7 +146,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._ignoreHash = h;
 
         if (!text) {
-            this._ignoring = (_uri: vscode.Uri) => false;
+            this._ignoring = (_uri: vscode.Uri) => {
+                return false;
+            };
             this._log.debug(`cleared ignore rules from empty ignore file`);
             return;
         }
@@ -179,9 +187,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     if (attempt++ >= 2 || !/EBUSY/.test(err.message)) {
                         throw err;
                     }
-                    await new Promise((r) => setTimeout(r, 100 * Math.pow(2, attempt - 1)));
+                    await new Promise((r) => {
+                        return setTimeout(r, 100 * Math.pow(2, attempt - 1));
+                    });
                 }
-                setTimeout(() => this._syncing.delete(key), 200);
+                setTimeout(() => {
+                    return this._syncing.delete(key);
+                }, 200);
             })
             .catch((err) => {
                 if (/debounce/.test(err.message)) {
@@ -220,7 +232,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 if (!(await fileExists(parentUri))) {
                     const folderUri = this._folderUri;
                     if (!folderUri) {
-                        throw this.error.set(() => new Error(`parent folder does not exist: ${parentUri.path}`));
+                        throw this.error.set(() => {
+                            return new Error(`parent folder does not exist: ${parentUri.path}`);
+                        });
                     }
                     // set echo for all missing ancestors to prevent disk watcher from re-processing
                     let ancestor = parentUri;
@@ -264,7 +278,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // update editor if file is open
             const viewing =
                 this._opened.has(uri.path) ||
-                vscode.workspace.textDocuments.some((document) => document.uri.toString() === uri.toString());
+                vscode.workspace.textDocuments.some((document) => {
+                    return document.uri.toString() === uri.toString();
+                });
             if (viewing) {
                 // lock before any await so onDidChangeTextDocument can't
                 // submit ops with stale offsets while canonical state is ahead of buffer
@@ -599,7 +615,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._dirtify(document);
             }
 
-            this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => stat(o)).join(' ')}`);
+            this._log.debug(
+                `document.change ${document.uri.path} ${ops
+                    .map((o) => {
+                        return stat(o);
+                    })
+                    .join(' ')}`
+            );
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;
@@ -764,9 +786,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         this._log.debug(`change.local (atomic) ${op.uri}`);
                                         projectManager.write(path, content);
                                         if (this._opened.has(op.uri.path)) {
-                                            const doc = vscode.workspace.textDocuments.find(
-                                                (d) => d.uri.path === op.uri.path
-                                            );
+                                            const doc = vscode.workspace.textDocuments.find((d) => {
+                                                return d.uri.path === op.uri.path;
+                                            });
                                             if (doc) {
                                                 this._dirtify(doc);
                                             }
@@ -837,9 +859,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                                     // dirtify if file was opened while change was deferred
                                     if (this._opened.has(op.uri.path)) {
-                                        const doc = vscode.workspace.textDocuments.find(
-                                            (d) => d.uri.path === op.uri.path
-                                        );
+                                        const doc = vscode.workspace.textDocuments.find((d) => {
+                                            return d.uri.path === op.uri.path;
+                                        });
                                         if (doc) {
                                             this._dirtify(doc);
                                         }
@@ -980,7 +1002,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri !== undefined) {
-            throw this.error.set(() => new Error('manager already linked'));
+            throw this.error.set(() => {
+                return new Error('manager already linked');
+            });
         }
 
         // read files to disk
@@ -1048,7 +1072,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             await this._writeMutex.clear();
             this._debouncer.clear();
             this._opened.clear();
-            this._ignoring = (_uri: vscode.Uri) => false;
+            this._ignoring = (_uri: vscode.Uri) => {
+                return false;
+            };
             this._ignoreHash = '';
         });
 
@@ -1065,7 +1091,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
         if (!folderUri || !projectManager) {
-            throw this.error.set(() => new Error('unlink called before link'));
+            throw this.error.set(() => {
+                return new Error('unlink called before link');
+            });
         }
         await super.unlink();
         this._folderUri = undefined;

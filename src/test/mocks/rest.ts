@@ -48,13 +48,27 @@ class MockRest extends Rest {
             accessToken
         });
 
-        this.id = sandbox.spy(async () => user.id);
-        this.user = sandbox.spy(async () => user);
-        this.userThumb = sandbox.spy(async () => new ArrayBuffer(0));
-        this.userProjects = sandbox.spy(async (_userId: number, _view?: string) => [project]);
-        this.projectAssets = sandbox.spy(async (_projectId: number) => Array.from(assets.values()));
-        this.projectBranches = sandbox.spy(async (_projectId: number) => Array.from(branches.values()));
-        this.branchCheckout = sandbox.spy(async (branchId: string) => branches.get(branchId)!);
+        this.id = sandbox.spy(async () => {
+            return user.id;
+        });
+        this.user = sandbox.spy(async () => {
+            return user;
+        });
+        this.userThumb = sandbox.spy(async () => {
+            return new ArrayBuffer(0);
+        });
+        this.userProjects = sandbox.spy(async (_userId: number, _view?: string) => {
+            return [project];
+        });
+        this.projectAssets = sandbox.spy(async (_projectId: number) => {
+            return Array.from(assets.values());
+        });
+        this.projectBranches = sandbox.spy(async (_projectId: number) => {
+            return Array.from(branches.values());
+        });
+        this.branchCheckout = sandbox.spy(async (branchId: string) => {
+            return branches.get(branchId)!;
+        });
         this.assetCreate = sandbox.spy(
             async (
                 _projectId: number,

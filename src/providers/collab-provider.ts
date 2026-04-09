@@ -156,7 +156,9 @@ class CollabProvider
 
                 items.push(item);
             }
-            return items.sort((a, b) => a.username.localeCompare(b.username));
+            return items.sort((a, b) => {
+                return a.username.localeCompare(b.username);
+            });
         }
 
         return [];
@@ -164,7 +166,9 @@ class CollabProvider
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri !== undefined) {
-            throw this.error.set(() => new Error('manager already linked'));
+            throw this.error.set(() => {
+                return new Error('manager already linked');
+            });
         }
 
         const unwatchDocument = this._watchDocument(folderUri, projectManager);
@@ -185,7 +189,9 @@ class CollabProvider
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
         if (!folderUri || !projectManager) {
-            throw this.error.set(() => new Error('unlink called before link'));
+            throw this.error.set(() => {
+                return new Error('unlink called before link');
+            });
         }
         await super.unlink();
         this._folderUri = undefined;

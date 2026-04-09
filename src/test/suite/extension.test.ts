@@ -125,10 +125,16 @@ const assertOpsPromise = (key: string, expected: unknown[]) => {
 };
 
 const waitForAsset = (name: string) => {
-    const existing = Array.from(assets.values()).find((v) => v.name === name);
+    const existing = Array.from(assets.values()).find((v) => {
+        return v.name === name;
+    });
     if (existing) {
         // yield macrotask to let PM's async handler finish (subscribe + _addFile + asset:create)
-        return new Promise<Asset>((resolve) => setTimeout(() => resolve(existing)));
+        return new Promise<Asset>((resolve) => {
+            return setTimeout(() => {
+                return resolve(existing);
+            });
+        });
     }
     return assertResolves(
         new Promise<Asset>((resolve) => {
@@ -139,7 +145,9 @@ const waitForAsset = (name: string) => {
                 messenger.off('asset.new', handler);
                 // yield macrotask to let PM's async handler finish (subscribe + _addFile + asset:create)
                 setTimeout(() => {
-                    const a = Array.from(assets.values()).find((v) => v.name === name);
+                    const a = Array.from(assets.values()).find((v) => {
+                        return v.name === name;
+                    });
                     assert.ok(a, `asset ${name} should exist after asset.new`);
                     resolve(a);
                 });
@@ -571,7 +579,11 @@ suite('extension', () => {
         const created = new Promise<void>((resolve) => {
             let count = 3;
             const onnew = messenger.on('asset.new', (data) => {
-                if (files.some((file) => data.data.asset.name === file.name)) {
+                if (
+                    files.some((file) => {
+                        return data.data.asset.name === file.name;
+                    })
+                ) {
                     count--;
                     if (count === 0) {
                         messenger.off('asset.new', onnew);
@@ -1149,7 +1161,9 @@ suite('extension', () => {
         await wait(200);
 
         // verify no doc:save was sent (no auto-save on external change)
-        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => {
+            return `${c.args[0]}`.startsWith('doc:save:');
+        });
         assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external closed file change');
     });
 
@@ -1197,7 +1211,9 @@ suite('extension', () => {
         assert.strictEqual(tdoc.isDirty, true, 'document should be dirty after external edit');
 
         // verify no doc:save was sent (no auto-save)
-        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => {
+            return `${c.args[0]}`.startsWith('doc:save:');
+        });
         assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external open file change');
     });
 
@@ -1232,7 +1248,9 @@ suite('extension', () => {
                     return;
                 }
                 disposable.dispose();
-                const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+                const saveCalls = sharedb.sendRaw.getCalls().filter((c) => {
+                    return `${c.args[0]}`.startsWith('doc:save:');
+                });
                 assert.strictEqual(saveCalls.length, 0, 'should not send doc:save during onWillSave');
                 resolve();
             });
@@ -1253,7 +1271,9 @@ suite('extension', () => {
         await assertResolves(didsave, 'vscode.onDidSaveTextDocument');
 
         // check if sharedb sendRaw was called for document update
-        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => {
+            return `${c.args[0]}`.startsWith('doc:save:');
+        });
         assert.strictEqual(saveCalls.length, 1, 'should send one doc:save after native save');
         const call = saveCalls[0];
         assert.deepStrictEqual(call.args, [`doc:save:${asset.uniqueId}`], 'sendRaw args should match');
@@ -1338,7 +1358,9 @@ suite('extension', () => {
         sharedb.sendRaw.resetHistory();
         await tdoc.save();
 
-        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => {
+            return `${c.args[0]}`.startsWith('doc:save:');
+        });
         assert.strictEqual(saveCalls.length, 1, 'should send one doc:save for final save');
         assert.deepStrictEqual(saveCalls[0].args, [`doc:save:${asset.uniqueId}`], 'final save args should match');
         assert.strictEqual(documents.get(asset.uniqueId), expected, 'saved OT doc should still match buffer');
@@ -1503,11 +1525,15 @@ suite('extension', () => {
         sharedb.emit('doc:save', 'success', asset.uniqueId);
 
         // _save() is a no-op for open files — document stays dirty
-        await new Promise((r) => setTimeout(r, 200));
+        await new Promise((r) => {
+            return setTimeout(r, 200);
+        });
         assert.strictEqual(tdoc.isDirty, true, 'document should stay dirty after doc:save:success');
 
         // verify no redundant server save was triggered
-        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => {
+            return `${c.args[0]}`.startsWith('doc:save:');
+        });
         assert.strictEqual(saveCalls.length, 0, 'should not send redundant doc:save to server');
     });
 
@@ -1703,7 +1729,9 @@ suite('extension', () => {
         assert.ok(folderUri, 'workspace folder should exist');
 
         // get folder asset
-        const folderAsset = Array.from(assets.values()).find((a) => a.type === 'folder');
+        const folderAsset = Array.from(assets.values()).find((a) => {
+            return a.type === 'folder';
+        });
         assert.ok(folderAsset, 'folder asset should exist');
         const folderAssetId = parseInt(folderAsset.item_id, 10);
 
@@ -1747,7 +1775,9 @@ suite('extension', () => {
         assert.ok(folderUri, 'workspace folder should exist');
 
         // get asset and folder
-        const folderAsset = Array.from(assets.values()).find((a) => a.type === 'folder');
+        const folderAsset = Array.from(assets.values()).find((a) => {
+            return a.type === 'folder';
+        });
         assert.ok(folderAsset, 'folder asset should exist');
         const folderAssetId = parseInt(folderAsset.item_id, 10);
 
@@ -1811,7 +1841,9 @@ suite('extension', () => {
         await assertResolves(watcher, 'watcher.create');
 
         // check ignored file and folder do not exist as assets
-        const ignoredFileAsset = Array.from(assets.values()).find((a) => a.name === 'ignored_file.js');
+        const ignoredFileAsset = Array.from(assets.values()).find((a) => {
+            return a.name === 'ignored_file.js';
+        });
         assert.strictEqual(ignoredFileAsset, undefined, 'ignored file should not exist as asset');
     });
 
@@ -1847,7 +1879,9 @@ suite('extension', () => {
         await assertResolves(txtWatcher, 'watcher.create');
 
         // check no asset was created for the txt file
-        const txtAsset = Array.from(assets.values()).find((a) => a.name === 'test_ignored.txt');
+        const txtAsset = Array.from(assets.values()).find((a) => {
+            return a.name === 'test_ignored.txt';
+        });
         assert.strictEqual(txtAsset, undefined, 'txt file should not exist as asset');
     });
 
@@ -2174,7 +2208,9 @@ suite('extension', () => {
         if (quickPickStub.called) {
             const quickPickCall = quickPickStub.getCall(0);
             const items = quickPickCall.args[0] as { label: string; description: string }[];
-            const deletedCollisionItem = items.find((item) => item.label === name);
+            const deletedCollisionItem = items.find((item) => {
+                return item.label === name;
+            });
             assert.strictEqual(
                 deletedCollisionItem,
                 undefined,

@@ -69,16 +69,30 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // auth
     const auth = new Auth(context);
-    context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.login`, async () => auth.getAccessToken(true)));
-    context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.logout`, () => auth.logout()));
+    context.subscriptions.push(
+        vscode.commands.registerCommand(`${NAME}.login`, async () => {
+            await auth.getAccessToken(true);
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand(`${NAME}.logout`, async () => {
+            await auth.logout();
+        })
+    );
     const accessToken = await auth.getAccessToken();
 
     // metrics
     const metrics = new Metrics(accessToken);
     context.subscriptions.push(metrics.disposable);
     metrics.increment('session.start');
-    const heartbeat = setInterval(() => metrics.increment('session.heartbeat'), HEARTBEAT_MS);
-    context.subscriptions.push(new vscode.Disposable(() => clearInterval(heartbeat)));
+    const heartbeat = setInterval(() => {
+        return metrics.increment('session.heartbeat');
+    }, HEARTBEAT_MS);
+    context.subscriptions.push(
+        new vscode.Disposable(() => {
+            return clearInterval(heartbeat);
+        })
+    );
 
     // error handler
     const handleError = async (error?: Error, source?: string) => {
@@ -113,7 +127,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
         origin: HOME_URL,
         accessToken
     });
-    context.subscriptions.push(new vscode.Disposable(() => rest.dispose()));
+    context.subscriptions.push(
+        new vscode.Disposable(() => {
+            return rest.dispose();
+        })
+    );
 
     // realtime connection
     const sharedb = new ShareDb({
@@ -123,7 +141,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = sharedb.error.get();
         if (err) {
-            void handleError(err, 'sharedb').catch((e) => log.error(e.message));
+            void handleError(err, 'sharedb').catch((e) => {
+                return log.error(e.message);
+            });
         }
     });
 
@@ -141,7 +161,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = relay.error.get();
         if (err) {
-            void handleError(err, 'relay').catch((e) => log.error(e.message));
+            void handleError(err, 'relay').catch((e) => {
+                return log.error(e.message);
+            });
         }
     });
 
@@ -172,7 +194,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = disk.error.get();
         if (err) {
-            void handleError(err, 'disk').catch((e) => log.error(e.message));
+            void handleError(err, 'disk').catch((e) => {
+                return log.error(e.message);
+            });
         }
     });
 
@@ -184,29 +208,34 @@ export const activate = async (context: vscode.ExtensionContext) => {
             return;
         }
         reloading = true;
+        const [err] = await tryCatch(
+            (async () => {
+                // unlink everything
+                await projectManager.flush();
+                const collabState = await collabProvider.unlink();
+                const uriState = await uriHandler.unlink();
+                const dirtyState = await dirtyProvider.unlink();
+                const diskState = await disk.unlink();
+                const projectState = await projectManager.unlink();
 
-        // unlink everything
-        await projectManager.flush();
-        const collabState = await collabProvider.unlink();
-        const uriState = await uriHandler.unlink();
-        const dirtyState = await dirtyProvider.unlink();
-        const diskState = await disk.unlink();
-        const projectState = await projectManager.unlink();
+                // update branch id if provided (branch switch flow)
+                projectState.branchId = branchId ?? projectState.branchId;
 
-        // update branch id if provided (branch switch flow)
-        projectState.branchId = branchId ?? projectState.branchId;
+                // TODO: figure out why this is needed to avoid ShareDB issues
+                await wait(1000);
 
-        // TODO: figure out why this is needed to avoid ShareDB issues
-        await wait(1000);
-
-        // relink everything
-        await projectManager.link(projectState);
-        await disk.link(diskState);
-        await dirtyProvider.link(dirtyState);
-        await collabProvider.link(collabState);
-        await uriHandler.link(uriState);
-
+                // relink everything
+                await projectManager.link(projectState);
+                await disk.link(diskState);
+                await dirtyProvider.link(dirtyState);
+                await collabProvider.link(collabState);
+                await uriHandler.link(uriState);
+            })()
+        );
         reloading = false;
+        if (err) {
+            throw err;
+        }
     };
 
     // uri handler
@@ -219,7 +248,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = uriHandler.error.get();
         if (err) {
-            void handleError(err, 'uri-handler').catch((e) => log.error(e.message));
+            void handleError(err, 'uri-handler').catch((e) => {
+                return log.error(e.message);
+            });
         }
     });
     context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
@@ -232,7 +263,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = collabProvider.error.get();
         if (err) {
-            void handleError(err, 'collab-provider').catch((e) => log.error(e.message));
+            void handleError(err, 'collab-provider').catch((e) => {
+                return log.error(e.message);
+            });
         }
     });
     context.subscriptions.push(vscode.window.registerTreeDataProvider('collab-view', collabProvider));
@@ -248,7 +281,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = dirtyProvider.error.get();
         if (err) {
-            void handleError(err, 'dirty-decoration-provider').catch((e) => log.error(e.message));
+            void handleError(err, 'dirty-decoration-provider').catch((e) => {
+                return log.error(e.message);
+            });
         }
     });
     context.subscriptions.push(vscode.window.registerFileDecorationProvider(dirtyProvider));
@@ -297,8 +332,16 @@ export const activate = async (context: vscode.ExtensionContext) => {
         if (enabled) {
             const m = messenger.ping.get();
             const r = relay.ping.get();
-            const vals = [m, r].filter((v) => v > 0);
-            const suffix = vals.length ? ` ${Math.round(vals.reduce((a, b) => a + b, 0) / vals.length)}ms` : '';
+            const vals = [m, r].filter((v) => {
+                return v > 0;
+            });
+            const suffix = vals.length
+                ? ` ${Math.round(
+                      vals.reduce((a, b) => {
+                          return a + b;
+                      }, 0) / vals.length
+                  )}ms`
+                : '';
             connectionStatusItem.text = `$(primitive-dot) Connected${suffix}`;
         } else {
             connectionStatusItem.text = `$(primitive-dot) Disconnected`;
@@ -314,7 +357,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
             metrics.addTimer('ws.ping', r, { service: 'relay' });
         }
     }, PING_SAMPLE_MS);
-    context.subscriptions.push(new vscode.Disposable(() => clearInterval(pingSampler)));
+    context.subscriptions.push(
+        new vscode.Disposable(() => {
+            return clearInterval(pingSampler);
+        })
+    );
 
     // collision status bar item
     const collisionStatusColors = {
@@ -386,7 +433,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
                 // find main branch
                 const branches = await rest.projectBranches(project_id);
-                const main = branches.find((b) => b.permanent);
+                const main = branches.find((b) => {
+                    return b.permanent;
+                });
                 if (!main) {
                     throw new Error(`Failed to find main branch to switch to`);
                 }
@@ -440,8 +489,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
             handleError(err);
         }
     };
-    const checkpointRevert = messenger.on('checkpoint.revertEnded', (e) => checkpointRestore(e.data));
-    const checkpointHardReset = messenger.on('checkpoint.hardResetEnded', (e) => checkpointRestore(e.data));
+    const checkpointRevert = messenger.on('checkpoint.revertEnded', (e) => {
+        return checkpointRestore(e.data);
+    });
+    const checkpointHardReset = messenger.on('checkpoint.hardResetEnded', (e) => {
+        return checkpointRestore(e.data);
+    });
     context.subscriptions.push(
         new vscode.Disposable(() => {
             messenger.off('branch.switch', branchSwitch);
@@ -459,11 +512,17 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const projects = await rest.userProjects(userId, 'profile');
 
             // show picker
-            const list = projects.map((p) => projectToName(p, false)).reverse();
+            const list = projects
+                .map((p) => {
+                    return projectToName(p, false);
+                })
+                .reverse();
             const chosen = await vscode.window.showQuickPick(list, {
                 placeHolder: 'Select a project'
             });
-            const project = projects.find((p) => chosen === projectToName(p, false));
+            const project = projects.find((p) => {
+                return chosen === projectToName(p, false);
+            });
             if (!project) {
                 return;
             }
@@ -496,7 +555,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const [err] = await tryCatch(reload(projectManager));
             reloadDone();
             if (err) {
-                void handleError(err).catch((e) => log.error(e.message));
+                void handleError(err).catch((e) => {
+                    return log.error(e.message);
+                });
                 return;
             }
         })
@@ -536,7 +597,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
             }
 
             // find branch
-            const branch = branches.find((b) => b.name === chosen);
+            const branch = branches.find((b) => {
+                return b.name === chosen;
+            });
             if (!branch) {
                 return;
             }
@@ -576,10 +639,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 .then((option) => {
                     switch (option) {
                         case options[0]: {
-                            const list = Array.from(collisions.entries()).map(([path, ids]) => ({
-                                label: path,
-                                description: `(${ids.join(', ')})`
-                            }));
+                            const list = Array.from(collisions.entries()).map(([path, ids]) => {
+                                return {
+                                    label: path,
+                                    description: `(${ids.join(', ')})`
+                                };
+                            });
                             vscode.window.showQuickPick(list, {
                                 title: 'Asset Path Collisions',
                                 placeHolder: 'Filter paths',
@@ -606,7 +671,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
             }
 
             // ensure folder matches a user project
-            const project = projects.find((p) => projectToName(p) === f.name);
+            const project = projects.find((p) => {
+                return projectToName(p) === f.name;
+            });
             if (!project) {
                 return list;
             }
@@ -623,7 +690,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // connect sharedb, messenger, relay if not connected
         if (!sharedb.connected.get()) {
-            const [err] = await tryCatch(sharedb.connect(() => accessToken));
+            const [err] = await tryCatch(
+                sharedb.connect(() => {
+                    return accessToken;
+                })
+            );
             if (err) {
                 sharedb.disconnect();
                 throw err;
@@ -635,7 +706,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
             );
         }
         if (!messenger.connected.get()) {
-            const [err] = await tryCatch(messenger.connect(() => accessToken));
+            const [err] = await tryCatch(
+                messenger.connect(() => {
+                    return accessToken;
+                })
+            );
             if (err) {
                 messenger.disconnect();
                 throw err;
@@ -647,7 +722,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
             );
         }
         if (!relay.connected.get()) {
-            const [err] = await tryCatch(relay.connect(() => accessToken));
+            const [err] = await tryCatch(
+                relay.connect(() => {
+                    return accessToken;
+                })
+            );
             if (err) {
                 relay.disconnect();
                 throw err;
@@ -674,7 +753,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // fetch project branches
         const branches = await rest.projectBranches(project.id);
-        const branch = branches.find((b) => b.id === branchId);
+        const branch = branches.find((b) => {
+            return b.id === branchId;
+        });
         if (branch) {
             // set branch name
             branchStatusBarItem.text = `$(git-branch) ${branch.name}`;
@@ -699,7 +780,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
         effect(() => {
             const err = projectManager.error.get();
             if (err) {
-                void handleError(err, 'project-manager').catch((e) => log.error(e.message));
+                void handleError(err, 'project-manager').catch((e) => {
+                    return log.error(e.message);
+                });
             }
         });
         effect(() => {

@@ -103,7 +103,9 @@ class ShareDb extends EventEmitter<EventMap> {
                 if (!json.id) {
                     const reason = `[${this.constructor.name}] invalid access token`;
                     socket.close(3000, reason);
-                    this.error.set(() => new Error(reason));
+                    this.error.set(() => {
+                        return new Error(reason);
+                    });
                     return;
                 }
                 this._log.debug('socket.auth', json);
@@ -127,7 +129,9 @@ class ShareDb extends EventEmitter<EventMap> {
             // reject pending callers then reset
             this._active.reject(new Error('connection reset'));
             this._active = new Deferred();
-            this.connected.set(() => false);
+            this.connected.set(() => {
+                return false;
+            });
 
             // clear keep alive
             if (this._alive) {
@@ -208,7 +212,9 @@ class ShareDb extends EventEmitter<EventMap> {
             // resume normal processing (delay for latency simulation)
             const d = delay();
             if (d > 0) {
-                setTimeout(() => onmessage?.(msg), d);
+                setTimeout(() => {
+                    return onmessage?.(msg);
+                }, d);
             } else {
                 onmessage?.(msg);
             }
@@ -239,7 +245,9 @@ class ShareDb extends EventEmitter<EventMap> {
 
         // resolve active
         this._active.resolve([this._connection, socket]);
-        this.connected.set(() => true);
+        this.connected.set(() => {
+            return true;
+        });
 
         this._log.info('socket.connected');
     }
@@ -307,7 +315,11 @@ class ShareDb extends EventEmitter<EventMap> {
     async bulkSubscribe(subscriptions: [string, string][]) {
         const [connection] = await this._active.promise;
         connection.startBulk();
-        const docs = Promise.all(subscriptions.map(([type, key]) => this.subscribe(type, key)));
+        const docs = Promise.all(
+            subscriptions.map(([type, key]) => {
+                return this.subscribe(type, key);
+            })
+        );
         connection.endBulk();
         return docs;
     }
@@ -331,7 +343,11 @@ class ShareDb extends EventEmitter<EventMap> {
     async bulkUnsubscribe(subscriptions: [string, string][]) {
         const [connection] = await this._active.promise;
         connection.startBulk();
-        const unsubs = Promise.all(subscriptions.map(([type, key]) => this.unsubscribe(type, key)));
+        const unsubs = Promise.all(
+            subscriptions.map(([type, key]) => {
+                return this.unsubscribe(type, key);
+            })
+        );
         connection.endBulk();
         await unsubs;
     }

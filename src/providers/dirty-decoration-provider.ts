@@ -59,15 +59,27 @@ class DirtyDecorationProvider
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri !== undefined) {
-            throw this.error.set(() => new Error('already linked'));
+            throw this.error.set(() => {
+                return new Error('already linked');
+            });
         }
 
         // listen for dirty transitions
-        const onDirty = this._events.on('asset:file:dirty', (path) => this._fire(path));
-        const onUpdate = this._events.on('asset:file:update', (path) => this._fire(path));
-        const onSave = this._events.on('asset:file:save', (path) => this._fire(path));
-        const onCreate = this._events.on('asset:file:create', (path) => this._fire(path));
-        const onDelete = this._events.on('asset:file:delete', (path) => this._fire(path));
+        const onDirty = this._events.on('asset:file:dirty', (path) => {
+            return this._fire(path);
+        });
+        const onUpdate = this._events.on('asset:file:update', (path) => {
+            return this._fire(path);
+        });
+        const onSave = this._events.on('asset:file:save', (path) => {
+            return this._fire(path);
+        });
+        const onCreate = this._events.on('asset:file:create', (path) => {
+            return this._fire(path);
+        });
+        const onDelete = this._events.on('asset:file:delete', (path) => {
+            return this._fire(path);
+        });
         const onRename = this._events.on('asset:file:rename', (from, to) => {
             this._fire(from);
             this._fire(to);
@@ -106,7 +118,9 @@ class DirtyDecorationProvider
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
         if (!folderUri || !projectManager) {
-            throw this.error.set(() => new Error('unlink called before link'));
+            throw this.error.set(() => {
+                return new Error('unlink called before link');
+            });
         }
         await super.unlink();
         this._folderUri = undefined;

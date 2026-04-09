@@ -52,6 +52,7 @@ const tsFilesConfig = {
         globals: globals.node
     },
     rules: {
+        'arrow-body-style': ['error', 'always'],
         '@typescript-eslint/consistent-type-imports': 'error',
         '@typescript-eslint/no-dynamic-delete': 'off',
         '@typescript-eslint/no-non-null-assertion': 'off'
