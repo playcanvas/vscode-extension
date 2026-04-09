@@ -229,7 +229,7 @@ class Relay extends EventEmitter<EventMap> {
         }
 
         // join room
-        this.send({
+        void this.send({
             t: 'room:join',
             name: name,
             authentication: {
@@ -259,7 +259,7 @@ class Relay extends EventEmitter<EventMap> {
         }
 
         // leave room
-        this.send({
+        void this.send({
             t: 'room:leave',
             name: name
         })
@@ -275,7 +275,7 @@ class Relay extends EventEmitter<EventMap> {
     }
 
     message(name: string, msg: object, userId?: number) {
-        this.send({
+        void this.send({
             t: 'room:msg',
             msg: msg,
             name: name,

@@ -133,7 +133,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._parseIgnoreText(text, folderUri, h);
 
         // prompt reload for disk sync (safe sequential writes + progress UI via link())
-        vscode.window
+        void vscode.window
             .showInformationMessage('Ignore rules updated. Reload to sync files to disk.', 'Reload')
             .then(async (res) => {
                 if (res === 'Reload') {
@@ -175,7 +175,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _sync(uri: vscode.Uri, content: Uint8Array) {
         const key = `${uri}`;
         this._syncing.add(key);
-        this._debouncer
+        void this._debouncer
             .debounce(key, async () => {
                 this._echo.set(`${uri}:change`, hash(content));
                 let attempt = 0;

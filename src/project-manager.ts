@@ -821,7 +821,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         const docOpenHandle = this._events.on('asset:doc:open', (path: string) => {
             // wait for file to be available
-            this.waitForFile(path, 'file')
+            void this.waitForFile(path, 'file')
                 .then((file) => {
                     // join relay room
                     this._relay.join(`document-${file.uniqueId}`, projectId);

@@ -135,7 +135,7 @@ class Auth {
                     const oauthUri = vscode.Uri.parse(LOGIN_URL).with({
                         query: `came_from=http://localhost:${PORT}/auth/callback`
                     });
-                    vscode.env.openExternal(oauthUri);
+                    void vscode.env.openExternal(oauthUri);
                 })
                 .on('error', (err) => {
                     clearTimeout(timeout);
@@ -158,7 +158,7 @@ class Auth {
             accessToken = await this._requestToken();
             if (!accessToken) {
                 if (manual) {
-                    vscode.window.showInformationMessage('Aborted updating PlayCanvas Access Token');
+                    void vscode.window.showInformationMessage('Aborted updating PlayCanvas Access Token');
                     return '';
                 }
                 continue;
@@ -172,14 +172,14 @@ class Auth {
 
             // store token
             await this._context.secrets.store(`${NAME}.accessToken`, accessToken);
-            vscode.window.showInformationMessage('PlayCanvas Access Token validated');
+            void vscode.window.showInformationMessage('PlayCanvas Access Token validated');
 
             if (manual) {
                 // reload window to ensure all components use the new token
                 await vscode.window.showInformationMessage('Token updated, the window will be reloaded.', {
                     modal: true
                 });
-                vscode.commands.executeCommand('workbench.action.reloadWindow');
+                void vscode.commands.executeCommand('workbench.action.reloadWindow');
             }
         }
 
@@ -196,7 +196,7 @@ class Auth {
             return;
         }
         await this._context.secrets.delete(`${NAME}.accessToken`);
-        vscode.commands.executeCommand('workbench.action.reloadWindow');
+        void vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
 
     async reset(reason = 'unknown reason') {
@@ -207,7 +207,7 @@ class Auth {
             }
         );
         await this._context.secrets.delete(`${NAME}.accessToken`);
-        vscode.commands.executeCommand('workbench.action.reloadWindow');
+        void vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
 }
 

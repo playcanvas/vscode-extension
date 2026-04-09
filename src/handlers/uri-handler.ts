@@ -85,7 +85,7 @@ class UriHandler
         // check if file is loaded
         if (!projectManager.loaded(assetId)) {
             const confirmation = 'Show Path Collisions';
-            vscode.window
+            void vscode.window
                 .showWarningMessage(
                     [
                         `Cannot open ${filePath} (${assetId}) due to colliding file paths.`,
@@ -98,7 +98,7 @@ class UriHandler
                     if (option !== confirmation) {
                         return;
                     }
-                    vscode.commands.executeCommand(`${NAME}.showPathCollisions`);
+                    void vscode.commands.executeCommand(`${NAME}.showPathCollisions`);
                 });
             return;
         }

@@ -56,7 +56,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             if (selection !== confirmation) {
                 return;
             }
-            vscode.commands.executeCommand('workbench.action.reloadWindow');
+            void vscode.commands.executeCommand('workbench.action.reloadWindow');
         })
     );
 
@@ -412,7 +412,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             })()
         );
         if (err) {
-            handleError(err);
+            void handleError(err);
         }
     });
     const branchClose = messenger.on('branch.close', async (e) => {
@@ -444,7 +444,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             })()
         );
         if (err) {
-            handleError(err);
+            void handleError(err);
         }
     });
     const checkpointRestore = async (data: {
@@ -484,7 +484,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             })()
         );
         if (err) {
-            handleError(err);
+            void handleError(err);
         }
     };
     const checkpointRevert = messenger.on('checkpoint.revertEnded', (e) => {
@@ -626,7 +626,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
             // show warning message
             const options = ['Show Path Collisions', 'Reload project'];
-            vscode.window
+            void vscode.window
                 .showWarningMessage(
                     [
                         `${collisions.size} asset path collision${collisions.size !== 1 ? 's' : ''} found.`,
@@ -643,7 +643,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
                                     description: `(${ids.join(', ')})`
                                 };
                             });
-                            vscode.window.showQuickPick(list, {
+                            void vscode.window.showQuickPick(list, {
                                 title: 'Asset Path Collisions',
                                 placeHolder: 'Filter paths',
                                 canPickMany: false
@@ -651,7 +651,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
                             break;
                         }
                         case options[1]: {
-                            vscode.commands.executeCommand(`${NAME}.reloadProject`);
+                            void vscode.commands.executeCommand(`${NAME}.reloadProject`);
                             break;
                         }
                     }
@@ -739,12 +739,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // load branch info
         const doc = await sharedb.subscribe('settings', `project_${project.id}_${userId}`);
         if (!doc) {
-            handleError(new Error(`Failed to load project settings for project ${project.id}`));
+            void handleError(new Error(`Failed to load project settings for project ${project.id}`));
             return;
         }
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                sharedb.unsubscribe('settings', `project_${project.id}_${userId}`);
+                void sharedb.unsubscribe('settings', `project_${project.id}_${userId}`);
             })
         );
         const branchId = doc.data?.branch ?? '';
@@ -805,7 +805,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         metrics.addHistogram('project.assets', projectManager.files.size - 1);
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                projectManager.unlink();
+                void projectManager.unlink();
             })
         );
 
@@ -818,7 +818,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                disk.unlink();
+                void disk.unlink();
             })
         );
 
@@ -826,7 +826,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         await dirtyProvider.link({ folderUri, projectManager });
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                dirtyProvider.unlink();
+                void dirtyProvider.unlink();
             })
         );
 
@@ -836,7 +836,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const f = vscode.workspace.getConfiguration('files');
             if (f.get('autoSave') !== 'off') {
                 log.debug('disabling files.autoSave for workspace');
-                f.update('autoSave', 'off', vscode.ConfigurationTarget.Workspace);
+                void f.update('autoSave', 'off', vscode.ConfigurationTarget.Workspace);
             }
         };
         disableAutosave();
@@ -849,13 +849,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
         );
 
         // link collab provider
-        collabProvider.link({
+        void collabProvider.link({
             folderUri,
             projectManager
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                collabProvider.unlink();
+                void collabProvider.unlink();
             })
         );
 
@@ -866,7 +866,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                uriHandler.unlink();
+                void uriHandler.unlink();
             })
         );
 
