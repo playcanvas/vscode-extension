@@ -204,7 +204,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     let reloading = false;
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
         if (reloading) {
-            log.warn('dropping reload request - already reloading');
+            void vscode.window.showWarningMessage('Dropping reload request to avoid overlapping reloads');
             return;
         }
         reloading = true;
