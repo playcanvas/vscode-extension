@@ -33,9 +33,9 @@ export const withTimeout = <T>(promise: Promise<T>, ms: number, msg: string) => 
     });
 };
 
-export const tryCatch = async <T>(promise: Promise<T>): Promise<[Error, null] | [null, T]> => {
+export const tryCatch = async <T>(task: Promise<T> | (() => Promise<T>)): Promise<[Error, null] | [null, T]> => {
     try {
-        return [null, await promise];
+        return [null, await (typeof task === 'function' ? task() : task)];
     } catch (err: unknown) {
         return [err as Error, null];
     }

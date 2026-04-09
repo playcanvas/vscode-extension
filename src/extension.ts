@@ -208,30 +208,28 @@ export const activate = async (context: vscode.ExtensionContext) => {
             return;
         }
         reloading = true;
-        const [err] = await tryCatch(
-            (async () => {
-                // unlink everything
-                await projectManager.flush();
-                const collabState = await collabProvider.unlink();
-                const uriState = await uriHandler.unlink();
-                const dirtyState = await dirtyProvider.unlink();
-                const diskState = await disk.unlink();
-                const projectState = await projectManager.unlink();
+        const [err] = await tryCatch(async () => {
+            // unlink everything
+            await projectManager.flush();
+            const collabState = await collabProvider.unlink();
+            const uriState = await uriHandler.unlink();
+            const dirtyState = await dirtyProvider.unlink();
+            const diskState = await disk.unlink();
+            const projectState = await projectManager.unlink();
 
-                // update branch id if provided (branch switch flow)
-                projectState.branchId = branchId ?? projectState.branchId;
+            // update branch id if provided (branch switch flow)
+            projectState.branchId = branchId ?? projectState.branchId;
 
-                // TODO: figure out why this is needed to avoid ShareDB issues
-                await wait(1000);
+            // TODO: figure out why this is needed to avoid ShareDB issues
+            await wait(1000);
 
-                // relink everything
-                await projectManager.link(projectState);
-                await disk.link(diskState);
-                await dirtyProvider.link(dirtyState);
-                await collabProvider.link(collabState);
-                await uriHandler.link(uriState);
-            })()
-        );
+            // relink everything
+            await projectManager.link(projectState);
+            await disk.link(diskState);
+            await dirtyProvider.link(dirtyState);
+            await collabProvider.link(collabState);
+            await uriHandler.link(uriState);
+        });
         reloading = false;
         if (err) {
             throw err;
@@ -303,11 +301,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
         return sharedb.connected.get() && messenger.connected.get() && relay.connected.get();
     });
     const services = [
-        { name: 'sharedb', sig: sharedb.connected },
+        { name: 'sharedb', connected: sharedb.connected },
         { name: 'messenger', sig: messenger.connected },
         { name: 'relay', sig: relay.connected }
     ] as const;
-    for (const { name, sig } of services) {
+    for (const { name, connected: sig } of services) {
         let prev: boolean | null = null;
         let wasConnected = false;
         effect(() => {
