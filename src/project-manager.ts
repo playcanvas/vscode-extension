@@ -899,7 +899,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     async delete(path: string, type: 'file' | 'folder') {
         // check if file exists
         const file = this._files.get(path);
-        if (!file || file.type !== type) {
+        if (!file || (file.type === 'stub' ? 'file' : file.type) !== type) {
             this._log.warn(`skipping delete of ${path} as it does not exist`);
             return;
         }
