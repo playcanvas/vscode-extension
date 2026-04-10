@@ -75,22 +75,15 @@ class CollabProvider
 
     private _watchDocument(folderUri: vscode.Uri, projectManager: ProjectManager) {
         const switchRoom = (uri: vscode.Uri) => {
-            // check if in folder
             if (!uriStartsWith(uri, folderUri)) {
                 return;
             }
-
-            // wait for file to be available
             const path = relativePath(uri, folderUri);
-            void projectManager
-                .waitForFile(path, 'file')
-                .then((file) => {
-                    // set room
-                    this._room = `document-${file.uniqueId}`;
-                    this.refresh();
-                })
-                // eslint-disable-next-line @typescript-eslint/no-empty-function
-                .catch(() => {});
+            const file = projectManager.files.get(path);
+            if (file && file.type !== 'folder') {
+                this._room = `document-${file.uniqueId}`;
+                this.refresh();
+            }
         };
         const disposable = vscode.window.onDidChangeActiveTextEditor((editor) => {
             if (!editor) {
