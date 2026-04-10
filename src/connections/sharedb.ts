@@ -290,20 +290,6 @@ class ShareDb extends EventEmitter<EventMap> {
         return value;
     }
 
-    /**
-     * Destroy an existing subscription (if any) and re-subscribe from scratch.
-     * Any ops delivered between destroy and the new subscribe completing will be
-     * lost. Only use when the prior subscription is known to be broken.
-     */
-    async resubscribe(type: string, key: string): Promise<sharedb.Doc | undefined> {
-        const existing = this.subscriptions.get(`${type}:${key}`);
-        if (existing) {
-            existing.destroy();
-            this.subscriptions.delete(`${type}:${key}`);
-        }
-        return this.subscribe(type, key);
-    }
-
     async bulkSubscribe(subscriptions: [string, string][]) {
         const [connection] = await this._active.promise;
         connection.startBulk();
