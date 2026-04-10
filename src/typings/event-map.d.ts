@@ -11,6 +11,7 @@ export type EventMap = {
     'asset:file:rename': [string, string];
     'asset:file:save': [string];
     'asset:file:dirty': [string, boolean];
+    'asset:file:subscribed': [string, string, boolean];
 
     'asset:doc:open': [string];
     'asset:doc:close': [string];

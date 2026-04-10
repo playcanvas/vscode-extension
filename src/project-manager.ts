@@ -43,6 +43,10 @@ type VirtualFile = {
           doc: OTDocument;
           dirty: boolean; // true if hash(doc.data) != asset.file.hash
       }
+    | {
+          type: 'stub';
+          dirty: boolean; // true dirty state discovered on subscribe
+      }
 );
 
 class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
@@ -73,6 +77,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _files: Map<string, VirtualFile> = new Map<string, VirtualFile>();
 
     private _idUniqueId: Bimap<number, number> = new Bimap<number, number>();
+
+    private _subscribing = new Map<string, Promise<(VirtualFile & { type: 'file' }) | undefined>>();
 
     collisions: CollisionManager;
 
@@ -296,6 +302,26 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         this._log.debug(`added folder ${path}`);
 
+        return { skip: false, changed: false };
+    }
+
+    private _addStub(uniqueId: number) {
+        const path = this._assetPath(uniqueId);
+
+        const check = this.collisions.check(uniqueId);
+        if (check.skip) {
+            return check;
+        }
+
+        const asset = this._assets.get(uniqueId);
+        if (!asset?.file) {
+            throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
+        }
+
+        this._files.set(path, { type: 'stub', uniqueId, dirty: false });
+        this._events.emit('asset:file:create', path, 'file', new Uint8Array());
+
+        this._log.debug(`added stub ${path}`);
         return { skip: false, changed: false };
     }
 
@@ -535,8 +561,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 // prepare asset unsubscribe
                 subscriptions.push(['assets', `${uniqueId}`]);
 
-                // prepare document unsubscribe
-                if (asset.type !== 'folder') {
+                // prepare document unsubscribe (only if actively subscribed)
+                if (asset.type !== 'folder' && file?.type === 'file') {
                     subscriptions.push(['documents', `${uniqueId}`]);
                 }
 
@@ -652,14 +678,19 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                     // check if file exists
                     const file = this._files.get(path);
-                    if (!file || file.type !== 'file') {
+                    if (!file || file.type === 'folder') {
                         return;
                     }
 
-                    // NOTE: only mark clean if local content matches the saved hash,
-                    // NOTE: otherwise local unsaved changes would be silently discarded
-                    const localHash = hash(file.doc.text);
-                    if (fileTo?.hash === localHash) {
+                    if (file.type === 'file') {
+                        // NOTE: only mark clean if local content matches the saved hash,
+                        // NOTE: otherwise local unsaved changes would be silently discarded
+                        const localHash = hash(file.doc.text);
+                        if (fileTo?.hash === localHash) {
+                            file.dirty = false;
+                        }
+                    } else {
+                        // stub: no doc to compare, mark clean on remote save
                         file.dirty = false;
                     }
 
@@ -671,28 +702,41 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         });
 
         const docOpenHandle = this._events.on('asset:doc:open', (path: string) => {
-            // wait for file to be available
-            void this.waitForFile(path, 'file')
-                .then((file) => {
-                    // join relay room
-                    this._relay.join(`document-${file.uniqueId}`, projectId);
-                    this._cleanup.push(async () => {
-                        this._relay.leave(`document-${file.uniqueId}`, projectId);
-                    });
+            const file = this._files.get(path);
+            if (!file) {
+                return;
+            }
+
+            const p =
+                file.type === 'stub'
+                    ? this.subscribe(path)
+                    : file.type === 'file'
+                      ? Promise.resolve(file)
+                      : Promise.resolve(undefined);
+
+            void p
+                .then((f) => {
+                    if (f && f.type === 'file') {
+                        this._relay.join(`document-${f.uniqueId}`, projectId);
+                        this._cleanup.push(async () => {
+                            this._relay.leave(`document-${f.uniqueId}`, projectId);
+                        });
+                    }
                 })
                 .catch((err: Error) => {
-                    this._log.warn(`waitForFile failed for ${path}: ${err.message}`);
+                    this._log.warn(`subscribe failed for ${path}: ${err.message}`);
                 });
         });
         const docCloseHandle = this._events.on('asset:doc:close', (path: string) => {
-            // check if in project
             const file = this._files.get(path);
             if (!file || file.type !== 'file') {
                 return;
             }
 
-            // leave relay room
             this._relay.leave(`document-${file.uniqueId}`, projectId);
+            void this.unsubscribe(path).catch((err: Error) => {
+                this._log.warn(`unsubscribe failed for ${path}: ${err.message}`);
+            });
         });
 
         return () => {
@@ -1013,10 +1057,22 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._log.debug(`moved ${oldPath} to ${newPath}`);
     }
 
-    write(path: string, content: Uint8Array) {
-        // check if file is in memory
-        const file = this._files.get(path);
-        if (!file || file.type !== 'file') {
+    async write(path: string, content: Uint8Array) {
+        let file = this._files.get(path);
+        if (!file || file.type === 'folder') {
+            return;
+        }
+
+        // subscribe stub before writing
+        if (file.type === 'stub') {
+            const promoted = await this.subscribe(path);
+            if (!promoted) {
+                return;
+            }
+            file = promoted;
+        }
+
+        if (file.type !== 'file') {
             return;
         }
 
@@ -1076,6 +1132,115 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = this._assetPath(uniqueId);
         const file = this._files.get(path);
         return file?.uniqueId === uniqueId;
+    }
+
+    async subscribe(path: string) {
+        const file = this._files.get(path);
+        if (!file) {
+            return undefined;
+        }
+
+        // already subscribed
+        if (file.type === 'file') {
+            return file;
+        }
+
+        if (file.type !== 'stub') {
+            return undefined;
+        }
+
+        // coalesce concurrent subscribe calls for the same path
+        const inflight = this._subscribing.get(path);
+        if (inflight) {
+            return inflight;
+        }
+
+        const pending = this._doSubscribe(path, file.uniqueId);
+        this._subscribing.set(path, pending);
+        const result = await pending;
+        this._subscribing.delete(path);
+        return result;
+    }
+
+    private async _doSubscribe(path: string, uniqueId: number) {
+        const doc = await this._sharedb.subscribe('documents', `${uniqueId}`);
+        if (!doc) {
+            this._log.error(`failed to subscribe to document ${uniqueId}`);
+            return undefined;
+        }
+
+        // null data after hard reset — clean up and skip until reload
+        if (doc.data === null) {
+            await this._sharedb.unsubscribe('documents', `${uniqueId}`);
+            this._log.debug(`subscribe skipped ${path} (null data, pending reload)`);
+            return undefined;
+        }
+
+        this._cleanup.push(async () => {
+            await this._sharedb.unsubscribe('documents', `${uniqueId}`);
+        });
+
+        const otdoc = new OTDocument(doc);
+        const asset = this._assets.get(uniqueId);
+        if (!asset?.file) {
+            throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
+        }
+        const dirty = hash(otdoc.text) !== asset.file.hash;
+
+        const promoted: VirtualFile & { type: 'file' } = {
+            type: 'file',
+            uniqueId,
+            doc: otdoc,
+            dirty
+        };
+        this._files.set(path, promoted);
+
+        // wire op handler (same as _addFile)
+        otdoc.on('op', (op, prev) => {
+            const p = this._assetPath(uniqueId);
+            const a = this._assets.get(uniqueId);
+            const d = a?.file?.hash !== hash(otdoc.text);
+            promoted.dirty = d;
+            this._events.emit('asset:file:update', p, op as ShareDbTextOp, otdoc.text, prev);
+            if (!d) {
+                this._events.emit('asset:file:save', p);
+            }
+        });
+
+        this._events.emit('asset:file:subscribed', path, otdoc.text, dirty);
+        this._log.debug(`subscribed ${path} (${dirty ? 'dirty' : 'clean'})`);
+        return promoted;
+    }
+
+    async unsubscribe(path: string) {
+        const file = this._files.get(path);
+        if (!file || file.type !== 'file') {
+            return;
+        }
+
+        if (file.doc.pending) {
+            this._log.debug(`skipping unsubscribe of ${path} (pending ops)`);
+            return;
+        }
+
+        const uniqueId = file.uniqueId;
+        await this._sharedb.unsubscribe('documents', `${uniqueId}`);
+        this._sharedb.sendRaw(`close:document:${uniqueId}`);
+        this._files.set(path, { type: 'stub', uniqueId, dirty: file.dirty });
+        this._log.debug(`unsubscribed ${path}`);
+    }
+
+    async fetchContent(uniqueId: number) {
+        const asset = this._assets.get(uniqueId);
+        if (!asset?.file?.filename || !this._branchId) {
+            return new Uint8Array();
+        }
+        const id = this._idUniqueId.getR(uniqueId);
+        if (!id) {
+            return new Uint8Array();
+        }
+        const buf = await this._rest.assetFile(id, this._branchId, asset.file.filename);
+        return new Uint8Array(buf);
     }
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
@@ -1214,29 +1379,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             loadFileNext();
         }
 
-        // add all files next in batches
-        for (let i = 0; i < files.length; i += BATCH_SIZE) {
-            const batch = files.slice(i, i + BATCH_SIZE);
-            const subscriptions: [string, string][] = batch.map((asset) => ['documents', `${asset.uniqueId}`]);
-            const docs = await this._sharedb.bulkSubscribe(subscriptions);
-            this._cleanup.push(async () => {
-                await this._sharedb.bulkUnsubscribe(subscriptions);
-            });
-            for (let j = 0; j < docs.length; j++) {
-                const doc = docs[j];
-                const { uniqueId } = batch[j];
-                if (!doc) {
-                    this._log.error(`failed to subscribe to document ${uniqueId}`);
-                    loadFileNext();
-                    continue;
-                }
-
-                // add file to file system
-                if (this._addFile(uniqueId, doc).changed) {
-                    skipsDirty = true;
-                }
-                loadFileNext();
+        // add file stubs (lazy — document subscribed on open)
+        for (const asset of files) {
+            if (this._addStub(asset.uniqueId).changed) {
+                skipsDirty = true;
             }
+            loadFileNext();
         }
 
         // show collisions if dirty
@@ -1261,6 +1409,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._files.clear();
             this._assets.clear();
             this._idUniqueId.clear();
+            this._subscribing.clear();
 
             this.collisions.clear();
         });
