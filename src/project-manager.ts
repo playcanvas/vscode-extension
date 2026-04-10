@@ -299,12 +299,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return { skip: false, changed: false };
     }
 
-    private _verifySave(state: string, uniqueId: number) {
+    private _verifySave(state: 'success' | 'error', uniqueId: number) {
         if (state === 'success') {
             const entry = this._saveRetries.get(uniqueId);
-            if (entry?.timeout) {
-                clearTimeout(entry.timeout);
-            }
+            clearTimeout(entry?.timeout);
             this._saveRetries.delete(uniqueId);
             return true;
         }
@@ -1254,7 +1252,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchSharedb();
             unwatchMessenger();
 
-            Array.from(this._saveRetries.values()).forEach(({ timeout }) => clearTimeout(timeout));
+            this._saveRetries.forEach(({ timeout }) => clearTimeout(timeout));
             this._saveRetries.clear();
 
             this._files.clear();
