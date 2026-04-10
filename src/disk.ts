@@ -164,34 +164,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._log.debug(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
     }
 
-    private _sync(uri: vscode.Uri, content: Uint8Array) {
-        const key = `${uri}`;
-        this._syncing.add(key);
-        void this._debouncer
-            .debounce(key, async () => {
-                this._echo.set(`${uri}:change`, hash(content));
-                let attempt = 0;
-                while (true) {
-                    const [err] = await tryCatch(Promise.resolve(vscode.workspace.fs.writeFile(uri, content)));
-                    if (!err) {
-                        break;
-                    }
-                    if (attempt++ >= 2 || !/EBUSY/.test(err.message)) {
-                        throw err;
-                    }
-                    await new Promise((r) => setTimeout(r, 100 * Math.pow(2, attempt - 1)));
-                }
-                setTimeout(() => this._syncing.delete(key), 200);
-            })
-            .catch((err) => {
-                if (/debounce/.test(err.message)) {
-                    return;
-                }
-                this._syncing.delete(key);
-                this._log.error(`failed to sync ${uri}: ${err.message}`);
-            });
-    }
-
     private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
@@ -261,84 +233,108 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // update editor if file is open
+            // check if file is open in editor
             const viewing =
                 this._opened.has(uri.path) ||
                 vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
-            if (viewing) {
-                // lock before any await so onDidChangeTextDocument can't
-                // submit ops with stale offsets while canonical state is ahead of buffer
-                this._locks.add(`${uri}`);
-                await tryCatch(async () => {
-                    const document = await vscode.workspace.openTextDocument(uri);
-                    const raw = document.getText();
-                    const bufferText = norm(raw);
 
-                    // detect unsubmitted keystrokes by diffing pre-op canonical vs buffer
-                    const userOp = delta(prev, bufferText);
+            // update on disk if not open in editor (avoid conflicts with unsaved buffer content)
+            if (!viewing) {
+                const key = `${uri}`;
+                this._syncing.add(key);
 
-                    // transform remote op into buffer-space so positions align
-                    const bufferOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
-
-                    const edit = sharedb2vscode(document, uri, [bufferOp], bufferText);
-                    const applied = await vscode.workspace.applyEdit(edit);
-
-                    if (this._projectManager && this._folderUri) {
-                        const path = relativePath(uri, this._folderUri);
-                        const file = this._projectManager.files.get(path);
-                        if (file?.type === 'file') {
-                            // submit user keystrokes to OT (transformed against remote op)
-                            if (userOp) {
-                                const transformed = ottext.transform(userOp, op, 'left') as ShareDbTextOp;
-                                file.doc.apply(transformed);
-                                const wasDirty = file.dirty;
-                                file.dirty = true;
-                                if (!wasDirty) {
-                                    this._events.emit('asset:file:dirty', path, true);
-                                }
+                // debounce rapid changes to avoid overwhelming disk with writes
+                const content = buffer.from(snapshot);
+                void this._debouncer
+                    .debounce(key, async () => {
+                        this._echo.set(`${uri}:change`, hash(content));
+                        let attempt = 0;
+                        while (true) {
+                            const [err] = await tryCatch(Promise.resolve(vscode.workspace.fs.writeFile(uri, content)));
+                            if (!err) {
+                                break;
                             }
-
-                            if (!applied) {
-                                // applyEdit failed — force-reset to canonical state
-                                const curRaw = document.getText();
-                                const reset = new vscode.WorkspaceEdit();
-                                const range = new vscode.Range(
-                                    document.positionAt(0),
-                                    document.positionAt(curRaw.length)
-                                );
-                                reset.replace(uri, range, file.doc.text);
-                                await vscode.workspace.applyEdit(reset);
-                                this._log.warn(`sync.remote.resync ${uri} applied=false`);
-                                return;
+                            if (attempt++ >= 2 || !/EBUSY/.test(err.message)) {
+                                throw err;
                             }
+                            await new Promise((r) => setTimeout(r, 100 * Math.pow(2, attempt - 1)));
+                        }
+                        setTimeout(() => this._syncing.delete(key), 200);
+                    })
+                    .catch((err) => {
+                        if (/debounce/.test(err.message)) {
+                            return;
+                        }
+                        this._syncing.delete(key);
+                        this._log.error(`failed to sync ${uri}: ${err.message}`);
+                    });
 
-                            // reconcile: recover keystrokes typed during applyEdit await
-                            const postRaw = document.getText();
-                            const postText = norm(postRaw);
-                            const expected = file.doc.text;
-                            const late = delta(expected, postText);
-                            if (late) {
-                                file.doc.apply(late);
-                                const wasDirty = file.dirty;
-                                file.dirty = true;
-                                if (!wasDirty) {
-                                    this._events.emit('asset:file:dirty', path, true);
-                                }
-                                this._log.info(`sync.remote.recovered ${uri} ${stat(op)} recovered=${stat(late)}`);
-                                return;
+                this._log.debug(`change.remote.closed ${uri} ${stat(op)}`);
+                return;
+            }
+
+            // update editor if file is open
+            this._locks.add(`${uri}`);
+            await tryCatch(async () => {
+                const document = await vscode.workspace.openTextDocument(uri);
+                const raw = document.getText();
+                const bufferText = norm(raw);
+
+                // detect unsubmitted keystrokes by diffing pre-op canonical vs buffer
+                const userOp = delta(prev, bufferText);
+
+                // transform remote op into buffer-space so positions align
+                const bufferOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
+                const edit = sharedb2vscode(document, uri, [bufferOp], bufferText);
+                const applied = await vscode.workspace.applyEdit(edit);
+
+                if (this._projectManager && this._folderUri) {
+                    const path = relativePath(uri, this._folderUri);
+                    const file = this._projectManager.files.get(path);
+                    if (file?.type === 'file') {
+                        // submit user keystrokes to OT (transformed against remote op)
+                        if (userOp) {
+                            const transformed = ottext.transform(userOp, op, 'left') as ShareDbTextOp;
+                            file.doc.apply(transformed);
+                            const wasDirty = file.dirty;
+                            file.dirty = true;
+                            if (!wasDirty) {
+                                this._events.emit('asset:file:dirty', path, true);
                             }
                         }
+
+                        // applyEdit failed — force-reset to canonical state
+                        if (!applied) {
+                            const curRaw = document.getText();
+                            const reset = new vscode.WorkspaceEdit();
+                            const range = new vscode.Range(document.positionAt(0), document.positionAt(curRaw.length));
+                            reset.replace(uri, range, file.doc.text);
+                            await vscode.workspace.applyEdit(reset);
+                            this._log.warn(`sync.remote.resync ${uri} applied=false`);
+                            return;
+                        }
+
+                        // reconcile: recover keystrokes typed during applyEdit await
+                        const postRaw = document.getText();
+                        const postText = norm(postRaw);
+                        const expected = file.doc.text;
+                        const late = delta(expected, postText);
+                        if (late) {
+                            file.doc.apply(late);
+                            const wasDirty = file.dirty;
+                            file.dirty = true;
+                            if (!wasDirty) {
+                                this._events.emit('asset:file:dirty', path, true);
+                            }
+                            this._log.info(`sync.remote.recovered ${uri} ${stat(op)} recovered=${stat(late)}`);
+                            return;
+                        }
                     }
-                });
-                this._locks.delete(`${uri}`);
-            }
+                }
+            });
+            this._locks.delete(`${uri}`);
 
-            // only sync closed files — open files write on save to avoid mtime desync
-            if (!viewing) {
-                this._sync(uri, buffer.from(snapshot));
-            }
-
-            this._log.debug(`change.remote.${viewing ? 'open' : 'closed'} ${uri} ${stat(op)}`);
+            this._log.debug(`change.remote.open ${uri} ${stat(op)}`);
         });
     }
 
