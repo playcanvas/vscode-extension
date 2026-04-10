@@ -16,7 +16,7 @@ import { Deferred } from './utils/deferred';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { OTDocument } from './utils/ot-document';
-import { signal } from './utils/signal';
+import { effect, signal } from './utils/signal';
 import { delta, norm } from './utils/text';
 import { hash, parsePath, guard, withTimeout, tryCatch, sanitizeName } from './utils/utils';
 
@@ -79,6 +79,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _idUniqueId: Bimap<number, number> = new Bimap<number, number>();
 
     private _subscribing = new Map<string, Promise<(VirtualFile & { type: 'file' }) | undefined>>();
+
+    private _queued = new Set<string>();
 
     collisions: CollisionManager;
 
@@ -584,6 +586,33 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         };
     }
 
+    private _watchReconnect(projectId: number) {
+        return effect(() => {
+            if (!this._sharedb.connected.get()) {
+                return;
+            }
+
+            const paths = Array.from(this._queued);
+            this._queued.clear();
+
+            for (const path of paths) {
+                void this.subscribe(path)
+                    .then((f) => {
+                        if (f && f.type === 'file') {
+                            this._relay.join(`document-${f.uniqueId}`, projectId);
+                            this._cleanup.push(async () => {
+                                this._relay.leave(`document-${f.uniqueId}`, projectId);
+                            });
+                        }
+                    })
+                    .catch((err: Error) => {
+                        this._queued.add(path);
+                        this._log.warn(`reconnect subscribe failed for ${path}: ${err.message}`);
+                    });
+            }
+        });
+    }
+
     private _watchEvents(projectId: number) {
         const assetUpdateHandle = this._events.on('asset:update', async (uniqueId, key, before, after) => {
             switch (true) {
@@ -724,7 +753,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     }
                 })
                 .catch((err: Error) => {
-                    this._log.warn(`subscribe failed for ${path}: ${err.message}`);
+                    this._queued.add(path);
+                    this._log.warn(`subscribe failed for ${path}, queued: ${err.message}`);
                 });
         });
         const docCloseHandle = this._events.on('asset:doc:close', (path: string) => {
@@ -1213,6 +1243,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     async unsubscribe(path: string) {
+        this._queued.delete(path);
+
         const file = this._files.get(path);
         if (!file || file.type !== 'file') {
             return;
@@ -1396,12 +1428,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const unwatchEvents = this._watchEvents(projectId);
         const unwatchSharedb = this._watchSharedb();
         const unwatchMessenger = this._watchMessenger(branchId);
+        const unwatchReconnect = this._watchReconnect(projectId);
 
         // register cleanup
         this._cleanup.push(async () => {
             unwatchEvents();
             unwatchSharedb();
             unwatchMessenger();
+            unwatchReconnect();
 
             this._saveRetries.forEach(({ timeout }) => clearTimeout(timeout));
             this._saveRetries.clear();
@@ -1410,6 +1444,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._assets.clear();
             this._idUniqueId.clear();
             this._subscribing.clear();
+            this._queued.clear();
 
             this.collisions.clear();
         });
