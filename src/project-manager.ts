@@ -1,6 +1,6 @@
 import type { Doc } from 'sharedb';
 
-import { CollisionTracker } from './collision-tracker';
+import { CollisionManager } from './collision-manager';
 import { EVENT_TIMEOUT_MS } from './connections/constants';
 import type { Messenger } from './connections/messenger';
 import type { Relay } from './connections/relay';
@@ -83,9 +83,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _idUniqueId: Bimap<number, number> = new Bimap<number, number>();
 
-    private _collisions: CollisionTracker;
-
-    collisions = signal<number>(0);
+    private _collisions: CollisionManager;
 
     error = signal<Error | undefined>(undefined);
 
@@ -109,17 +107,21 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._messenger = messenger;
         this._relay = relay;
         this._rest = rest;
-        this._collisions = new CollisionTracker({
+
+        this._collisions = new CollisionManager({
             files: this._files,
-            assetPath: (uniqueId, override) => this._assetPath(uniqueId, override),
+            assetPath: this._assetPath.bind(this),
             assetId: (uniqueId) => this._idUniqueId.getR(uniqueId),
             log: this._log
         });
-        this.collisions = this._collisions.collisions;
     }
 
     get files() {
         return this._files;
+    }
+
+    get collisions() {
+        return this._collisions.collisions;
     }
 
     private _assetPath(uniqueId: number, override: { path?: number[]; name?: string } = {}) {

@@ -10,7 +10,7 @@ type PathOverride = {
     name?: string;
 };
 
-class CollisionTracker {
+class CollisionManager {
     private _files: Map<string, CollisionFile>;
 
     private _assetPath: (uniqueId: number, override?: PathOverride) => string;
@@ -135,4 +135,4 @@ class CollisionTracker {
     }
 }
 
-export { CollisionTracker };
+export { CollisionManager };
