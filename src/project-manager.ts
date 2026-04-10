@@ -1083,6 +1083,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             throw this.error.set(() => new Error('project already linked'));
         }
 
+        // drain stale cleanup from a previously failed link
+        await super.unlink();
+
         // fetch project asset metadata
         const assets = await guard(this._rest.projectAssets(projectId, branchId, 'codeeditor'), this.error);
 
