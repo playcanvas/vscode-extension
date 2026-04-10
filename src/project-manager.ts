@@ -1,6 +1,6 @@
 import type { Doc } from 'sharedb';
 
-import { CollisionTracker } from './collision-tracker';
+import { CollisionManager } from './collision-manager';
 import { EVENT_TIMEOUT_MS } from './connections/constants';
 import type { Messenger } from './connections/messenger';
 import type { Relay } from './connections/relay';
@@ -46,22 +46,13 @@ type VirtualFile = {
 );
 
 class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
-    private static readonly MAX_RETRIES = 5;
-
-    private static readonly DOC_RETRY_MS = 1000;
+    private static readonly SAVE_MAX_RETRIES = 5;
 
     private static readonly SAVE_RETRY_DELAY_MS = 2 * 1000;
 
     private static readonly FLUSH_TIMEOUT_MS = 5 * 1000;
 
-    // increments on each link/unlink cycle so stale retries can bail out
-    private _epoch = 0;
-
-    private _pendingDocRetries = new Set<number>();
-
-    private _pendingSaveRetries = new Map<number, NodeJS.Timeout>();
-
-    private _saveRetryCounts = new Map<number, number>();
+    private _saveRetries = new Map<number, { timeout?: NodeJS.Timeout; attempt: number }>();
 
     private _events: EventEmitter<EventMap>;
 
@@ -83,9 +74,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _idUniqueId: Bimap<number, number> = new Bimap<number, number>();
 
-    private _collisions: CollisionTracker;
-
-    collisions = signal<number>(0);
+    collisions: CollisionManager;
 
     error = signal<Error | undefined>(undefined);
 
@@ -109,13 +98,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._messenger = messenger;
         this._relay = relay;
         this._rest = rest;
-        this._collisions = new CollisionTracker({
+
+        this.collisions = new CollisionManager({
             files: this._files,
-            assetPath: (uniqueId, override) => this._assetPath(uniqueId, override),
+            assetPath: this._assetPath.bind(this),
             assetId: (uniqueId) => this._idUniqueId.getR(uniqueId),
             log: this._log
         });
-        this.collisions = this._collisions.collisions;
     }
 
     get files() {
@@ -224,7 +213,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = this._assetPath(uniqueId);
 
         // check for file path collision
-        const check = this._collisions.check(uniqueId);
+        const check = this.collisions.check(uniqueId);
         if (check.skip) {
             return check;
         }
@@ -290,7 +279,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // check for file path collision
-        const check = this._collisions.check(uniqueId);
+        const check = this.collisions.check(uniqueId);
         if (check.skip) {
             return check;
         }
@@ -310,72 +299,36 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return { skip: false, changed: false };
     }
 
-    private async _retrySubscription(type: string, uniqueId: number, epoch: number) {
-        // skip if already retrying this uniqueId
-        if (this._pendingDocRetries.has(uniqueId)) {
-            return undefined;
-        }
-        this._pendingDocRetries.add(uniqueId);
-
-        let doc: Doc | undefined;
-        let cancelled = false;
-        for (let attempt = 1; attempt <= ProjectManager.MAX_RETRIES; attempt++) {
-            const delay = ProjectManager.DOC_RETRY_MS * Math.pow(2, attempt - 1);
-            this._log.debug(`retrying subscription to ${type} ${uniqueId} in ${delay}ms (attempt ${attempt})`);
-            await new Promise<void>((r) => setTimeout(r, delay));
-
-            if (this._epoch !== epoch) {
-                cancelled = true;
-                break;
-            }
-
-            // re-open documents on the server before resubscribing
-            if (type === 'documents') {
-                await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
-            }
-
-            doc = await this._sharedb.resubscribe(type, `${uniqueId}`);
-
-            if (this._epoch !== epoch) {
-                if (doc) {
-                    doc.destroy();
-                }
-                doc = undefined;
-                cancelled = true;
-                break;
-            }
-
-            if (doc) {
-                break;
-            }
+    private _verifySave(state: 'success' | 'error', uniqueId: number) {
+        if (state === 'success') {
+            const entry = this._saveRetries.get(uniqueId);
+            clearTimeout(entry?.timeout);
+            this._saveRetries.delete(uniqueId);
+            return true;
         }
 
-        this._pendingDocRetries.delete(uniqueId);
+        this._log.warn(`failed to save document ${uniqueId}: ${state}`);
 
-        if (!doc && !cancelled) {
-            const kind = type === 'assets' ? 'asset' : 'document';
-            this._log.error(`giving up subscribing to ${kind} ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
-        }
-        return doc;
-    }
-
-    private _retrySave(uniqueId: number) {
         // skip if already retrying this doc
-        if (this._pendingSaveRetries.has(uniqueId)) {
-            return;
+        const entry = this._saveRetries.get(uniqueId);
+        if (entry?.timeout) {
+            return false;
         }
 
         // enforce retry limit
-        const attempt = (this._saveRetryCounts.get(uniqueId) ?? 0) + 1;
-        if (attempt > ProjectManager.MAX_RETRIES) {
-            this._log.error(`giving up saving document ${uniqueId} after ${ProjectManager.MAX_RETRIES} retries`);
-            this._saveRetryCounts.delete(uniqueId);
-            return;
+        const attempt = (entry?.attempt ?? 0) + 1;
+        if (attempt > ProjectManager.SAVE_MAX_RETRIES) {
+            this._log.error(`giving up saving document ${uniqueId} after ${ProjectManager.SAVE_MAX_RETRIES} retries`);
+            this._saveRetries.delete(uniqueId);
+            return false;
         }
-        this._saveRetryCounts.set(uniqueId, attempt);
 
+        // schedule retry
         const timeout = setTimeout(async () => {
-            this._pendingSaveRetries.delete(uniqueId);
+            const e = this._saveRetries.get(uniqueId);
+            if (e) {
+                e.timeout = undefined;
+            }
 
             // bail out if project was unlinked while waiting
             if (this._projectId === undefined) {
@@ -394,34 +347,21 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._log.debug(`retried save for document ${uniqueId} (attempt ${attempt})`);
         }, ProjectManager.SAVE_RETRY_DELAY_MS);
 
-        this._pendingSaveRetries.set(uniqueId, timeout);
+        this._saveRetries.set(uniqueId, { timeout, attempt });
+        return false;
     }
 
     private _watchSharedb() {
         const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
-            // skip if asset was deleted while save was in-flight
             if (!this._assets.has(uniqueId)) {
                 return;
             }
 
-            if (state !== 'success') {
-                this._log.warn(`failed to save document ${uniqueId}: ${state}`);
-                this._retrySave(uniqueId);
+            if (!this._verifySave(state, uniqueId)) {
                 return;
             }
 
-            // clear retry state on success
-            const pending = this._pendingSaveRetries.get(uniqueId);
-            if (pending) {
-                clearTimeout(pending);
-                this._pendingSaveRetries.delete(uniqueId);
-            }
-            this._saveRetryCounts.delete(uniqueId);
-
-            // find file by uniqueId
             const path = this._assetPath(uniqueId);
-
-            // check if file exists
             const file = this._files.get(path);
             if (!file || file.type !== 'file') {
                 return;
@@ -508,13 +448,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 }
 
                 // subscribe to asset document
-                let doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
+                const doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
                 if (!doc2) {
-                    this._log.warn(`failed to subscribe to new document ${uniqueId}, scheduling retry`);
-                    doc2 = await this._retrySubscription('documents', uniqueId, this._epoch);
-                    if (!doc2) {
-                        return;
-                    }
+                    this._log.error(`failed to subscribe to new document ${uniqueId}`);
+                    return;
                 }
 
                 // check if asset was deleted during doc subscribe
@@ -538,7 +475,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // show any path collisions if found
             if (skipsDirty) {
-                this._collisions.refresh();
+                this.collisions.refresh();
             }
         });
         const assetDeleteHandle = this._messenger.on('assets.delete', async ({ data: { assets } }) => {
@@ -581,7 +518,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 }
 
                 // check if collisions updated
-                if (this._collisions.remove(uniqueId)) {
+                if (this.collisions.remove(uniqueId)) {
                     skipsDirty = true;
                 }
 
@@ -612,7 +549,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // update collisions if any were modified
             if (skipsDirty) {
-                this._collisions.refresh();
+                this.collisions.refresh();
             }
         });
         return () => {
@@ -641,7 +578,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     let skipsDirty = false;
 
                     // check if new path will be a collision
-                    if (this._collisions.check(uniqueId, { [key]: after }).skip) {
+                    if (this.collisions.check(uniqueId, { [key]: after }).skip) {
                         skipsDirty = true;
 
                         // collect paths to remove (don't modify map during iteration)
@@ -659,7 +596,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                             this._events.emit('asset:file:delete', path);
                         }
 
-                        this._collisions.refresh();
+                        this.collisions.refresh();
                         break;
                     }
 
@@ -679,13 +616,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         this._files.set(newPath, file);
 
                         // check if collisions updated
-                        if (this._collisions.remove(file.uniqueId)) {
+                        if (this.collisions.remove(file.uniqueId)) {
                             skipsDirty = true;
                         }
                     }
 
                     // check if collisions updated
-                    if (this._collisions.remove(uniqueId)) {
+                    if (this.collisions.remove(uniqueId)) {
                         skipsDirty = true;
                     }
 
@@ -695,7 +632,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                     // show collisions if dirty
                     if (skipsDirty) {
-                        this._collisions.refresh();
+                        this.collisions.refresh();
                     }
                     break;
                 }
@@ -775,21 +712,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         this._log.info(`flushing ${pending.length} pending ops before unlink`);
-        const waits = pending.map(
-            (f) =>
-                new Promise<void>((resolve) => {
-                    if (!f.doc.pending) {
-                        resolve();
-                        return;
-                    }
-                    const done = () => resolve();
-                    f.doc.once('nothing pending', done);
-                    if (!f.doc.pending) {
-                        f.doc.off('nothing pending', done);
-                        resolve();
-                    }
-                })
-        );
+        const waits = pending.map((f) => new Promise<void>((resolve) => f.doc.whenNothingPending(resolve)));
         const [err] = await tryCatch(
             withTimeout(Promise.all(waits), ProjectManager.FLUSH_TIMEOUT_MS, 'flush pending ops timed out')
         );
@@ -1131,25 +1054,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // wait for pending ops to be acknowledged before saving,
         // matching the Code Editor's behavior (save.ts:144-150).
         // prevents saving stale content while ops are in-flight.
-        let sent = false;
-        const send = () => {
-            if (sent) {
-                return;
-            }
-            sent = true;
+        file.doc.whenNothingPending(() => {
             this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
             this._log.debug(`saved file ${path}`);
-        };
-        if (file.doc.pending) {
-            file.doc.once('nothing pending', send);
-            // re-check: event may have fired between pending and once()
-            if (!file.doc.pending) {
-                file.doc.off('nothing pending', send);
-                send();
-            }
-        } else {
-            send();
-        }
+        });
     }
 
     path(assetId: number) {
@@ -1170,32 +1078,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return file?.uniqueId === uniqueId;
     }
 
-    collided() {
-        return this._collisions.snapshot();
-    }
-
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
         if (this._projectId !== undefined) {
             throw this.error.set(() => new Error('project already linked'));
         }
 
-        const epoch = ++this._epoch;
-
-        // clean up partial state from a previously failed link attempt
-        if (this._cleanup.length > 0) {
-            await Promise.allSettled(this._cleanup.map((fn) => fn()));
-            this._cleanup.length = 0;
-            this._pendingDocRetries.clear();
-            for (const timeout of this._pendingSaveRetries.values()) {
-                clearTimeout(timeout);
-            }
-            this._pendingSaveRetries.clear();
-            this._saveRetryCounts.clear();
-            this._files.clear();
-            this._assets.clear();
-            this._idUniqueId.clear();
-            this._collisions.clear();
-        }
+        // drain stale cleanup from a previously failed link
+        await super.unlink();
 
         // fetch project asset metadata
         const assets = await guard(this._rest.projectAssets(projectId, branchId, 'codeeditor'), this.error);
@@ -1215,7 +1104,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // subscribe to all assets in batches
         const ordered: { uniqueId: number; data: Record<string, unknown> }[] = [];
-        const failed: number[] = [];
         for (let i = 0; i < assets.length; i += BATCH_SIZE) {
             const batch = assets.slice(i, i + BATCH_SIZE);
             const subscriptions: [string, string][] = batch.map((asset) => ['assets', `${asset.uniqueId}`]);
@@ -1227,7 +1115,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 const doc = docs[j];
                 const uniqueId = batch[j].uniqueId;
                 if (!doc) {
-                    failed.push(uniqueId);
+                    this._log.error(`failed to subscribe to asset ${uniqueId}`);
                     loadAssetNext();
                     continue;
                 }
@@ -1240,19 +1128,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                 loadAssetNext();
             }
-        }
-
-        // retry failed asset subscriptions individually
-        for (const uniqueId of failed) {
-            const doc = await this._retrySubscription('assets', uniqueId, epoch);
-            if (!doc) {
-                continue;
-            }
-            this._cleanup.push(async () => {
-                await this._sharedb.unsubscribe('assets', `${uniqueId}`);
-            });
-            this._addAsset(uniqueId, doc);
-            ordered.push({ uniqueId, data: doc.data });
         }
 
         // split folder and files
@@ -1316,7 +1191,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         folders0.sort(sortByPathDepth);
         files0.sort(sortByPathDepth);
 
-        // drop assets whose parent chain is broken (subscription failed even after retries)
+        // drop assets whose parent chain is broken
         const reachable = (a: (typeof ordered)[0]) => {
             const depth = getDepth(a.uniqueId);
             if (depth === Infinity) {
@@ -1348,15 +1223,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 await this._sharedb.bulkUnsubscribe(subscriptions);
             });
             for (let j = 0; j < docs.length; j++) {
-                let doc = docs[j];
+                const doc = docs[j];
                 const { uniqueId } = batch[j];
                 if (!doc) {
-                    this._log.warn(`failed to subscribe to document ${uniqueId}, scheduling retry`);
-                    doc = await this._retrySubscription('documents', uniqueId, epoch);
-                    if (!doc) {
-                        loadFileNext();
-                        continue;
-                    }
+                    this._log.error(`failed to subscribe to document ${uniqueId}`);
+                    loadFileNext();
+                    continue;
                 }
 
                 // add file to file system
@@ -1369,7 +1241,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // show collisions if dirty
         if (skipsDirty) {
-            this._collisions.refresh();
+            this.collisions.refresh();
         }
 
         // watchers
@@ -1383,20 +1255,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchSharedb();
             unwatchMessenger();
 
-            // cancel pending retries (in-flight retries check _epoch and bail out)
-            this._pendingDocRetries.clear();
-
-            // cancel pending save retries
-            for (const timeout of this._pendingSaveRetries.values()) {
-                clearTimeout(timeout);
-            }
-            this._pendingSaveRetries.clear();
-            this._saveRetryCounts.clear();
+            this._saveRetries.forEach(({ timeout }) => clearTimeout(timeout));
+            this._saveRetries.clear();
 
             this._files.clear();
             this._assets.clear();
             this._idUniqueId.clear();
-            this._collisions.clear();
+
+            this.collisions.clear();
         });
 
         this._projectId = projectId;
@@ -1411,7 +1277,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (projectId === undefined || branchId === undefined) {
             throw this.error.set(() => new Error('unlink called before link'));
         }
-        this._epoch++;
         await this._flush();
         await super.unlink();
         this._projectId = undefined;

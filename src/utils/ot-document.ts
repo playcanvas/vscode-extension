@@ -10,7 +10,6 @@ const SOURCE = ShareDb.SOURCE;
 
 type OTDocumentEvents = {
     op: [ShareDbTextOp, string];
-    'nothing pending': [];
 };
 
 class OTDocument extends EventEmitter<OTDocumentEvents> {
@@ -31,8 +30,6 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
             this._text = ottext.apply(this._text, op) as string;
             this.emit('op', op, prev);
         });
-
-        doc.on('nothing pending', () => this.emit('nothing pending'));
     }
 
     get text() {
@@ -48,6 +45,10 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
 
     get pending() {
         return this._doc.hasPending();
+    }
+
+    whenNothingPending(fn: () => void) {
+        this._doc.whenNothingPending(fn);
     }
 
     get raw() {

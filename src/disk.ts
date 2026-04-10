@@ -983,6 +983,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             throw this.error.set(() => new Error('manager already linked'));
         }
 
+        // drain stale cleanup from a previously failed link
+        await super.unlink();
+
         // read files to disk
         const updatingDiskDone = await simpleNotification('Updating Disk');
 

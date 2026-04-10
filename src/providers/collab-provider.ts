@@ -167,6 +167,9 @@ class CollabProvider
             throw this.error.set(() => new Error('manager already linked'));
         }
 
+        // drain stale cleanup from a previously failed link
+        await super.unlink();
+
         const unwatchDocument = this._watchDocument(folderUri, projectManager);
 
         this._cleanup.push(async () => {

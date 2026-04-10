@@ -80,8 +80,8 @@ class Doc implements sharedb.Doc {
         return undefined;
     }
 
-    whenNothingPending(_callback: () => void): void {
-        return undefined;
+    whenNothingPending(callback: () => void): void {
+        callback();
     }
 
     hasPending(): boolean {

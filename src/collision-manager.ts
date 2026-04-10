@@ -10,7 +10,7 @@ type PathOverride = {
     name?: string;
 };
 
-class CollisionTracker {
+class CollisionManager {
     private _files: Map<string, CollisionFile>;
 
     private _assetPath: (uniqueId: number, override?: PathOverride) => string;
@@ -23,7 +23,7 @@ class CollisionTracker {
 
     private _collidedByPath = new Map<string, Set<number>>();
 
-    collisions = signal(0);
+    count = signal(0);
 
     constructor({
         files,
@@ -111,7 +111,7 @@ class CollisionTracker {
             this.remove(uniqueId);
         }
 
-        this.collisions.set(() => this._collidedByPath.size);
+        this.count.set(() => this._collidedByPath.size);
     }
 
     snapshot() {
@@ -131,8 +131,8 @@ class CollisionTracker {
     clear() {
         this._collided.clear();
         this._collidedByPath.clear();
-        this.collisions.set(() => 0);
+        this.count.set(() => 0);
     }
 }
 
-export { CollisionTracker };
+export { CollisionManager };

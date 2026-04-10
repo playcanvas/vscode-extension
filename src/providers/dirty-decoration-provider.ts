@@ -62,6 +62,9 @@ class DirtyDecorationProvider
             throw this.error.set(() => new Error('already linked'));
         }
 
+        // drain stale cleanup from a previously failed link
+        await super.unlink();
+
         // listen for dirty transitions
         const onDirty = this._events.on('asset:file:dirty', (path) => this._fire(path));
         const onUpdate = this._events.on('asset:file:update', (path) => this._fire(path));
