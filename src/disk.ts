@@ -53,6 +53,8 @@ const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder' | un
     return content;
 };
 
+const FETCH_CONCURRENCY = 16;
+
 // Helper function for path matching (checks if paths are related - ancestor/descendant)
 const pathsRelated = (path1: string, path2: string): boolean => {
     if (path1 === path2) {
@@ -119,7 +121,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         }
 
         const file = pm.files.get(Disk.IGNORE_FILE);
-        const text = deleted ? '' : file?.type === 'file' ? (file.doc.text ?? '') : '';
+        const text = deleted ? '' : file?.type === 'file' ? file.doc.text : '';
         const h = hash(text);
         if (h === this._ignoreHash) {
             return;
@@ -512,12 +514,69 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._checkIgnoreUpdated(uri);
             await this._save(uri);
         });
+        const assetFileSubscribed = this._events.on('asset:file:subscribed', async (path, content, dirty) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+
+            if (this._opened.has(uri.path)) {
+                // reconcile: submit buffer divergence to OT (preserves user edits made before subscribe)
+                await this._writeMutex.atomic([`${uri}`], async () => {
+                    this._locks.add(`${uri}`);
+                    await tryCatch(async () => {
+                        const pm = this._projectManager;
+                        if (!pm) {
+                            return;
+                        }
+                        const file = pm.files.get(path);
+                        if (!file || file.type !== 'file') {
+                            return;
+                        }
+
+                        const doc = await vscode.workspace.openTextDocument(uri);
+                        const bufferText = norm(doc.getText());
+
+                        const userOp = delta(file.doc.text, bufferText);
+                        if (userOp) {
+                            file.doc.apply(userOp);
+                            file.dirty = true;
+                            this._events.emit('asset:file:dirty', path, true);
+                            this._log.info(`subscribe.recovered ${uri}`);
+                        }
+
+                        this._bufferState.set(uri.path, norm(doc.getText()));
+                    });
+                    this._locks.delete(`${uri}`);
+                });
+            } else {
+                // sync to disk for closed files
+                const buf = buffer.from(norm(content));
+                const key = `${uri}`;
+                this._syncing.add(key);
+                void this._debouncer
+                    .debounce(key, async () => {
+                        this._echo.set(`${uri}:change`, hash(buf));
+                        await vscode.workspace.fs.writeFile(uri, buf);
+                        setTimeout(() => this._syncing.delete(key), 200);
+                    })
+                    .catch((err) => {
+                        if (/debounce/.test(err.message)) {
+                            return;
+                        }
+                        this._syncing.delete(key);
+                        this._log.error(`failed to sync subscribed ${uri}: ${err.message}`);
+                    });
+            }
+
+            if (dirty) {
+                this._events.emit('asset:file:dirty', path, true);
+            }
+        });
         return () => {
             this._events.off('asset:file:create', assetFileCreate);
             this._events.off('asset:file:update', assetFileUpdate);
             this._events.off('asset:file:rename', assetFileRename);
             this._events.off('asset:file:delete', assetFileDelete);
             this._events.off('asset:file:save', assetFileSave);
+            this._events.off('asset:file:subscribed', assetFileSubscribed);
         };
     }
 
@@ -765,12 +824,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     // atomic write pattern: external tools write temp+rename,
                                     // producing create events for existing files — treat as change
                                     const existing = projectManager.files.get(path);
-                                    if (existing && existing.type === 'file' && type === 'file' && content) {
-                                        if (existing.doc.text === norm(buffer.toString(content))) {
+                                    if (
+                                        existing &&
+                                        (existing.type === 'file' || existing.type === 'stub') &&
+                                        type === 'file' &&
+                                        content
+                                    ) {
+                                        if (
+                                            existing.type === 'file' &&
+                                            existing.doc.text === norm(buffer.toString(content))
+                                        ) {
                                             return;
                                         }
                                         this._log.debug(`change.local (atomic) ${op.uri}`);
-                                        projectManager.write(path, content);
+                                        await projectManager.write(path, content);
                                         if (this._opened.has(op.uri.path)) {
                                             const doc = vscode.workspace.textDocuments.find(
                                                 (d) => d.uri.path === op.uri.path
@@ -841,7 +908,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     }
 
                                     this._log.debug(`change.local ${op.uri}`);
-                                    projectManager.write(path, content);
+                                    await projectManager.write(path, content);
 
                                     // dirtify if file was opened while change was deferred
                                     if (this._opened.has(op.uri.path)) {
@@ -930,10 +997,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // check if file is in memory and of type file
+            // check if file is in memory (stubs allowed — triggers subscribe on write)
             const path = relativePath(uri, folderUri);
             const file = projectManager.files.get(path);
-            if (!file || file.type !== 'file') {
+            if (!file || file.type === 'folder') {
                 return;
             }
 
@@ -974,7 +1041,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             defer({
                 action: 'delete',
                 uri,
-                type: Promise.resolve(file.type)
+                type: Promise.resolve(file.type === 'stub' ? 'file' : file.type)
             });
         });
         return () => {
@@ -996,12 +1063,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         // read files to disk
         const updatingDiskDone = await simpleNotification('Updating Disk');
-
-        // parse ignore file
-        const file = projectManager.files.get(Disk.IGNORE_FILE);
-        if (file?.type === 'file') {
-            this._parseIgnoreText(file.doc.text, folderUri);
-        }
 
         // sort into hierarchy
         // TODO: store as tree instead of flat map and sorting
@@ -1025,11 +1086,46 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return 0;
         });
 
-        // add files from project (write ShareDB content to disk)
+        // prefetch REST content for stubs (concurrent with limit)
+        const stubs = ordered.filter(([, f]) => f.type === 'stub');
+        const fetched = new Map<number, Uint8Array>();
+        for (let i = 0; i < stubs.length; i += FETCH_CONCURRENCY) {
+            const batch = stubs.slice(i, i + FETCH_CONCURRENCY);
+            const results = await Promise.all(
+                batch.map(async ([, f]) => {
+                    const [err, buf] = await tryCatch(projectManager.fetchContent(f.uniqueId));
+                    return [f.uniqueId, err ? new Uint8Array() : buf] as const;
+                })
+            );
+            for (const [id, buf] of results) {
+                fetched.set(id, buf);
+            }
+        }
+
+        // write files to disk
         for (const [path, file] of ordered) {
             const uri = vscode.Uri.joinPath(folderUri, path);
-            const content = file.type === 'file' ? buffer.from(file.doc.text) : new Uint8Array();
-            await this._create(uri, file.type, content);
+            let content: Uint8Array;
+            if (file.type === 'file') {
+                content = buffer.from(file.doc.text);
+            } else if (file.type === 'stub') {
+                content = fetched.get(file.uniqueId) ?? new Uint8Array();
+            } else {
+                content = new Uint8Array();
+            }
+            await this._create(uri, file.type === 'folder' ? 'folder' : 'file', content);
+        }
+
+        // parse ignore file (after disk write so stub content is available)
+        const ignoreFile = projectManager.files.get(Disk.IGNORE_FILE);
+        if (ignoreFile?.type === 'file') {
+            this._parseIgnoreText(ignoreFile.doc.text, folderUri);
+        } else if (ignoreFile?.type === 'stub') {
+            const ignoreUri = vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE);
+            const [, raw] = await tryCatch(vscode.workspace.fs.readFile(ignoreUri) as Promise<Uint8Array>);
+            if (raw) {
+                this._parseIgnoreText(buffer.toString(raw), folderUri);
+            }
         }
 
         // remove old files
