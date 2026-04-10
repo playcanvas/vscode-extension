@@ -52,7 +52,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private static readonly FLUSH_TIMEOUT_MS = 5 * 1000;
 
-    private _pendingSaveRetries = new Map<number, NodeJS.Timeout>();
+    private _saveRetryTimeouts = new Map<number, NodeJS.Timeout>();
 
     private _saveRetryCounts = new Map<number, number>();
 
@@ -303,7 +303,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _retrySave(uniqueId: number) {
         // skip if already retrying this doc
-        if (this._pendingSaveRetries.has(uniqueId)) {
+        if (this._saveRetryTimeouts.has(uniqueId)) {
             return;
         }
 
@@ -317,7 +317,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._saveRetryCounts.set(uniqueId, attempt);
 
         const timeout = setTimeout(async () => {
-            this._pendingSaveRetries.delete(uniqueId);
+            this._saveRetryTimeouts.delete(uniqueId);
 
             // bail out if project was unlinked while waiting
             if (this._projectId === undefined) {
@@ -336,7 +336,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._log.debug(`retried save for document ${uniqueId} (attempt ${attempt})`);
         }, ProjectManager.SAVE_RETRY_DELAY_MS);
 
-        this._pendingSaveRetries.set(uniqueId, timeout);
+        this._saveRetryTimeouts.set(uniqueId, timeout);
     }
 
     private _watchSharedb() {
@@ -353,10 +353,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
 
             // clear retry state on success
-            const pending = this._pendingSaveRetries.get(uniqueId);
+            const pending = this._saveRetryTimeouts.get(uniqueId);
             if (pending) {
                 clearTimeout(pending);
-                this._pendingSaveRetries.delete(uniqueId);
+                this._saveRetryTimeouts.delete(uniqueId);
             }
             this._saveRetryCounts.delete(uniqueId);
 
@@ -1118,10 +1118,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (this._cleanup.length > 0) {
             await Promise.allSettled(this._cleanup.map((fn) => fn()));
             this._cleanup.length = 0;
-            for (const timeout of this._pendingSaveRetries.values()) {
+            for (const timeout of this._saveRetryTimeouts.values()) {
                 clearTimeout(timeout);
             }
-            this._pendingSaveRetries.clear();
+            this._saveRetryTimeouts.clear();
             this._saveRetryCounts.clear();
             this._files.clear();
             this._assets.clear();
@@ -1299,10 +1299,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchMessenger();
 
             // cancel pending save retries
-            for (const timeout of this._pendingSaveRetries.values()) {
+            for (const timeout of this._saveRetryTimeouts.values()) {
                 clearTimeout(timeout);
             }
-            this._pendingSaveRetries.clear();
+            this._saveRetryTimeouts.clear();
             this._saveRetryCounts.clear();
 
             this._files.clear();
