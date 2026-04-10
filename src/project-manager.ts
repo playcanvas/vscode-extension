@@ -795,41 +795,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
     }
 
-    async waitForFile(path: string, type: 'file' | 'folder') {
-        // check if file already exists
-        const file = this._files.get(path);
-        if (file && file.type === type) {
-            return file;
-        }
-
-        // creation promise
-        let oncreate: ((uniqueId: number) => void) | undefined;
-        const pending = new Promise<VirtualFile>((resolve) => {
-            oncreate = (uniqueId: number) => {
-                const assetPath = this._assetPath(uniqueId);
-                if (assetPath === path) {
-                    const file = this._files.get(path);
-                    if (!file || file.type !== type) {
-                        return;
-                    }
-                    this._events.off('asset:create', oncreate!);
-                    resolve(file);
-                }
-            };
-            this._events.on('asset:create', oncreate);
-        });
-        const [err, value] = await tryCatch(
-            withTimeout(pending, EVENT_TIMEOUT_MS, `waitForFile timed out for ${path}`)
-        );
-        if (err) {
-            if (oncreate) {
-                this._events.off('asset:create', oncreate);
-            }
-            throw err;
-        }
-        return value!;
-    }
-
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
         if (!this._projectId || !this._branchId) {
             throw this.error.set(() => new Error('project not loaded'));
