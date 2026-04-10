@@ -41,6 +41,8 @@ class MockRest extends Rest {
 
     assetRename: sinon.SinonSpy<[number, string, number, string], Promise<Asset>>;
 
+    assetFile: sinon.SinonSpy<[number, string, string], Promise<ArrayBuffer>>;
+
     constructor(sandbox: sinon.SinonSandbox, messenger: MockMessenger, sharedb: MockShareDb) {
         super({
             url: '',
@@ -139,6 +141,10 @@ class MockRest extends Rest {
             }
 
             return asset;
+        });
+        this.assetFile = sandbox.spy(async (assetId: number, _branchId: string, _filename: string) => {
+            const content = documents.get(assetId) ?? '';
+            return new TextEncoder().encode(content).buffer;
         });
     }
 }
