@@ -518,23 +518,31 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const uri = vscode.Uri.joinPath(folderUri, path);
 
             if (this._opened.has(uri.path)) {
-                // reconcile open buffer with live OT content
+                // reconcile: submit buffer divergence to OT (preserves user edits made before subscribe)
                 await this._writeMutex.atomic([`${uri}`], async () => {
                     this._locks.add(`${uri}`);
                     await tryCatch(async () => {
-                        const doc = await vscode.workspace.openTextDocument(uri);
-                        const current = doc.getText();
-                        if (norm(current) !== norm(content)) {
-                            const { prefix, suffix } = diff(current, content);
-                            const edit = new vscode.WorkspaceEdit();
-                            edit.replace(
-                                uri,
-                                new vscode.Range(doc.positionAt(prefix), doc.positionAt(current.length - suffix)),
-                                content.substring(prefix, content.length - suffix)
-                            );
-                            await vscode.workspace.applyEdit(edit);
+                        const pm = this._projectManager;
+                        if (!pm) {
+                            return;
                         }
-                        this._bufferState.set(uri.path, norm(content));
+                        const file = pm.files.get(path);
+                        if (!file || file.type !== 'file') {
+                            return;
+                        }
+
+                        const doc = await vscode.workspace.openTextDocument(uri);
+                        const bufferText = norm(doc.getText());
+
+                        const userOp = delta(file.doc.text, bufferText);
+                        if (userOp) {
+                            file.doc.apply(userOp);
+                            file.dirty = true;
+                            this._events.emit('asset:file:dirty', path, true);
+                            this._log.info(`subscribe.recovered ${uri}`);
+                        }
+
+                        this._bufferState.set(uri.path, norm(doc.getText()));
                     });
                     this._locks.delete(`${uri}`);
                 });
