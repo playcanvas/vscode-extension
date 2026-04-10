@@ -83,7 +83,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _idUniqueId: Bimap<number, number> = new Bimap<number, number>();
 
-    private _collisions: CollisionManager;
+    collisions: CollisionManager;
 
     error = signal<Error | undefined>(undefined);
 
@@ -108,7 +108,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         this._relay = relay;
         this._rest = rest;
 
-        this._collisions = new CollisionManager({
+        this.collisions = new CollisionManager({
             files: this._files,
             assetPath: this._assetPath.bind(this),
             assetId: (uniqueId) => this._idUniqueId.getR(uniqueId),
@@ -118,10 +118,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     get files() {
         return this._files;
-    }
-
-    get collisions() {
-        return this._collisions.collisions;
     }
 
     private _assetPath(uniqueId: number, override: { path?: number[]; name?: string } = {}) {
@@ -226,7 +222,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = this._assetPath(uniqueId);
 
         // check for file path collision
-        const check = this._collisions.check(uniqueId);
+        const check = this.collisions.check(uniqueId);
         if (check.skip) {
             return check;
         }
@@ -292,7 +288,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         // check for file path collision
-        const check = this._collisions.check(uniqueId);
+        const check = this.collisions.check(uniqueId);
         if (check.skip) {
             return check;
         }
@@ -540,7 +536,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // show any path collisions if found
             if (skipsDirty) {
-                this._collisions.refresh();
+                this.collisions.refresh();
             }
         });
         const assetDeleteHandle = this._messenger.on('assets.delete', async ({ data: { assets } }) => {
@@ -583,7 +579,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 }
 
                 // check if collisions updated
-                if (this._collisions.remove(uniqueId)) {
+                if (this.collisions.remove(uniqueId)) {
                     skipsDirty = true;
                 }
 
@@ -614,7 +610,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             // update collisions if any were modified
             if (skipsDirty) {
-                this._collisions.refresh();
+                this.collisions.refresh();
             }
         });
         return () => {
@@ -643,7 +639,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     let skipsDirty = false;
 
                     // check if new path will be a collision
-                    if (this._collisions.check(uniqueId, { [key]: after }).skip) {
+                    if (this.collisions.check(uniqueId, { [key]: after }).skip) {
                         skipsDirty = true;
 
                         // collect paths to remove (don't modify map during iteration)
@@ -661,7 +657,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                             this._events.emit('asset:file:delete', path);
                         }
 
-                        this._collisions.refresh();
+                        this.collisions.refresh();
                         break;
                     }
 
@@ -681,13 +677,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         this._files.set(newPath, file);
 
                         // check if collisions updated
-                        if (this._collisions.remove(file.uniqueId)) {
+                        if (this.collisions.remove(file.uniqueId)) {
                             skipsDirty = true;
                         }
                     }
 
                     // check if collisions updated
-                    if (this._collisions.remove(uniqueId)) {
+                    if (this.collisions.remove(uniqueId)) {
                         skipsDirty = true;
                     }
 
@@ -697,7 +693,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                     // show collisions if dirty
                     if (skipsDirty) {
-                        this._collisions.refresh();
+                        this.collisions.refresh();
                     }
                     break;
                 }
@@ -1172,10 +1168,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return file?.uniqueId === uniqueId;
     }
 
-    collided() {
-        return this._collisions.snapshot();
-    }
-
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
         if (this._projectId !== undefined) {
             throw this.error.set(() => new Error('project already linked'));
@@ -1196,7 +1188,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._files.clear();
             this._assets.clear();
             this._idUniqueId.clear();
-            this._collisions.clear();
+            this.collisions.clear();
         }
 
         // fetch project asset metadata
@@ -1371,7 +1363,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // show collisions if dirty
         if (skipsDirty) {
-            this._collisions.refresh();
+            this.collisions.refresh();
         }
 
         // watchers
@@ -1398,7 +1390,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._files.clear();
             this._assets.clear();
             this._idUniqueId.clear();
-            this._collisions.clear();
+            this.collisions.clear();
         });
 
         this._projectId = projectId;

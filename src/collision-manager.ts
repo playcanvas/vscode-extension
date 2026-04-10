@@ -23,7 +23,7 @@ class CollisionManager {
 
     private _collidedByPath = new Map<string, Set<number>>();
 
-    collisions = signal(0);
+    count = signal(0);
 
     constructor({
         files,
@@ -111,7 +111,7 @@ class CollisionManager {
             this.remove(uniqueId);
         }
 
-        this.collisions.set(() => this._collidedByPath.size);
+        this.count.set(() => this._collidedByPath.size);
     }
 
     snapshot() {
@@ -131,7 +131,7 @@ class CollisionManager {
     clear() {
         this._collided.clear();
         this._collidedByPath.clear();
-        this.collisions.set(() => 0);
+        this.count.set(() => 0);
     }
 }
 
