@@ -52,9 +52,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private static readonly FLUSH_TIMEOUT_MS = 5 * 1000;
 
-    private _saveRetryTimeouts = new Map<number, NodeJS.Timeout>();
-
-    private _saveRetryCounts = new Map<number, number>();
+    private _saveRetries = new Map<number, { timeout?: NodeJS.Timeout; attempt: number }>();
 
     private _events: EventEmitter<EventMap>;
 
@@ -301,23 +299,38 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return { skip: false, changed: false };
     }
 
-    private _retrySave(uniqueId: number) {
+    private _verifySave(state: string, uniqueId: number) {
+        if (state === 'success') {
+            const entry = this._saveRetries.get(uniqueId);
+            if (entry?.timeout) {
+                clearTimeout(entry.timeout);
+            }
+            this._saveRetries.delete(uniqueId);
+            return true;
+        }
+
+        this._log.warn(`failed to save document ${uniqueId}: ${state}`);
+
         // skip if already retrying this doc
-        if (this._saveRetryTimeouts.has(uniqueId)) {
-            return;
+        const entry = this._saveRetries.get(uniqueId);
+        if (entry?.timeout) {
+            return false;
         }
 
         // enforce retry limit
-        const attempt = (this._saveRetryCounts.get(uniqueId) ?? 0) + 1;
+        const attempt = (entry?.attempt ?? 0) + 1;
         if (attempt > ProjectManager.SAVE_MAX_RETRIES) {
             this._log.error(`giving up saving document ${uniqueId} after ${ProjectManager.SAVE_MAX_RETRIES} retries`);
-            this._saveRetryCounts.delete(uniqueId);
-            return;
+            this._saveRetries.delete(uniqueId);
+            return false;
         }
-        this._saveRetryCounts.set(uniqueId, attempt);
 
+        // schedule retry
         const timeout = setTimeout(async () => {
-            this._saveRetryTimeouts.delete(uniqueId);
+            const e = this._saveRetries.get(uniqueId);
+            if (e) {
+                e.timeout = undefined;
+            }
 
             // bail out if project was unlinked while waiting
             if (this._projectId === undefined) {
@@ -336,34 +349,21 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._log.debug(`retried save for document ${uniqueId} (attempt ${attempt})`);
         }, ProjectManager.SAVE_RETRY_DELAY_MS);
 
-        this._saveRetryTimeouts.set(uniqueId, timeout);
+        this._saveRetries.set(uniqueId, { timeout, attempt });
+        return false;
     }
 
     private _watchSharedb() {
         const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
-            // skip if asset was deleted while save was in-flight
             if (!this._assets.has(uniqueId)) {
                 return;
             }
 
-            if (state !== 'success') {
-                this._log.warn(`failed to save document ${uniqueId}: ${state}`);
-                this._retrySave(uniqueId);
+            if (!this._verifySave(state, uniqueId)) {
                 return;
             }
 
-            // clear retry state on success
-            const pending = this._saveRetryTimeouts.get(uniqueId);
-            if (pending) {
-                clearTimeout(pending);
-                this._saveRetryTimeouts.delete(uniqueId);
-            }
-            this._saveRetryCounts.delete(uniqueId);
-
-            // find file by uniqueId
             const path = this._assetPath(uniqueId);
-
-            // check if file exists
             const file = this._files.get(path);
             if (!file || file.type !== 'file') {
                 return;
@@ -714,21 +714,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
 
         this._log.info(`flushing ${pending.length} pending ops before unlink`);
-        const waits = pending.map(
-            (f) =>
-                new Promise<void>((resolve) => {
-                    if (!f.doc.pending) {
-                        resolve();
-                        return;
-                    }
-                    const done = () => resolve();
-                    f.doc.once('nothing pending', done);
-                    if (!f.doc.pending) {
-                        f.doc.off('nothing pending', done);
-                        resolve();
-                    }
-                })
-        );
+        const waits = pending.map((f) => new Promise<void>((resolve) => f.doc.whenNothingPending(resolve)));
         const [err] = await tryCatch(
             withTimeout(Promise.all(waits), ProjectManager.FLUSH_TIMEOUT_MS, 'flush pending ops timed out')
         );
@@ -1070,25 +1056,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // wait for pending ops to be acknowledged before saving,
         // matching the Code Editor's behavior (save.ts:144-150).
         // prevents saving stale content while ops are in-flight.
-        let sent = false;
-        const send = () => {
-            if (sent) {
-                return;
-            }
-            sent = true;
+        file.doc.whenNothingPending(() => {
             this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
             this._log.debug(`saved file ${path}`);
-        };
-        if (file.doc.pending) {
-            file.doc.once('nothing pending', send);
-            // re-check: event may have fired between pending and once()
-            if (!file.doc.pending) {
-                file.doc.off('nothing pending', send);
-                send();
-            }
-        } else {
-            send();
-        }
+        });
     }
 
     path(assetId: number) {
@@ -1112,21 +1083,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
         if (this._projectId !== undefined) {
             throw this.error.set(() => new Error('project already linked'));
-        }
-
-        // clean up partial state from a previously failed link attempt
-        if (this._cleanup.length > 0) {
-            await Promise.allSettled(this._cleanup.map((fn) => fn()));
-            this._cleanup.length = 0;
-            for (const timeout of this._saveRetryTimeouts.values()) {
-                clearTimeout(timeout);
-            }
-            this._saveRetryTimeouts.clear();
-            this._saveRetryCounts.clear();
-            this._files.clear();
-            this._assets.clear();
-            this._idUniqueId.clear();
-            this.collisions.clear();
         }
 
         // fetch project asset metadata
@@ -1298,16 +1254,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchSharedb();
             unwatchMessenger();
 
-            // cancel pending save retries
-            for (const timeout of this._saveRetryTimeouts.values()) {
-                clearTimeout(timeout);
-            }
-            this._saveRetryTimeouts.clear();
-            this._saveRetryCounts.clear();
+            Array.from(this._saveRetries.values()).forEach(({ timeout }) => clearTimeout(timeout));
+            this._saveRetries.clear();
 
             this._files.clear();
             this._assets.clear();
             this._idUniqueId.clear();
+
             this.collisions.clear();
         });
 
