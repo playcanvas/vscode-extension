@@ -88,6 +88,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _saving = new Set<string>();
 
+    private _bufferState = new Map<string, string>();
+
     private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
 
     private _writeMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('writeMutex error', err));
@@ -280,11 +282,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const raw = document.getText();
                 const bufferText = norm(raw);
 
-                // detect unsubmitted keystrokes by diffing pre-op canonical vs buffer
-                const userOp = delta(prev, bufferText);
+                // all differences from canonical-before-op to buffer (for transforms)
+                const fullUserOp = delta(prev, bufferText);
+
+                // only new keystrokes since last _update (avoids re-submitting already-handled ones)
+                const baseline = this._bufferState.get(uri.path);
+                const newUserOp = baseline !== undefined ? delta(baseline, bufferText) : fullUserOp;
 
                 // transform remote op into buffer-space so positions align
-                const bufferOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
+                const bufferOp = fullUserOp ? (ottext.transform(op, fullUserOp, 'right') as ShareDbTextOp) : op;
                 const edit = sharedb2vscode(document, uri, [bufferOp], bufferText);
                 const applied = await vscode.workspace.applyEdit(edit);
 
@@ -292,9 +298,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const path = relativePath(uri, this._folderUri);
                     const file = this._projectManager.files.get(path);
                     if (file?.type === 'file') {
-                        // submit user keystrokes to OT (transformed against remote op)
-                        if (userOp) {
-                            const transformed = ottext.transform(userOp, op, 'left') as ShareDbTextOp;
+                        // submit only new user keystrokes to OT (transformed against remote op)
+                        // guard: skip if fullUserOp is null — canonical already includes them
+                        if (fullUserOp && newUserOp) {
+                            const transformed = ottext.transform(newUserOp, op, 'left') as ShareDbTextOp;
                             file.doc.apply(transformed);
                             const wasDirty = file.dirty;
                             file.dirty = true;
@@ -310,17 +317,25 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             const range = new vscode.Range(document.positionAt(0), document.positionAt(curRaw.length));
                             reset.replace(uri, range, file.doc.text);
                             await vscode.workspace.applyEdit(reset);
+                            this._bufferState.set(uri.path, norm(file.doc.text));
                             this._log.warn(`sync.remote.resync ${uri} applied=false`);
                             return;
                         }
 
                         // reconcile: recover keystrokes typed during applyEdit await
+                        // compute expected locally — NOT file.doc.text which may include queued remote ops
                         const postRaw = document.getText();
                         const postText = norm(postRaw);
-                        const expected = file.doc.text;
+                        const expected = ottext.apply(bufferText, bufferOp) as string;
+                        this._bufferState.set(uri.path, postText);
+
                         const late = delta(expected, postText);
                         if (late) {
-                            file.doc.apply(late);
+                            // transform recovered keystrokes against canonical advancement
+                            // (queued remote ops that OTDocument processed but _update hasn't applied yet)
+                            const adv = delta(expected, file.doc.text);
+                            const adjusted = adv ? (ottext.transform(late, adv, 'left') as ShareDbTextOp) : late;
+                            file.doc.apply(adjusted);
                             const wasDirty = file.dirty;
                             file.dirty = true;
                             if (!wasDirty) {
@@ -534,6 +549,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._opened.delete(document.uri.path);
             this._diskHash.delete(document.uri.path);
             this._saving.delete(document.uri.path);
+            this._bufferState.delete(document.uri.path);
             this._events.emit('asset:doc:close', path);
         });
 
@@ -1065,6 +1081,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         await super.unlink();
         this._folderUri = undefined;
         this._projectManager = undefined;
+        this._bufferState.clear();
         this._log.info(`unlinked from ${folderUri.toString()}`);
         return { folderUri, projectManager };
     }
