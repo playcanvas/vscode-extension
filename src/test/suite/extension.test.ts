@@ -2262,4 +2262,169 @@ suite('extension', () => {
 
         assert.ok(sharedb.sendRaw.called, 'local redelete should propagate to remote');
     });
+
+    test('undo reverts local edit', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'undo_local.js', content: '// ORIGINAL' });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+        await assertResolves(
+            new Promise<void>((resolve) => {
+                if (!tdoc.isDirty && tdoc.getText() === '// ORIGINAL') {
+                    resolve();
+                    return;
+                }
+                const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                    if (e.document.uri.toString() !== uri.toString()) {
+                        return;
+                    }
+                    if (!tdoc.isDirty && tdoc.getText() === '// ORIGINAL') {
+                        disposable.dispose();
+                        resolve();
+                    }
+                });
+            }),
+            'initial document settle'
+        );
+
+        // local edit: insert at start
+        const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL\n');
+        await vscode.workspace.applyEdit(edit);
+        await assertResolves(localOp, 'local op');
+        assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIGINAL');
+
+        // undo
+        const undoOp = assertOpsPromise(`documents:${asset.uniqueId}`, [[{ d: 10 }]]);
+        await vscode.commands.executeCommand('playcanvas.undo');
+        await assertResolves(undoOp, 'undo op');
+
+        assert.strictEqual(tdoc.getText(), '// ORIGINAL', 'buffer should revert to original');
+        assert.strictEqual(documents.get(asset.uniqueId), '// ORIGINAL', 'OT doc should match');
+    });
+
+    test('redo re-applies undone edit', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'redo_local.js', content: '// ORIGINAL' });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+        await assertResolves(
+            new Promise<void>((resolve) => {
+                if (!tdoc.isDirty && tdoc.getText() === '// ORIGINAL') {
+                    resolve();
+                    return;
+                }
+                const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                    if (e.document.uri.toString() !== uri.toString()) {
+                        return;
+                    }
+                    if (!tdoc.isDirty && tdoc.getText() === '// ORIGINAL') {
+                        disposable.dispose();
+                        resolve();
+                    }
+                });
+            }),
+            'initial document settle'
+        );
+
+        // local edit
+        const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL\n');
+        await vscode.workspace.applyEdit(edit);
+        await assertResolves(localOp, 'local op');
+
+        // undo
+        const undoOp = assertOpsPromise(`documents:${asset.uniqueId}`, [[{ d: 10 }]]);
+        await vscode.commands.executeCommand('playcanvas.undo');
+        await assertResolves(undoOp, 'undo op');
+        assert.strictEqual(tdoc.getText(), '// ORIGINAL');
+
+        // redo
+        const redoOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        await vscode.commands.executeCommand('playcanvas.redo');
+        await assertResolves(redoOp, 'redo op');
+
+        assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIGINAL', 'buffer should have local edit again');
+        assert.strictEqual(documents.get(asset.uniqueId), '// LOCAL\n// ORIGINAL', 'OT doc should match');
+    });
+
+    test('undo skips remote edits - only reverts local', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'undo_skip_remote.js', content: '// ORIGINAL' });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+        await assertResolves(
+            new Promise<void>((resolve) => {
+                if (!tdoc.isDirty && tdoc.getText() === '// ORIGINAL') {
+                    resolve();
+                    return;
+                }
+                const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                    if (e.document.uri.toString() !== uri.toString()) {
+                        return;
+                    }
+                    if (!tdoc.isDirty && tdoc.getText() === '// ORIGINAL') {
+                        disposable.dispose();
+                        resolve();
+                    }
+                });
+            }),
+            'initial document settle'
+        );
+
+        // local edit: insert "// LOCAL\n" at start
+        const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL\n');
+        await vscode.workspace.applyEdit(edit);
+        await assertResolves(localOp, 'local op');
+        assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIGINAL');
+
+        // remote edit: insert "// REMOTE\n" at start
+        const remoteChanged = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && tdoc.getText().startsWith('// REMOTE\n')) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+        doc.submitOp(['// REMOTE\n'], { source: 'remote' });
+        await assertResolves(remoteChanged, 'remote change applied to buffer');
+        assert.strictEqual(tdoc.getText(), '// REMOTE\n// LOCAL\n// ORIGINAL');
+
+        // undo: should only revert local "// LOCAL\n", preserving remote "// REMOTE\n"
+        const undoChanged = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && !tdoc.getText().includes('// LOCAL')) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+        await vscode.commands.executeCommand('playcanvas.undo');
+        await assertResolves(undoChanged, 'undo change applied');
+
+        assert.strictEqual(tdoc.getText(), '// REMOTE\n// ORIGINAL', 'remote edit preserved, local reverted');
+        assert.strictEqual(documents.get(asset.uniqueId), '// REMOTE\n// ORIGINAL', 'OT doc should match buffer');
+    });
 });
