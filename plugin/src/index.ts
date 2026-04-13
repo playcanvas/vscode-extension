@@ -6,10 +6,10 @@ import type * as ts from 'typescript/lib/tsserverlibrary';
 const DEBUG = true;
 const FILES = new Map([
     // global pc namespace
-    ['globals.d.ts', fs.readFileSync(path.join(__dirname, 'playcanvas.d.ts'), 'utf8')],
+    ['.pc/globals.d.ts', fs.readFileSync(path.join(__dirname, 'playcanvas.d.ts'), 'utf8')],
 
     // 'playcanvas' module declaration
-    ['module.d.ts', 'declare module "playcanvas" { export = pc; }']
+    ['.pc/module.d.ts', 'declare module "playcanvas" { export = pc; }\n']
 ]);
 
 const COMPILER_OPTIONS: ts.CompilerOptions = {
@@ -60,7 +60,8 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
         proxy.getScriptSnapshot = (fileName) => {
             if (paths.includes(fileName)) {
                 log(info.project, `Providing snapshot for virtual file: ${fileName}`);
-                return ts.ScriptSnapshot.fromString(FILES.get(path.basename(fileName))!);
+                const rel = path.relative(projectDir, fileName).replace(/\\/g, '/');
+                return ts.ScriptSnapshot.fromString(FILES.get(rel)!);
             }
             return getScriptSnapshot(fileName);
         };
@@ -69,7 +70,8 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
         proxy.readFile = (fileName, encoding) => {
             if (paths.includes(fileName)) {
                 log(info.project, `Reading content for virtual file: ${fileName}`);
-                return FILES.get(path.basename(fileName))!;
+                const rel = path.relative(projectDir, fileName).replace(/\\/g, '/');
+                return FILES.get(rel)!;
             }
             return readFile(fileName, encoding);
         };

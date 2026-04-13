@@ -114,6 +114,16 @@
         ],
         "colors": [
             {
+                "id": "playcanvas.managedForeground",
+                "description": "Color for extension-managed files in the explorer",
+                "defaults": {
+                    "dark": "#8a8a8a",
+                    "light": "#6b6b6b",
+                    "highContrast": "#8a8a8a",
+                    "highContrastLight": "#6b6b6b"
+                }
+            },
+            {
                 "id": "playcanvas.dirtyForeground",
                 "description": "Color for unsaved files in the explorer",
                 "defaults": {

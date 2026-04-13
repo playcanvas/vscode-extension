@@ -74,6 +74,8 @@ const pathsRelated = (path1: string, path2: string): boolean => {
 class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManager }> {
     static IGNORE_FILE = '.pcignore';
 
+    static TYPE_DIR = '.pc';
+
     private _events: EventEmitter<EventMap>;
 
     private _folderUri?: vscode.Uri;
@@ -108,10 +110,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     error = signal<Error | undefined>(undefined);
 
-    constructor({ events }: { events: EventEmitter<EventMap> }) {
+    private _extensionUri: vscode.Uri;
+
+    private _dts?: { globals: Uint8Array; module: Uint8Array };
+
+    constructor({ events, extensionUri }: { events: EventEmitter<EventMap>; extensionUri: vscode.Uri }) {
         super();
 
         this._events = events;
+        this._extensionUri = extensionUri;
     }
 
     private _checkIgnoreUpdated(uri: vscode.Uri, deleted = false) {
@@ -170,6 +177,45 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return ig.ignores(path);
         };
         this._log.debug(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
+    }
+
+    private async _writeTypeFiles(folderUri: vscode.Uri) {
+        if (!this._dts) {
+            const dtsUri = vscode.Uri.joinPath(
+                this._extensionUri,
+                'node_modules',
+                'playcanvas-plugin',
+                'out',
+                'playcanvas.d.ts'
+            );
+            const [err, content] = await tryCatch(vscode.workspace.fs.readFile(dtsUri) as Promise<Uint8Array>);
+            if (err) {
+                this._log.warn('failed to read playcanvas.d.ts', err);
+                return;
+            }
+            this._dts = {
+                globals: content,
+                module: buffer.from('declare module "playcanvas" { export = pc; }\n')
+            };
+        }
+
+        const dirUri = vscode.Uri.joinPath(folderUri, Disk.TYPE_DIR);
+        this._echo.set(`${dirUri}:create`, '');
+        await vscode.workspace.fs.createDirectory(dirUri);
+
+        // global pc namespace types
+        const globalsUri = vscode.Uri.joinPath(dirUri, 'globals.d.ts');
+        this._echo.set(`${globalsUri}:create`, '');
+        this._echo.set(`${globalsUri}:change`, hash(this._dts.globals));
+        await vscode.workspace.fs.writeFile(globalsUri, this._dts.globals);
+
+        // 'playcanvas' module declaration (must be separate — script file referencing global pc)
+        const moduleUri = vscode.Uri.joinPath(dirUri, 'module.d.ts');
+        this._echo.set(`${moduleUri}:create`, '');
+        this._echo.set(`${moduleUri}:change`, hash(this._dts.module));
+        await vscode.workspace.fs.writeFile(moduleUri, this._dts.module);
+
+        this._log.debug('wrote type files to .pc/');
     }
 
     private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
@@ -1136,6 +1182,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            // skip .pc/ type files
+            const createRel = relativePath(uri, folderUri);
+            if (createRel === Disk.TYPE_DIR || createRel.startsWith(`${Disk.TYPE_DIR}/`)) {
+                return;
+            }
+
             const type = fileType(uri);
             defer({
                 action: 'create',
@@ -1151,6 +1203,18 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // ignore check
             if (this._ignoring(uri)) {
+                return;
+            }
+
+            // restore .pc/ type files if modified by user (skip if echo matches our own write)
+            const changeRel = relativePath(uri, folderUri);
+            if (changeRel === Disk.TYPE_DIR || changeRel.startsWith(`${Disk.TYPE_DIR}/`)) {
+                const echoHash = this._echo.get(`${uri}:change`);
+                if (echoHash) {
+                    this._echo.delete(`${uri}:change`);
+                } else {
+                    void this._writeTypeFiles(folderUri);
+                }
                 return;
             }
 
@@ -1195,6 +1259,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // ignore check
             if (this._ignoring(uri)) {
+                return;
+            }
+
+            // re-create .pc/ type files if deleted
+            const deleteRel = relativePath(uri, folderUri);
+            if (deleteRel === Disk.TYPE_DIR || deleteRel.startsWith(`${Disk.TYPE_DIR}/`)) {
+                void this._writeTypeFiles(folderUri);
                 return;
             }
 
@@ -1296,11 +1367,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
         }
 
+        // write type definition files to .pc/
+        await this._writeTypeFiles(folderUri);
+
         // remove old files
         const existing = await readDirRecursive(folderUri);
         for (const uri of existing) {
             const path = relativePath(uri, folderUri);
-            if (!projectManager.files.has(path)) {
+            if (!projectManager.files.has(path) && path !== Disk.TYPE_DIR && !path.startsWith(`${Disk.TYPE_DIR}/`)) {
                 await this._delete(uri);
             }
         }
