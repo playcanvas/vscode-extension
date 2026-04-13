@@ -112,6 +112,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _extensionUri: vscode.Uri;
 
+    private _dts?: { globals: Uint8Array; module: Uint8Array };
+
     constructor({ events, extensionUri }: { events: EventEmitter<EventMap>; extensionUri: vscode.Uri }) {
         super();
 
@@ -178,17 +180,23 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private async _writeTypeFiles(folderUri: vscode.Uri) {
-        const dtsUri = vscode.Uri.joinPath(
-            this._extensionUri,
-            'node_modules',
-            'playcanvas-plugin',
-            'out',
-            'playcanvas.d.ts'
-        );
-        const [err, content] = await tryCatch(vscode.workspace.fs.readFile(dtsUri) as Promise<Uint8Array>);
-        if (err) {
-            this._log.warn('failed to read playcanvas.d.ts', err);
-            return;
+        if (!this._dts) {
+            const dtsUri = vscode.Uri.joinPath(
+                this._extensionUri,
+                'node_modules',
+                'playcanvas-plugin',
+                'out',
+                'playcanvas.d.ts'
+            );
+            const [err, content] = await tryCatch(vscode.workspace.fs.readFile(dtsUri) as Promise<Uint8Array>);
+            if (err) {
+                this._log.warn('failed to read playcanvas.d.ts', err);
+                return;
+            }
+            this._dts = {
+                globals: content,
+                module: buffer.from('declare module "playcanvas" { export = pc; }\n')
+            };
         }
 
         const dirUri = vscode.Uri.joinPath(folderUri, Disk.TYPE_DIR);
@@ -198,15 +206,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // global pc namespace types
         const globalsUri = vscode.Uri.joinPath(dirUri, 'globals.d.ts');
         this._echo.set(`${globalsUri}:create`, '');
-        this._echo.set(`${globalsUri}:change`, hash(content));
-        await vscode.workspace.fs.writeFile(globalsUri, content);
+        this._echo.set(`${globalsUri}:change`, hash(this._dts.globals));
+        await vscode.workspace.fs.writeFile(globalsUri, this._dts.globals);
 
         // 'playcanvas' module declaration (must be separate — script file referencing global pc)
-        const moduleContent = buffer.from('declare module "playcanvas" { export = pc; }\n');
         const moduleUri = vscode.Uri.joinPath(dirUri, 'module.d.ts');
         this._echo.set(`${moduleUri}:create`, '');
-        this._echo.set(`${moduleUri}:change`, hash(moduleContent));
-        await vscode.workspace.fs.writeFile(moduleUri, moduleContent);
+        this._echo.set(`${moduleUri}:change`, hash(this._dts.module));
+        await vscode.workspace.fs.writeFile(moduleUri, this._dts.module);
 
         this._log.debug('wrote type files to .pc/');
     }
@@ -1199,9 +1206,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // skip .pc/ type files
+            // restore .pc/ type files if modified by user (skip if echo matches our own write)
             const changeRel = relativePath(uri, folderUri);
             if (changeRel === Disk.TYPE_DIR || changeRel.startsWith(`${Disk.TYPE_DIR}/`)) {
+                const echoHash = this._echo.get(`${uri}:change`);
+                if (echoHash) {
+                    this._echo.delete(`${uri}:change`);
+                } else {
+                    void this._writeTypeFiles(folderUri);
+                }
                 return;
             }
 
