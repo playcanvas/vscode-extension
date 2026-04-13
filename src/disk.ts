@@ -668,7 +668,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const userOp = delta(pre, buf);
                 const bufOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
                 const edit = sharedb2vscode(doc, uri, [bufOp], buf);
-                await vscode.workspace.applyEdit(edit);
+                const applied = await vscode.workspace.applyEdit(edit);
+
+                if (!applied) {
+                    this._log.warn(`sync.undo.apply failed ${uri}`);
+                    return;
+                }
 
                 // reconcile: recover keystrokes typed during applyEdit await
                 const postText = norm(doc.getText());
