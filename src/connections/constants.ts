@@ -7,4 +7,4 @@ export const SUBSCRIBE_TIMEOUT_MS = 10 * 1000;
 export const AUTH_TIMEOUT_MS = 2 * 60 * 1000;
 export const EVENT_TIMEOUT_MS = 30 * 1000;
 export const FETCH_TIMEOUT_MS = 10 * 1000;
-export const AUTH_CLOSE_CODE = 3 * 1000;
+export const AUTH_CLOSE_CODE = 3000;

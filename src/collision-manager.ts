@@ -43,6 +43,16 @@ class CollisionManager {
     }
 
     private _add(uniqueId: number, filePath: string) {
+        const old = this._collided.get(uniqueId);
+        if (old && old !== filePath) {
+            const set = this._collidedByPath.get(old);
+            if (set) {
+                set.delete(uniqueId);
+                if (set.size === 0) {
+                    this._collidedByPath.delete(old);
+                }
+            }
+        }
         this._collided.set(uniqueId, filePath);
         const set = this._collidedByPath.get(filePath) ?? new Set<number>();
         set.add(uniqueId);
