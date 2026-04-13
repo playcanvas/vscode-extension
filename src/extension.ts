@@ -13,7 +13,7 @@ import { Metrics } from './metrics';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
-import { DirtyDecorationProvider } from './providers/dirty-decoration-provider';
+import { DecorationProvider } from './providers/decoration-provider';
 import { closeSentry, setSentryCollaborators, setSentryProject, setSentryUser } from './sentry';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
@@ -168,7 +168,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // disk
     const disk = new Disk({
-        events
+        events,
+        extensionUri: context.extensionUri
     });
     effect(() => {
         const err = disk.error.get();
@@ -189,7 +190,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             // unlink everything
             const uriState = await uriHandler.unlink();
             const collabState = await collabProvider.unlink();
-            const dirtyState = await dirtyProvider.unlink();
+            const dirtyState = await decorationProvider.unlink();
             const diskState = await disk.unlink();
             const projectState = await projectManager.unlink();
 
@@ -202,7 +203,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             // relink everything
             await projectManager.link(projectState);
             await disk.link(diskState);
-            await dirtyProvider.link(dirtyState);
+            await decorationProvider.link(dirtyState);
             await collabProvider.link(collabState);
             await uriHandler.link(uriState);
         });
@@ -248,14 +249,14 @@ export const activate = async (context: vscode.ExtensionContext) => {
     relay.on('room:leave', updateCollabTags);
 
     // dirty decoration provider
-    const dirtyProvider = new DirtyDecorationProvider({ events });
+    const decorationProvider = new DecorationProvider({ events });
     effect(() => {
-        const err = dirtyProvider.error.get();
+        const err = decorationProvider.error.get();
         if (err) {
             void handleError(err, 'dirty-decoration-provider').catch((e) => log.error(e.message));
         }
     });
-    context.subscriptions.push(vscode.window.registerFileDecorationProvider(dirtyProvider));
+    context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
 
     // connection status bar item
     const connectionStatusColors = {
@@ -747,10 +748,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
         );
 
         // link dirty decoration provider
-        await dirtyProvider.link({ folderUri, projectManager });
+        await decorationProvider.link({ folderUri, projectManager });
         context.subscriptions.push(
             new vscode.Disposable(() => {
-                void dirtyProvider.unlink();
+                void decorationProvider.unlink();
             })
         );
 

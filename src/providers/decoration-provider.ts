@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 
+import { Disk } from '../disk';
 import type { ProjectManager } from '../project-manager';
 import type { EventMap } from '../typings/event-map';
 import { fail } from '../utils/error';
@@ -7,9 +8,15 @@ import type { EventEmitter } from '../utils/event-emitter';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
 
+const MANAGED_COLOR = new vscode.ThemeColor('playcanvas.managedForeground');
+const MANAGED_DECORATION: vscode.FileDecoration = {
+    badge: 'PC',
+    color: MANAGED_COLOR,
+    tooltip: 'Managed by PlayCanvas'
+};
 const DIRTY_COLOR = new vscode.ThemeColor('playcanvas.dirtyForeground');
 
-class DirtyDecorationProvider
+class DecorationProvider
     extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManager }>
     implements vscode.FileDecorationProvider
 {
@@ -30,6 +37,12 @@ class DirtyDecorationProvider
     }
 
     provideFileDecoration(uri: vscode.Uri) {
+        // badge for .pc/ directory and its managed files
+        const segments = uri.path.split('/');
+        if (segments.includes(Disk.TYPE_DIR)) {
+            return MANAGED_DECORATION;
+        }
+
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
@@ -120,4 +133,4 @@ class DirtyDecorationProvider
     }
 }
 
-export { DirtyDecorationProvider };
+export { DecorationProvider };
