@@ -77,6 +77,33 @@
             {
                 "command": "playcanvas.showPathCollisions",
                 "title": "PlayCanvas: Show Path Collisions"
+            },
+            {
+                "command": "playcanvas.undo",
+                "title": "PlayCanvas: Undo"
+            },
+            {
+                "command": "playcanvas.redo",
+                "title": "PlayCanvas: Redo"
+            }
+        ],
+        "keybindings": [
+            {
+                "command": "playcanvas.undo",
+                "key": "ctrl+z",
+                "mac": "cmd+z",
+                "when": "playcanvas.isCollabFile && textInputFocus && !editorReadonly"
+            },
+            {
+                "command": "playcanvas.redo",
+                "key": "ctrl+shift+z",
+                "mac": "cmd+shift+z",
+                "when": "playcanvas.isCollabFile && textInputFocus && !editorReadonly"
+            },
+            {
+                "command": "playcanvas.redo",
+                "key": "ctrl+y",
+                "when": "playcanvas.isCollabFile && textInputFocus && !editorReadonly && !isMac"
             }
         ],
         "typescriptServerPlugins": [

@@ -7,6 +7,7 @@ import { simpleNotification } from './notification';
 import type { ProjectManager } from './project-manager';
 import type { EventMap } from './typings/event-map';
 import type { ShareDbTextOp } from './typings/sharedb';
+import { UndoManager } from './undo-manager';
 import * as buffer from './utils/buffer';
 import { Debouncer } from './utils/debouncer';
 import type { EventEmitter } from './utils/event-emitter';
@@ -91,6 +92,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _saving = new Set<string>();
 
     private _bufferState = new Map<string, string>();
+
+    private _undos = new Map<string, UndoManager>();
 
     private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
 
@@ -275,6 +278,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                 this._log.debug(`change.remote.closed ${uri} ${stat(op)}`);
                 return;
+            }
+
+            // transform undo/redo stacks against the remote op (OT-space)
+            const mgr = this._undos.get(uri.path);
+            if (mgr) {
+                mgr.xform(op);
             }
 
             // update editor if file is open
@@ -580,6 +589,134 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         };
     }
 
+    private _watchUndoRedo(folderUri: vscode.Uri, projectManager: ProjectManager) {
+        // track active editor to gate keybindings
+        const updateCtx = (e?: vscode.TextEditor) => {
+            const collab = e && uriStartsWith(e.document.uri, folderUri);
+            vscode.commands.executeCommand('setContext', 'playcanvas.isCollabFile', !!collab);
+        };
+        updateCtx(vscode.window.activeTextEditor);
+        const onEditor = vscode.window.onDidChangeActiveTextEditor(updateCtx);
+
+        // shared apply logic for undo/redo — op pop + apply are atomic inside mutex
+        const applyOp = async (
+            op: ShareDbTextOp,
+            uri: vscode.Uri,
+            path: string,
+            file: { doc: { text: string; apply: (op: ShareDbTextOp) => void }; dirty: boolean }
+        ) => {
+            this._locks.add(`${uri}`);
+            await tryCatch(async () => {
+                // capture pre-apply canonical text for correct buffer-space delta
+                const pre = file.doc.text;
+
+                // apply to OT canonical state (submits to ShareDB)
+                file.doc.apply(op);
+
+                // apply visual edit to buffer
+                const doc = await vscode.workspace.openTextDocument(uri);
+                const raw = doc.getText();
+                const buf = norm(raw);
+                // delta from pre-apply canonical to buffer gives true user divergence
+                const userOp = delta(pre, buf);
+                const bufOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
+                const edit = sharedb2vscode(doc, uri, [bufOp], buf);
+                await vscode.workspace.applyEdit(edit);
+
+                // reconcile: recover keystrokes typed during applyEdit await
+                const postText = norm(doc.getText());
+                const expected = ottext.apply(buf, bufOp) as string;
+                this._bufferState.set(uri.path, postText);
+
+                const late = delta(expected, postText);
+                if (late) {
+                    const adv = delta(expected, file.doc.text);
+                    const adjusted = adv ? (ottext.transform(late, adv, 'left') as ShareDbTextOp) : late;
+                    file.doc.apply(adjusted);
+                }
+
+                // cursor: position after the buffer-space op's primary edit
+                const active = vscode.window.activeTextEditor;
+                if (active && active.document.uri.toString() === uri.toString()) {
+                    let cursor = 0;
+                    if (bufOp.length === 1) {
+                        if (typeof bufOp[0] === 'string') {
+                            cursor = bufOp[0].length;
+                        }
+                    } else if (bufOp.length > 1 && typeof bufOp[0] === 'number') {
+                        cursor = bufOp[0];
+                        if (typeof bufOp[1] === 'string') {
+                            cursor += bufOp[1].length;
+                        }
+                    }
+                    const pos = doc.positionAt(cursor);
+                    active.selection = new vscode.Selection(pos, pos);
+                }
+
+                // mark dirty
+                const wasDirty = file.dirty;
+                file.dirty = true;
+                if (!wasDirty) {
+                    this._events.emit('asset:file:dirty', path, true);
+                }
+            });
+            this._locks.delete(`${uri}`);
+        };
+
+        const undoCmd = vscode.commands.registerCommand(`${NAME}.undo`, async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                return;
+            }
+            const uri = editor.document.uri;
+            const path = relativePath(uri, folderUri);
+            const mgr = this._undos.get(uri.path);
+            const file = projectManager.files.get(path);
+            if (!mgr?.canUndo || !file || file.type !== 'file') {
+                return;
+            }
+
+            // pop + apply inside mutex to prevent race with concurrent _update
+            await this._writeMutex.atomic([`${uri}`], async () => {
+                const op = mgr.undo(file.doc.text);
+                if (!op) {
+                    return;
+                }
+                await applyOp(op, uri, path, file);
+            });
+        });
+
+        const redoCmd = vscode.commands.registerCommand(`${NAME}.redo`, async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                return;
+            }
+            const uri = editor.document.uri;
+            const path = relativePath(uri, folderUri);
+            const mgr = this._undos.get(uri.path);
+            const file = projectManager.files.get(path);
+            if (!mgr?.canRedo || !file || file.type !== 'file') {
+                return;
+            }
+
+            // pop + apply inside mutex to prevent race with concurrent _update
+            await this._writeMutex.atomic([`${uri}`], async () => {
+                const op = mgr.redo(file.doc.text);
+                if (!op) {
+                    return;
+                }
+                await applyOp(op, uri, path, file);
+            });
+        });
+
+        return () => {
+            onEditor.dispose();
+            undoCmd.dispose();
+            redoCmd.dispose();
+            vscode.commands.executeCommand('setContext', 'playcanvas.isCollabFile', false);
+        };
+    }
+
     private _watchDocument(folderUri: vscode.Uri, projectManager: ProjectManager) {
         for (const open of vscode.workspace.textDocuments) {
             if (!uriStartsWith(open.uri, folderUri)) {
@@ -587,6 +724,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
             const path = relativePath(open.uri, folderUri);
             this._opened.add(open.uri.path);
+            this._undos.set(open.uri.path, new UndoManager());
             this._events.emit('asset:doc:open', path);
             this._dirtify(open);
         }
@@ -596,6 +734,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
             const path = relativePath(document.uri, folderUri);
             this._opened.add(document.uri.path);
+            this._undos.set(document.uri.path, new UndoManager());
             this._diskHash.set(document.uri.path, hash(norm(document.getText())));
             this._events.emit('asset:doc:open', path);
             this._dirtify(document);
@@ -606,6 +745,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
             const path = relativePath(document.uri, folderUri);
             this._opened.delete(document.uri.path);
+            this._undos.get(document.uri.path)?.clear();
+            this._undos.delete(document.uri.path);
             this._diskHash.delete(document.uri.path);
             this._saving.delete(document.uri.path);
             this._bufferState.delete(document.uri.path);
@@ -650,7 +791,33 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // submit ops via OTDocument (applies locally + submits to ShareDB)
             const ops = vscode2sharedb(document, contentChanges, file.doc.text);
+            const mgr = this._undos.get(document.uri.path);
             for (const op of ops) {
+                // push inverse to undo stack for local edits
+                // (undo/redo apply under _locks, so they never reach here)
+                if (mgr) {
+                    const snap = file.doc.text;
+                    const inv = ottext.semanticInvert(snap, op) as ShareDbTextOp;
+                    // detect whitespace/newline from inserted text in the forward op
+                    let ins = '';
+                    for (const c of op) {
+                        if (typeof c === 'string') {
+                            ins += c;
+                        }
+                    }
+                    const hasDel = op.some((c) => typeof c === 'object');
+                    const ws = !hasDel && /^ +$/.test(ins);
+                    const nl = !hasDel && /^\n+$/.test(ins);
+                    // line number from op offset
+                    const off = typeof op[0] === 'number' ? op[0] : 0;
+                    let line = 0;
+                    for (let i = 0; i < off && i < snap.length; i++) {
+                        if (snap[i] === '\n') {
+                            line++;
+                        }
+                    }
+                    mgr.push(inv, ws, nl, line);
+                }
                 file.doc.apply(op);
             }
 
@@ -1141,16 +1308,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const unwatchEvents = this._watchEvents(folderUri);
         const unwatchDocument = this._watchDocument(folderUri, projectManager);
         const unwatchDisk = this._watchDisk(folderUri, projectManager);
+        const unwatchUndoRedo = this._watchUndoRedo(folderUri, projectManager);
 
         // register cleanup
         this._cleanup.push(async () => {
             unwatchEvents();
             unwatchDocument();
             unwatchDisk();
+            unwatchUndoRedo();
 
             this._echo.clear();
             this._syncing.clear();
             this._saving.clear();
+            this._undos.forEach((m) => m.clear());
+            this._undos.clear();
             await this._readMutex.clear();
             await this._writeMutex.clear();
             this._debouncer.clear();
@@ -1178,6 +1349,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._folderUri = undefined;
         this._projectManager = undefined;
         this._bufferState.clear();
+        this._undos.forEach((m) => m.clear());
+        this._undos.clear();
+        vscode.commands.executeCommand('setContext', 'playcanvas.isCollabFile', false);
         this._log.info(`unlinked from ${folderUri.toString()}`);
         return { folderUri, projectManager };
     }
