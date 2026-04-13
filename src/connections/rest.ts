@@ -1,6 +1,6 @@
-import { fail } from '../utils/error';
 import { Log } from '../log';
 import type { Asset, Branch, Project, User } from '../typings/models';
+import { fail } from '../utils/error';
 import { summarize, tryCatch } from '../utils/utils';
 
 import { FETCH_TIMEOUT_MS } from './constants';

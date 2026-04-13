@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 
 import type { ProjectManager } from '../project-manager';
 import type { EventMap } from '../typings/event-map';
-import type { EventEmitter } from '../utils/event-emitter';
 import { fail } from '../utils/error';
+import type { EventEmitter } from '../utils/event-emitter';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
 
