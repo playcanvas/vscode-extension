@@ -24,6 +24,54 @@ class UndoManager {
 
     private _timer: ReturnType<typeof setTimeout> | null = null;
 
+    get canUndo() {
+        return this._undo.length > 0;
+    }
+
+    get canRedo() {
+        return this._redo.length > 0;
+    }
+
+    private _canConcat(prev: Entry, next: Entry) {
+        if (this._force) {
+            return true;
+        }
+        if (prev.op.length === 0 || next.op.length === 0) {
+            return true;
+        }
+
+        const pd = prev.op.some((c) => typeof c === 'object');
+        const nd = next.op.some((c) => typeof c === 'object');
+        if (pd !== nd) {
+            return false;
+        }
+        if (next.ws && !prev.ws) {
+            return false;
+        }
+
+        if (this._line !== this._prevLine) {
+            if (prev.ws && !prev.nl) {
+                return false;
+            }
+            if (!next.ws && !prev.ws) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private _setForce() {
+        this._force = true;
+        if (this._timer !== null) {
+            clearTimeout(this._timer);
+        }
+        this._timer = setTimeout(() => {
+            this._force = false;
+            this._timer = null;
+        });
+    }
+
     // push inverse op to undo stack (mirrors editor addToHistory)
     push(inv: ShareDbTextOp, ws: boolean, nl: boolean, line: number) {
         this._prevLine = this._line;
@@ -54,7 +102,7 @@ class UndoManager {
     }
 
     // transform all stack entries against remote op (mirrors editor transformStacks)
-    xform(remote: ShareDbTextOp) {
+    transform(remote: ShareDbTextOp) {
         const initial = remote;
         let r = remote;
 
@@ -106,14 +154,6 @@ class UndoManager {
         return e.op;
     }
 
-    get canUndo() {
-        return this._undo.length > 0;
-    }
-
-    get canRedo() {
-        return this._redo.length > 0;
-    }
-
     clear() {
         this._undo.length = 0;
         this._redo.length = 0;
@@ -124,46 +164,6 @@ class UndoManager {
             this._timer = null;
         }
         this._force = false;
-    }
-
-    private _canConcat(prev: Entry, next: Entry) {
-        if (this._force) {
-            return true;
-        }
-        if (prev.op.length === 0 || next.op.length === 0) {
-            return true;
-        }
-
-        const pd = prev.op.some((c) => typeof c === 'object');
-        const nd = next.op.some((c) => typeof c === 'object');
-        if (pd !== nd) {
-            return false;
-        }
-        if (next.ws && !prev.ws) {
-            return false;
-        }
-
-        if (this._line !== this._prevLine) {
-            if (prev.ws && !prev.nl) {
-                return false;
-            }
-            if (!next.ws && !prev.ws) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private _setForce() {
-        this._force = true;
-        if (this._timer !== null) {
-            clearTimeout(this._timer);
-        }
-        this._timer = setTimeout(() => {
-            this._force = false;
-            this._timer = null;
-        });
     }
 }
 

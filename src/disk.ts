@@ -283,7 +283,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // transform undo/redo stacks against the remote op (OT-space)
             const mgr = this._undos.get(uri.path);
             if (mgr) {
-                mgr.xform(op);
+                mgr.transform(op);
             }
 
             // update editor if file is open
