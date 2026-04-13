@@ -79,7 +79,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _idUniqueId: Bimap<number, number> = new Bimap<number, number>();
 
-    private _subscribing = new Map<string, Promise<(VirtualFile & { type: 'file' }) | undefined>>();
+    private _subscribing = new Map<number, Promise<(VirtualFile & { type: 'file' }) | undefined>>();
 
     private _queued = new Set<string>();
 
@@ -1145,16 +1145,16 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return undefined;
         }
 
-        // coalesce concurrent subscribe calls for the same path
-        const inflight = this._subscribing.get(path);
+        // coalesce concurrent subscribe calls for the same asset
+        const inflight = this._subscribing.get(file.uniqueId);
         if (inflight) {
             return inflight;
         }
 
         const pending = this._doSubscribe(path, file.uniqueId);
-        this._subscribing.set(path, pending);
+        this._subscribing.set(file.uniqueId, pending);
         const result = await pending;
-        this._subscribing.delete(path);
+        this._subscribing.delete(file.uniqueId);
         return result;
     }
 
@@ -1162,6 +1162,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const doc = await this._sharedb.subscribe('documents', `${uniqueId}`);
         if (!doc) {
             this._log.error(`failed to subscribe to document ${uniqueId}`);
+            return undefined;
+        }
+
+        // asset deleted during subscribe — clean up and bail
+        if (!this._assets.has(uniqueId)) {
+            await this._sharedb.unsubscribe('documents', `${uniqueId}`);
+            this._log.debug(`asset ${uniqueId} deleted during subscribe`);
             return undefined;
         }
 
@@ -1189,7 +1196,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             doc: otdoc,
             dirty
         };
-        this._files.set(path, promoted);
+        // resolve current path after await (may have changed due to rename)
+        const current = this._assetPath(uniqueId);
+        this._files.set(current, promoted);
 
         // wire op handler (same as _addFile)
         otdoc.on('op', (op, prev) => {
@@ -1203,8 +1212,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
         });
 
-        this._events.emit('asset:file:subscribed', path, otdoc.text, dirty);
-        this._log.debug(`subscribed ${path} (${dirty ? 'dirty' : 'clean'})`);
+        this._events.emit('asset:file:subscribed', current, otdoc.text, dirty);
+        this._log.debug(`subscribed ${current} (${dirty ? 'dirty' : 'clean'})`);
         return promoted;
     }
 
