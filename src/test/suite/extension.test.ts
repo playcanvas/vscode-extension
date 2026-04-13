@@ -2301,9 +2301,16 @@ suite('extension', () => {
         assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIGINAL');
 
         // undo
-        const undoOp = assertOpsPromise(`documents:${asset.uniqueId}`, [[{ d: 10 }]]);
+        const undoChanged = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && tdoc.getText() === '// ORIGINAL') {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
         await vscode.commands.executeCommand('playcanvas.undo');
-        await assertResolves(undoOp, 'undo op');
+        await assertResolves(undoChanged, 'undo change applied');
 
         assert.strictEqual(tdoc.getText(), '// ORIGINAL', 'buffer should revert to original');
         assert.strictEqual(documents.get(asset.uniqueId), '// ORIGINAL', 'OT doc should match');
@@ -2346,15 +2353,29 @@ suite('extension', () => {
         await assertResolves(localOp, 'local op');
 
         // undo
-        const undoOp = assertOpsPromise(`documents:${asset.uniqueId}`, [[{ d: 10 }]]);
+        const undoChanged = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && tdoc.getText() === '// ORIGINAL') {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
         await vscode.commands.executeCommand('playcanvas.undo');
-        await assertResolves(undoOp, 'undo op');
+        await assertResolves(undoChanged, 'undo change applied');
         assert.strictEqual(tdoc.getText(), '// ORIGINAL');
 
         // redo
-        const redoOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const redoChanged = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && tdoc.getText() === '// LOCAL\n// ORIGINAL') {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
         await vscode.commands.executeCommand('playcanvas.redo');
-        await assertResolves(redoOp, 'redo op');
+        await assertResolves(redoChanged, 'redo change applied');
 
         assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIGINAL', 'buffer should have local edit again');
         assert.strictEqual(documents.get(asset.uniqueId), '// LOCAL\n// ORIGINAL', 'OT doc should match');
