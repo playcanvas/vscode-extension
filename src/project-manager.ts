@@ -13,6 +13,7 @@ import type { ShareDbOp, ShareDbTextOp } from './typings/sharedb';
 import { Bimap } from './utils/bimap';
 import * as buffer from './utils/buffer';
 import { Deferred } from './utils/deferred';
+import { fail } from './utils/error';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { OTDocument } from './utils/ot-document';
@@ -122,7 +123,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _assetPath(uniqueId: number, override: { path?: number[]; name?: string } = {}) {
         const asset = this._assets.get(uniqueId);
         if (!asset) {
-            throw this.error.set(() => new Error(`missing child asset ${uniqueId}`));
+            throw this.error.set(() => fail`missing child asset ${uniqueId}`);
         }
 
         const path = override.path ?? asset.path;
@@ -134,11 +135,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         while (parent) {
             const parentUniqueId = this._idUniqueId.getL(parent);
             if (!parentUniqueId) {
-                throw this.error.set(() => new Error(`missing id mapping for parent asset ${parent}`));
+                throw this.error.set(() => fail`missing id mapping for parent asset ${parent}`);
             }
             const parentAsset = this._assets.get(parentUniqueId);
             if (!parentAsset) {
-                throw this.error.set(() => new Error(`missing parent asset ${parentUniqueId}`));
+                throw this.error.set(() => fail`missing parent asset ${parentUniqueId}`);
             }
             segments.unshift(sanitizeName(parentAsset.name));
 
@@ -237,7 +238,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         const asset = this._assets.get(uniqueId);
         if (!asset?.file) {
-            throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
+            throw this.error.set(() => fail`missing file data for asset ${uniqueId}`);
         }
         const docHash = hash(otdoc.text);
         const s3Hash = asset.file.hash;
@@ -317,7 +318,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         const asset = this._assets.get(uniqueId);
         if (!asset?.file) {
-            throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
+            throw this.error.set(() => fail`missing file data for asset ${uniqueId}`);
         }
 
         this._files.set(path, { type: 'stub', uniqueId, dirty: false });
@@ -427,7 +428,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // subscribe to asset document
             const doc1 = await this._sharedb.subscribe('assets', `${uniqueId}`);
             if (!doc1) {
-                this.error.set(() => new Error(`failed to subscribe to new asset ${uniqueId}`));
+                this.error.set(() => fail`failed to subscribe to new asset ${uniqueId}`);
                 return;
             }
 
@@ -797,14 +798,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
         if (!this._projectId || !this._branchId) {
-            throw this.error.set(() => new Error('project not loaded'));
+            throw this.error.set(() => fail`project not loaded`);
         }
 
         const [parentPath, name] = parsePath(path);
 
         // validate name
         if (!name) {
-            throw this.error.set(() => new Error(`missing name for ${path}`));
+            throw this.error.set(() => fail`missing name for ${path}`);
         }
 
         // check if file already exists
@@ -818,7 +819,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         if (parentPath !== '') {
             const file = this._files.get(parentPath);
             if (!file || file.type !== 'folder') {
-                throw this.error.set(() => new Error(`missing parent folder ${parentPath} of ${path}`));
+                throw this.error.set(() => fail`missing parent folder ${parentPath} of ${path}`);
             }
             parent = file.uniqueId;
         }
@@ -939,7 +940,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async rename(oldPath: string, newPath: string) {
         if (!this._projectId || !this._branchId) {
-            throw this.error.set(() => new Error('project not loaded'));
+            throw this.error.set(() => fail`project not loaded`);
         }
 
         // skip if paths are identical
@@ -949,17 +950,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // check if moving root
         if (oldPath === '') {
-            throw this.error.set(() => new Error('cannot move root folder'));
+            throw this.error.set(() => fail`cannot move root folder`);
         }
 
         // check if src file exists
         if (!this._files.has(oldPath)) {
-            throw this.error.set(() => new Error(`file not found ${oldPath}`));
+            throw this.error.set(() => fail`file not found ${oldPath}`);
         }
 
         // check if dest file already exists
         if (this._files.has(newPath)) {
-            throw this.error.set(() => new Error(`file already exists ${newPath}`));
+            throw this.error.set(() => fail`file already exists ${newPath}`);
         }
 
         // parse old file path
@@ -971,7 +972,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // find file to rename
             const file = this._files.get(oldPath);
             if (!file) {
-                throw this.error.set(() => new Error(`file not found ${oldPath}`));
+                throw this.error.set(() => fail`file not found ${oldPath}`);
             }
 
             // file update
@@ -1010,13 +1011,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // find src file
         const srcFile = this._files.get(oldPath);
         if (!srcFile) {
-            throw this.error.set(() => new Error(`file not found ${oldPath}`));
+            throw this.error.set(() => fail`file not found ${oldPath}`);
         }
 
         // find dest folder
         const destFile = this._files.get(newParent);
         if (!destFile || destFile.type !== 'folder') {
-            throw this.error.set(() => new Error(`destination folder not found ${newParent}`));
+            throw this.error.set(() => fail`destination folder not found ${newParent}`);
         }
 
         // file updated
@@ -1178,7 +1179,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const otdoc = new OTDocument(doc);
         const asset = this._assets.get(uniqueId);
         if (!asset?.file) {
-            throw this.error.set(() => new Error(`missing file data for asset ${uniqueId}`));
+            throw this.error.set(() => fail`missing file data for asset ${uniqueId}`);
         }
         const dirty = hash(otdoc.text) !== asset.file.hash;
 
@@ -1242,7 +1243,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     async link({ projectId, branchId }: { projectId: number; branchId: string }) {
         if (this._projectId !== undefined) {
-            throw this.error.set(() => new Error('project already linked'));
+            throw this.error.set(() => fail`project already linked`);
         }
 
         // drain stale cleanup from a previously failed link
@@ -1253,7 +1254,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // validate token scope by checking for uniqueId presence
         if (!Array.isArray(assets) || (assets.length > 0 && !('uniqueId' in assets[0]))) {
-            throw this.error.set(() => new Error('invalid access token scope'));
+            throw this.error.set(() => fail`invalid access token scope`);
         }
 
         // add root folder
@@ -1424,7 +1425,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const projectId = this._projectId;
         const branchId = this._branchId;
         if (projectId === undefined || branchId === undefined) {
-            throw this.error.set(() => new Error('unlink called before link'));
+            throw this.error.set(() => fail`unlink called before link`);
         }
         await this._flush();
         await super.unlink();

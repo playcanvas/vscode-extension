@@ -6,6 +6,7 @@ import type { Socket } from 'sharedb/lib/sharedb.js';
 import { WEB } from '../config';
 import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
+import { fail } from '../utils/error';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
 import { tryCatch, withTimeout } from '../utils/utils';
@@ -103,7 +104,7 @@ class ShareDb extends EventEmitter<EventMap> {
                 if (!json.id) {
                     const reason = `[${this.constructor.name}] invalid access token`;
                     socket.close(3000, reason);
-                    this.error.set(() => new Error(reason));
+                    this.error.set(() => fail`${reason}`);
                     return;
                 }
                 this._log.debug('socket.auth', json);
@@ -125,7 +126,7 @@ class ShareDb extends EventEmitter<EventMap> {
             this._log.debug('socket.close', code, reason.toString());
 
             // reject pending callers then reset
-            this._active.reject(new Error('connection reset'));
+            this._active.reject(fail`connection reset`);
             this._active = new Deferred();
             this.connected.set(() => false);
 
@@ -359,7 +360,7 @@ class ShareDb extends EventEmitter<EventMap> {
         this._cancelReconnect();
 
         // reject pending callers
-        this._active.reject(new Error('disconnected'));
+        this._active.reject(fail`disconnected`);
         this._active = new Deferred();
 
         // clear keep alive

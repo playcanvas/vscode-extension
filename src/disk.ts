@@ -10,6 +10,7 @@ import type { ShareDbTextOp } from './typings/sharedb';
 import { UndoManager } from './undo-manager';
 import * as buffer from './utils/buffer';
 import { Debouncer } from './utils/debouncer';
+import { fail } from './utils/error';
 import type { EventEmitter } from './utils/event-emitter';
 import { Linker } from './utils/linker';
 import { Mutex } from './utils/mutex';
@@ -199,7 +200,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 if (!(await fileExists(parentUri))) {
                     const folderUri = this._folderUri;
                     if (!folderUri) {
-                        throw this.error.set(() => new Error(`parent folder does not exist: ${parentUri.path}`));
+                        throw this.error.set(() => fail`parent folder does not exist: ${parentUri.path}`);
                     }
                     // set echo for all missing ancestors to prevent disk watcher from re-processing
                     let ancestor = parentUri;
@@ -1222,7 +1223,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri !== undefined) {
-            throw this.error.set(() => new Error('manager already linked'));
+            throw this.error.set(() => fail`manager already linked`);
         }
 
         // drain stale cleanup from a previously failed link
@@ -1343,7 +1344,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
         if (!folderUri || !projectManager) {
-            throw this.error.set(() => new Error('unlink called before link'));
+            throw this.error.set(() => fail`unlink called before link`);
         }
         await super.unlink();
         this._folderUri = undefined;

@@ -3,6 +3,7 @@ import WebSocket, { type Data } from 'isomorphic-ws';
 import { WEB } from '../config';
 import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
+import { fail } from '../utils/error';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
 import { withTimeout } from '../utils/utils';
@@ -86,7 +87,7 @@ class Relay extends EventEmitter<EventMap> {
             const reason = `[${this.constructor.name}] invalid access token`;
             // TODO: figure out why this triggers 1006 not 3000
             socket.close(3000, reason);
-            this.error.set(() => new Error(reason));
+            this.error.set(() => fail`${reason}`);
         }, 5000);
         socket.addEventListener('open', () => {
             this._log.debug('socket.open');
@@ -114,7 +115,7 @@ class Relay extends EventEmitter<EventMap> {
             }
 
             // reject pending callers then reset
-            this._active.reject(new Error('connection reset'));
+            this._active.reject(fail`connection reset`);
             this._active = new Deferred();
             this.connected.set(() => false);
 
@@ -318,7 +319,7 @@ class Relay extends EventEmitter<EventMap> {
         this._cancelReconnect();
 
         // reject pending callers
-        this._active.reject(new Error('disconnected'));
+        this._active.reject(fail`disconnected`);
         this._active = new Deferred();
 
         // clear auth timeout
