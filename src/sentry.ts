@@ -1,9 +1,19 @@
-import { BrowserClient, defaultStackParser, makeFetchTransport, Scope } from '@sentry/browser';
+import * as os from 'os';
+
+import { BrowserClient, defaultStackParser, getDefaultIntegrations, makeFetchTransport, Scope } from '@sentry/browser';
+import { getIntegrationsToSetup } from '@sentry/core';
+import * as vscode from 'vscode';
 
 import packageJson from '../package.json';
 
 import { DEBUG, ENV, SENTRY_DSN } from './config';
 import type { FingerprintedError } from './utils/error';
+
+const OS_NAMES: Record<string, string> = {
+    darwin: 'Mac OS X',
+    linux: 'Linux',
+    win32: 'Windows'
+};
 
 const isFingerprintedError = (e: unknown): e is FingerprintedError =>
     e instanceof Error && 'fingerprint' in e && typeof (e as FingerprintedError).fingerprint === 'string';
@@ -49,7 +59,12 @@ const client = new BrowserClient({
     stackParser: defaultStackParser,
     environment: `extension_${ENV === 'prod' ? 'live' : ENV}`,
     release: packageJson.version,
-    integrations: [],
+    attachStacktrace: true,
+    sendDefaultPii: true,
+    integrations: getIntegrationsToSetup({
+        defaultIntegrations: getDefaultIntegrations({}),
+        integrations: []
+    }),
     beforeSend: (event, hint) => {
         const typedEvent = event as typeof event & GroupingEvent;
         const original = hint?.originalException;
@@ -70,7 +85,9 @@ const client = new BrowserClient({
 const scope = new Scope();
 scope.setClient(client);
 scope.setTag('page', 'vscode-extension');
-scope.setTag('os', process.platform);
+scope.setContext('os', { name: OS_NAMES[process.platform] ?? process.platform, version: os.release() });
+scope.setContext('browser', { name: 'VS Code', version: vscode.version });
+scope.setContext('device', { family: 'Desktop', arch: os.arch() });
 client.init();
 
 export const captureException = (error: Error, source?: string) => {
