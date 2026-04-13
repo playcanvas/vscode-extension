@@ -92,18 +92,18 @@
                 "command": "playcanvas.undo",
                 "key": "ctrl+z",
                 "mac": "cmd+z",
-                "when": "playcanvas.isCollabFile && textInputFocus && !editorReadonly"
+                "when": "playcanvas.active && textInputFocus && !editorReadonly"
             },
             {
                 "command": "playcanvas.redo",
                 "key": "ctrl+shift+z",
                 "mac": "cmd+shift+z",
-                "when": "playcanvas.isCollabFile && textInputFocus && !editorReadonly"
+                "when": "playcanvas.active && textInputFocus && !editorReadonly"
             },
             {
                 "command": "playcanvas.redo",
                 "key": "ctrl+y",
-                "when": "playcanvas.isCollabFile && textInputFocus && !editorReadonly && !isMac"
+                "when": "playcanvas.active && textInputFocus && !editorReadonly && !isMac"
             }
         ],
         "typescriptServerPlugins": [

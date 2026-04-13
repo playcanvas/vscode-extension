@@ -593,7 +593,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // track active editor to gate keybindings
         const updateCtx = (e?: vscode.TextEditor) => {
             const collab = e && uriStartsWith(e.document.uri, folderUri);
-            vscode.commands.executeCommand('setContext', 'playcanvas.isCollabFile', !!collab);
+            vscode.commands.executeCommand('setContext', 'playcanvas.active', !!collab);
         };
         updateCtx(vscode.window.activeTextEditor);
         const onEditor = vscode.window.onDidChangeActiveTextEditor(updateCtx);
@@ -713,7 +713,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             onEditor.dispose();
             undoCmd.dispose();
             redoCmd.dispose();
-            vscode.commands.executeCommand('setContext', 'playcanvas.isCollabFile', false);
+            vscode.commands.executeCommand('setContext', 'playcanvas.active', false);
         };
     }
 
@@ -1351,7 +1351,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._bufferState.clear();
         this._undos.forEach((m) => m.clear());
         this._undos.clear();
-        vscode.commands.executeCommand('setContext', 'playcanvas.isCollabFile', false);
+        vscode.commands.executeCommand('setContext', 'playcanvas.active', false);
         this._log.info(`unlinked from ${folderUri.toString()}`);
         return { folderUri, projectManager };
     }
