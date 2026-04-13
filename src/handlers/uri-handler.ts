@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
 import type { ProjectManager } from '../project-manager';
+import { fail } from '../utils/error';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
 import { fileExists, projectToName, guard } from '../utils/utils';
@@ -77,7 +78,7 @@ class UriHandler
         // get file path
         const filePath = projectManager.path(assetId);
         if (!filePath) {
-            throw this.error.set(() => new Error(`asset ${assetId} not found in project`));
+            throw this.error.set(() => fail`asset ${assetId} not found in project`);
         }
 
         // check if file is loaded
@@ -212,7 +213,7 @@ class UriHandler
         // find matching project
         const project = projects.find((p) => p.id === projectId);
         if (!project) {
-            this.error.set(() => new Error(`project ${projectId} not found`));
+            this.error.set(() => fail`project ${projectId} not found`);
             return;
         }
 
@@ -244,7 +245,7 @@ class UriHandler
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri !== undefined) {
-            throw this.error.set(() => new Error('manager already linked'));
+            throw this.error.set(() => fail`manager already linked`);
         }
 
         // drain stale cleanup from a previously failed link
@@ -264,7 +265,7 @@ class UriHandler
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
         if (!folderUri || !projectManager) {
-            throw this.error.set(() => new Error('unlink called before link'));
+            throw this.error.set(() => fail`unlink called before link`);
         }
         await super.unlink();
         this._folderUri = undefined;

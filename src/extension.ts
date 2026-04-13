@@ -9,6 +9,7 @@ import { ShareDb } from './connections/sharedb';
 import { Disk } from './disk';
 import { UriHandler } from './handlers/uri-handler';
 import { Log } from './log';
+import { fail } from './utils/error';
 import { Metrics } from './metrics';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
@@ -391,7 +392,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const branches = await rest.projectBranches(project_id);
             const main = branches.find((b) => b.permanent);
             if (!main) {
-                throw new Error(`Failed to find main branch to switch to`);
+                throw fail`Failed to find main branch to switch to`;
             }
 
             // checkout main branch
@@ -413,7 +414,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
             // check status
             if (status !== 'success') {
-                throw new Error(`Failed to restore to checkpoint ${checkpoint_id}`);
+                throw fail`Failed to restore to checkpoint ${checkpoint_id}`;
             }
 
             // fetch project and disk from cache
@@ -666,7 +667,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // load branch info
         const doc = await sharedb.subscribe('settings', `project_${project.id}_${userId}`);
         if (!doc) {
-            void handleError(new Error(`Failed to load project settings for project ${project.id}`));
+            void handleError(fail`Failed to load project settings for project ${project.id}`);
             return;
         }
         context.subscriptions.push(

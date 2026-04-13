@@ -4,6 +4,7 @@ import type { Relay } from '../connections/relay';
 import type { Rest } from '../connections/rest';
 import type { ProjectManager } from '../project-manager';
 import * as buffer from '../utils/buffer';
+import { fail } from '../utils/error';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
 import { relativePath, uriStartsWith, tryCatch } from '../utils/utils';
@@ -157,7 +158,7 @@ class CollabProvider
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri !== undefined) {
-            throw this.error.set(() => new Error('manager already linked'));
+            throw this.error.set(() => fail`manager already linked`);
         }
 
         // drain stale cleanup from a previously failed link
@@ -181,7 +182,7 @@ class CollabProvider
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
         if (!folderUri || !projectManager) {
-            throw this.error.set(() => new Error('unlink called before link'));
+            throw this.error.set(() => fail`unlink called before link`);
         }
         await super.unlink();
         this._folderUri = undefined;

@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import type { ProjectManager } from '../project-manager';
 import type { EventMap } from '../typings/event-map';
 import type { EventEmitter } from '../utils/event-emitter';
+import { fail } from '../utils/error';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
 
@@ -59,7 +60,7 @@ class DirtyDecorationProvider
 
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri !== undefined) {
-            throw this.error.set(() => new Error('already linked'));
+            throw this.error.set(() => fail`already linked`);
         }
 
         // drain stale cleanup from a previously failed link
@@ -109,7 +110,7 @@ class DirtyDecorationProvider
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
         if (!folderUri || !projectManager) {
-            throw this.error.set(() => new Error('unlink called before link'));
+            throw this.error.set(() => fail`unlink called before link`);
         }
         await super.unlink();
         this._folderUri = undefined;

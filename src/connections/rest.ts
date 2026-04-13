@@ -1,3 +1,4 @@
+import { fail } from '../utils/error';
 import { Log } from '../log';
 import type { Asset, Branch, Project, User } from '../typings/models';
 import { summarize, tryCatch } from '../utils/utils';
@@ -82,7 +83,7 @@ class Rest {
             }
 
             if (this._disposed) {
-                throw new Error('REST client disposed');
+                throw fail`REST client disposed`;
             }
 
             const ctrl = new AbortController();
@@ -114,7 +115,7 @@ class Rest {
             // http error
             if (!res.ok) {
                 const errorBody = await res.text();
-                const error = new Error(`HTTP ${res.status} ${res.statusText}: ${errorBody}`);
+                const error = fail`HTTP ${res.status} ${res.statusText}: ${errorBody}`;
                 if (RETRYABLE_STATUS.has(res.status) && attempt < MAX_RETRIES) {
                     lastError = error;
                     const delay = this._backoff(attempt, this._retryAfter(res));
@@ -133,7 +134,7 @@ class Rest {
             return result;
         }
 
-        throw lastError || new Error(`Request failed after ${MAX_RETRIES} retries`);
+        throw lastError || fail`Request failed after ${MAX_RETRIES} retries`;
     }
 
     async assetCreate(
