@@ -18,7 +18,7 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
     noEmit: true
 };
 
-const PROJECT_REGEX = /playcanvas\.playcanvas\/\w+\/[\w\s]+ \(\d+\)/;
+const PROJECT_REGEX = /playcanvas\.playcanvas\/\w+\/.+ \(\d+\)/;
 
 const log = (project: ts.server.Project, message: string) => {
     if (!DEBUG) {
