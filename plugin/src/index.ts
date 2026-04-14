@@ -33,7 +33,7 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
     const create = (info: ts.server.PluginCreateInfo): ts.LanguageService => {
         // check if we are inside a project
         const projectDir = info.project.getCurrentDirectory();
-        if (!PROJECT_REGEX.test(projectDir)) {
+        if (!PROJECT_REGEX.test(projectDir) || projectDir.includes('/.pc')) {
             return info.languageService;
         }
         log(info.project, `Initializing plugin ${projectDir}`);
