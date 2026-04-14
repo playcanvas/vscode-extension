@@ -3,7 +3,6 @@ import path from 'path';
 
 import type * as ts from 'typescript/lib/tsserverlibrary';
 
-const DEBUG = true;
 const FILES = new Map([
     // global pc namespace
     ['.pc/globals.d.ts', fs.readFileSync(path.join(__dirname, 'playcanvas.d.ts'), 'utf8')],
@@ -18,13 +17,10 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
     noEmit: true
 };
 
-const PROJECT_REGEX = /playcanvas\.playcanvas\/\w+\/[\w\s]+ \(\d+\)/;
+const PROJECT_REGEX = /playcanvas\.playcanvas\/\w+\/.+ \(\d+\)/;
 
 const log = (project: ts.server.Project, message: string) => {
-    if (!DEBUG) {
-        return;
-    }
-    project.projectService.logger.info(`[PLUGIN] ${message}`);
+    project.projectService.logger.info(`[playcanvas-plugin] ${message}`);
 };
 
 const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
@@ -33,7 +29,7 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
     const create = (info: ts.server.PluginCreateInfo): ts.LanguageService => {
         // check if we are inside a project
         const projectDir = info.project.getCurrentDirectory();
-        if (!PROJECT_REGEX.test(projectDir)) {
+        if (!PROJECT_REGEX.test(projectDir) || projectDir.includes('/.pc')) {
             return info.languageService;
         }
         log(info.project, `Initializing plugin ${projectDir}`);
@@ -81,20 +77,28 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
 
     const getExternalFiles = (project: ts.server.Project): string[] => {
         const projectDir = project.getCurrentDirectory();
-        const pathsNormalized: ts.server.NormalizedPath[] = [];
 
-        for (const [fileName, content] of FILES) {
-            const filePath = ts.server.toNormalizedPath(path.join(projectDir, fileName));
+        // prevent infinite recursion from inferred projects inside .pc/ subdirectories
+        if (projectDir.includes('/.pc')) {
+            return [];
+        }
 
-            // If the file is not already part of the project, add it as an external file
+        if (!PROJECT_REGEX.test(projectDir)) {
+            return [];
+        }
+
+        // openClientFile registers ScriptInfo so ambient module declarations resolve.
+        // the /.pc guard above prevents the re-entrant project creation this used to cause.
+        const paths: string[] = [];
+        for (const [name, content] of FILES) {
+            const filePath = ts.server.toNormalizedPath(path.join(projectDir, name));
             if (!project.containsFile(filePath)) {
-                log(project, `Adding external file to project: ${filePath}`);
+                log(project, `registering virtual file: ${filePath}`);
                 project.projectService.openClientFile(filePath, content, ts.ScriptKind.TS);
             }
-
-            pathsNormalized.push(filePath);
+            paths.push(filePath);
         }
-        return pathsNormalized;
+        return paths;
     };
 
     return { create, getExternalFiles };
