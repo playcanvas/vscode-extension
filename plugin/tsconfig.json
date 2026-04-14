@@ -2,7 +2,8 @@
     "extends": "../tsconfig.json",
     "compilerOptions": {
         "outDir": "out",
-        "rootDir": "src"
+        "rootDir": "src",
+        "types": ["node"]
     },
     "exclude": ["out"]
 }
