@@ -87,9 +87,16 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
             return [];
         }
 
+        // openClientFile registers ScriptInfo so ambient module declarations resolve.
+        // the /.pc guard above prevents the re-entrant project creation this used to cause.
         const paths: string[] = [];
-        for (const [name] of FILES) {
-            paths.push(ts.server.toNormalizedPath(path.join(projectDir, name)));
+        for (const [name, content] of FILES) {
+            const filePath = ts.server.toNormalizedPath(path.join(projectDir, name));
+            if (!project.containsFile(filePath)) {
+                log(project, `registering virtual file: ${filePath}`);
+                project.projectService.openClientFile(filePath, content, ts.ScriptKind.TS);
+            }
+            paths.push(filePath);
         }
         return paths;
     };
