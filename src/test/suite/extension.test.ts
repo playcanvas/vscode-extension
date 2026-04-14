@@ -1300,22 +1300,22 @@ suite('extension', () => {
         const saved = tdoc.getText();
         assert.strictEqual(saved, '// SAVED\n// ORIGINAL', 'saved content should match');
 
-        // edit after save
+        // edit after save (line 1 to prevent UndoManager composing with SAVED)
         const edit2 = new vscode.WorkspaceEdit();
-        edit2.insert(uri, new vscode.Position(0, 0), '// TEMP\n');
+        edit2.insert(uri, new vscode.Position(1, 0), '// TEMP\n');
         await vscode.workspace.applyEdit(edit2);
         assert.strictEqual(tdoc.isDirty, true, 'should be dirty after edit');
 
         // undo back to saved state
         const undone = new Promise<void>((resolve) => {
             const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
-                if (e.document.uri.toString() === uri.toString() && e.reason === vscode.TextDocumentChangeReason.Undo) {
+                if (e.document.uri.toString() === uri.toString() && tdoc.getText() === saved) {
                     disposable.dispose();
                     resolve();
                 }
             });
         });
-        await vscode.commands.executeCommand('undo');
+        await vscode.commands.executeCommand('playcanvas.undo');
         await assertResolves(undone, 'undo change event');
 
         assert.strictEqual(tdoc.getText(), saved, 'buffer should match saved content after undo');
