@@ -1074,6 +1074,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // compute minimal diff and submit as single atomic op
         // NOTE: avoids two-step delete+insert which can lose concurrent remote edits
+        // NOTE: if subscribe returns an empty doc, delta produces a pure insert
+        // instead of a replace — OT will concatenate with remote content
         const op = delta(file.doc.text, norm(buffer.toString(content)));
         if (!op) {
             return;
