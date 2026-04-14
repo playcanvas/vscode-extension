@@ -81,20 +81,21 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
 
     const getExternalFiles = (project: ts.server.Project): string[] => {
         const projectDir = project.getCurrentDirectory();
-        const pathsNormalized: ts.server.NormalizedPath[] = [];
 
-        for (const [fileName, content] of FILES) {
-            const filePath = ts.server.toNormalizedPath(path.join(projectDir, fileName));
-
-            // If the file is not already part of the project, add it as an external file
-            if (!project.containsFile(filePath)) {
-                log(project, `Adding external file to project: ${filePath}`);
-                project.projectService.openClientFile(filePath, content, ts.ScriptKind.TS);
-            }
-
-            pathsNormalized.push(filePath);
+        // prevent infinite recursion from inferred projects inside .pc/ subdirectories
+        if (projectDir.includes('/.pc')) {
+            return [];
         }
-        return pathsNormalized;
+
+        if (!PROJECT_REGEX.test(projectDir)) {
+            return [];
+        }
+
+        const paths: string[] = [];
+        for (const [name] of FILES) {
+            paths.push(ts.server.toNormalizedPath(path.join(projectDir, name)));
+        }
+        return paths;
     };
 
     return { create, getExternalFiles };
