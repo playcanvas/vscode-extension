@@ -527,13 +527,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         this._log.warn(`dirtify applyEdit failed for ${doc.uri}`);
                     }
                 } else {
-                    // content matches -- noop to mark dirty
-                    const edit1 = new vscode.WorkspaceEdit();
-                    edit1.insert(doc.uri, new vscode.Position(0, 0), ' ');
-                    await vscode.workspace.applyEdit(edit1);
-                    const edit2 = new vscode.WorkspaceEdit();
-                    edit2.delete(doc.uri, new vscode.Range(0, 0, 0, 1));
-                    await vscode.workspace.applyEdit(edit2);
+                    // content matches -- replace first char with itself to mark dirty without visible change
+                    const edit = new vscode.WorkspaceEdit();
+                    edit.replace(doc.uri, new vscode.Range(0, 0, 0, 1), current.charAt(0));
+                    await vscode.workspace.applyEdit(edit);
                 }
             });
             this._locks.delete(`${doc.uri}`);
