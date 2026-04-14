@@ -3,7 +3,6 @@ import path from 'path';
 
 import type * as ts from 'typescript/lib/tsserverlibrary';
 
-const DEBUG = true;
 const FILES = new Map([
     // global pc namespace
     ['.pc/globals.d.ts', fs.readFileSync(path.join(__dirname, 'playcanvas.d.ts'), 'utf8')],
@@ -21,10 +20,7 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
 const PROJECT_REGEX = /playcanvas\.playcanvas\/\w+\/.+ \(\d+\)/;
 
 const log = (project: ts.server.Project, message: string) => {
-    if (!DEBUG) {
-        return;
-    }
-    project.projectService.logger.info(`[PLUGIN] ${message}`);
+    project.projectService.logger.info(`[playcanvas-plugin] ${message}`);
 };
 
 const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
