@@ -2,6 +2,11 @@
     "name": "playcanvas-plugin",
     "version": "0.0.0",
     "description": "PlayCanvas Code Editor Typescript Server Plugin",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/playcanvas/vscode-extension.git"
+    },
+    "author": "PlayCanvas",
     "license": "MIT",
     "type": "commonjs",
     "main": "out/index.js",
