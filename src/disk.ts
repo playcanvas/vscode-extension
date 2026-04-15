@@ -232,6 +232,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
+                const viewing =
+                    this._opened.has(uri.path) ||
+                    vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
+                if (viewing) {
+                    this._log.debug(`create.remote.open ${uri}`);
+                    return;
+                }
+
                 // for files, check content
                 const existingContent = await vscode.workspace.fs.readFile(uri);
                 if (buffer.cmp(existingContent, content)) {
@@ -564,6 +572,19 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         }
     }
 
+    private async _reconcile(uri: vscode.Uri, path: string, type: 'file' | 'folder') {
+        if (type !== 'file' || !this._opened.has(uri.path)) {
+            return;
+        }
+
+        const file = this._projectManager?.files.get(path);
+        if (!file || file.type !== 'file') {
+            return;
+        }
+
+        await this._subscribed(uri, path, file.doc.text, file.dirty);
+    }
+
     private _dirtify(doc: vscode.TextDocument) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
@@ -616,6 +637,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri);
             await this._create(uri, type, content);
+            await this._reconcile(uri, path, type);
         });
         const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content, prev) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
@@ -824,12 +846,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         const onchange = vscode.workspace.onDidChangeTextDocument((e) => {
             const { document, contentChanges, reason } = e;
-            if (contentChanges.length === 0) {
+            // check if in folder
+            if (!uriStartsWith(document.uri, folderUri)) {
                 return;
             }
 
-            // check if in folder
-            if (!uriStartsWith(document.uri, folderUri)) {
+            // check if there are changes
+            if (contentChanges.length === 0) {
                 return;
             }
 
@@ -895,11 +918,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             file.dirty ||= !!ops.length;
             if (!prev && file.dirty) {
                 this._events.emit('asset:file:dirty', path, true);
-            }
-
-            // external disk change — force dirty indicator
-            if (!document.isDirty && ops.length) {
-                this._dirtify(document);
             }
 
             this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => stat(o)).join(' ')}`);
