@@ -846,12 +846,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         const onchange = vscode.workspace.onDidChangeTextDocument((e) => {
             const { document, contentChanges, reason } = e;
-            if (contentChanges.length === 0) {
+            // check if in folder
+            if (!uriStartsWith(document.uri, folderUri)) {
                 return;
             }
 
-            // check if in folder
-            if (!uriStartsWith(document.uri, folderUri)) {
+            // check if there are changes
+            if (contentChanges.length === 0) {
                 return;
             }
 
@@ -917,11 +918,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             file.dirty ||= !!ops.length;
             if (!prev && file.dirty) {
                 this._events.emit('asset:file:dirty', path, true);
-            }
-
-            // external disk change — force dirty indicator
-            if (!document.isDirty && ops.length) {
-                this._dirtify(document);
             }
 
             this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => stat(o)).join(' ')}`);
