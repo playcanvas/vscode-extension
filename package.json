@@ -149,7 +149,7 @@
         "onStartupFinished"
     ],
     "dependencies": {
-        "@sentry/browser": "^10.39.0",
+        "@sentry/browser": "^10.48.0",
         "ignore": "^7.0.5",
         "isomorphic-ws": "^5.0.0",
         "ot-text": "github:playcanvas/ot-text",
