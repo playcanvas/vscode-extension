@@ -188,8 +188,8 @@
         "rollup": "^4.55.1",
         "rollup-plugin-polyfill-node": "^0.13.0",
         "sinon": "^21.0.1",
-        "typescript": "^5.9.3",
-        "typescript-eslint": "^8.51.0"
+        "typescript": "^6.0.2",
+        "typescript-eslint": "^8.58.2"
     },
     "engines": {
         "vscode": "^1.98.0"
