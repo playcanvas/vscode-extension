@@ -571,7 +571,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const uri = vscode.Uri.joinPath(folderUri, path);
 
             if (this._opened.has(uri.path)) {
-                // reconcile: submit buffer divergence to OT (preserves user edits made before subscribe)
+                // reconcile buffer with live ShareDB doc after subscribe
                 await this._writeMutex.atomic([`${uri}`], async () => {
                     this._locks.add(`${uri}`);
                     await tryCatch(async () => {
@@ -587,12 +587,29 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         const doc = await vscode.workspace.openTextDocument(uri);
                         const bufferText = norm(doc.getText());
 
-                        const userOp = delta(file.doc.text, bufferText);
-                        if (userOp) {
-                            file.doc.apply(userOp);
-                            file.dirty = true;
-                            this._events.emit('asset:file:dirty', path, true);
-                            this._log.info(`subscribe.recovered ${uri}`);
+                        if (doc.isDirty) {
+                            // buffer has user edits made before subscribe — submit to ShareDB
+                            const userOp = delta(file.doc.text, bufferText);
+                            if (userOp) {
+                                file.doc.apply(userOp);
+                                file.dirty = true;
+                                this._events.emit('asset:file:dirty', path, true);
+                                this._log.info(`subscribe.recovered ${uri}`);
+                            }
+                        } else if (file.doc.text !== bufferText) {
+                            // buffer has stale disk content — apply live ShareDB doc to buffer
+                            const { prefix, suffix } = diff(bufferText, file.doc.text);
+                            const edit = new vscode.WorkspaceEdit();
+                            edit.replace(
+                                uri,
+                                new vscode.Range(doc.positionAt(prefix), doc.positionAt(bufferText.length - suffix)),
+                                file.doc.text.substring(prefix, file.doc.text.length - suffix)
+                            );
+                            const applied = await vscode.workspace.applyEdit(edit);
+                            if (!applied) {
+                                this._log.warn(`subscribe.resync applyEdit failed for ${uri}`);
+                            }
+                            this._log.info(`subscribe.resync ${uri}`);
                         }
 
                         this._bufferState.set(uri.path, norm(doc.getText()));
