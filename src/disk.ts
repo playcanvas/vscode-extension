@@ -572,6 +572,19 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         }
     }
 
+    private async _reconcile(uri: vscode.Uri, path: string, type: 'file' | 'folder') {
+        if (type !== 'file' || !this._opened.has(uri.path)) {
+            return;
+        }
+
+        const file = this._projectManager?.files.get(path);
+        if (!file || file.type !== 'file') {
+            return;
+        }
+
+        await this._subscribed(uri, path, file.doc.text, file.dirty);
+    }
+
     private _dirtify(doc: vscode.TextDocument) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
@@ -624,16 +637,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri);
             await this._create(uri, type, content);
-            if (type !== 'file' || !this._opened.has(uri.path)) {
-                return;
-            }
-
-            const file = this._projectManager?.files.get(path);
-            if (!file || file.type !== 'file') {
-                return;
-            }
-
-            await this._subscribed(uri, path, file.doc.text, file.dirty);
+            await this._reconcile(uri, path, type);
         });
         const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content, prev) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
