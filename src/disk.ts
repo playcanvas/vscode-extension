@@ -232,6 +232,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
+                const viewing =
+                    this._opened.has(uri.path) ||
+                    vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
+                if (viewing) {
+                    this._log.debug(`create.remote.open ${uri}`);
+                    return;
+                }
+
                 // for files, check content
                 const existingContent = await vscode.workspace.fs.readFile(uri);
                 if (buffer.cmp(existingContent, content)) {
@@ -616,6 +624,16 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri);
             await this._create(uri, type, content);
+            if (type !== 'file' || !this._opened.has(uri.path)) {
+                return;
+            }
+
+            const file = this._projectManager?.files.get(path);
+            if (!file || file.type !== 'file') {
+                return;
+            }
+
+            await this._subscribed(uri, path, file.doc.text, file.dirty);
         });
         const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content, prev) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
