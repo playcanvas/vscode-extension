@@ -492,6 +492,78 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
+    private async _subscribed(uri: vscode.Uri, path: string, content: string, dirty: boolean) {
+        if (this._opened.has(uri.path)) {
+            // reconcile buffer with live ShareDB doc after subscribe
+            await this._writeMutex.atomic([`${uri}`], async () => {
+                this._locks.add(`${uri}`);
+                await tryCatch(async () => {
+                    const pm = this._projectManager;
+                    if (!pm) {
+                        return;
+                    }
+                    const file = pm.files.get(path);
+                    if (!file || file.type !== 'file') {
+                        return;
+                    }
+
+                    const doc = await vscode.workspace.openTextDocument(uri);
+                    const bufferText = norm(doc.getText());
+
+                    if (doc.isDirty) {
+                        // buffer has user edits made before subscribe — submit to ShareDB
+                        const userOp = delta(file.doc.text, bufferText);
+                        if (userOp) {
+                            file.doc.apply(userOp);
+                            file.dirty = true;
+                            this._events.emit('asset:file:dirty', path, true);
+                            this._log.info(`subscribe.recovered ${uri}`);
+                        }
+                    } else if (file.doc.text !== bufferText) {
+                        // buffer has stale disk content — apply live ShareDB doc to buffer
+                        const { prefix, suffix } = diff(bufferText, file.doc.text);
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.replace(
+                            uri,
+                            new vscode.Range(doc.positionAt(prefix), doc.positionAt(bufferText.length - suffix)),
+                            file.doc.text.substring(prefix, file.doc.text.length - suffix)
+                        );
+                        const applied = await vscode.workspace.applyEdit(edit);
+                        if (!applied) {
+                            this._log.warn(`subscribe.resync applyEdit failed for ${uri}`);
+                        }
+                        this._log.info(`subscribe.resync ${uri}`);
+                    }
+
+                    this._bufferState.set(uri.path, norm(doc.getText()));
+                });
+                this._locks.delete(`${uri}`);
+            });
+        } else {
+            // sync to disk for closed files
+            const buf = buffer.from(norm(content));
+            const key = `${uri}`;
+            this._syncing.add(key);
+            void this._debouncer
+                .debounce(key, async () => {
+                    this._echo.set(`${uri}:change`, hash(buf));
+                    await vscode.workspace.fs.writeFile(uri, buf);
+                    setTimeout(() => this._syncing.delete(key), 200);
+                })
+                .catch((err) => {
+                    if (/debounce/.test(err.message)) {
+                        return;
+                    }
+                    this._syncing.delete(key);
+                    this._log.error(`failed to sync subscribed ${uri}: ${err.message}`);
+                });
+        }
+
+        if (dirty) {
+            this._events.emit('asset:file:dirty', path, true);
+        }
+    }
+
     private _dirtify(doc: vscode.TextDocument) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
@@ -569,76 +641,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
         const assetFileSubscribed = this._events.on('asset:file:subscribed', async (path, content, dirty) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
-
-            if (this._opened.has(uri.path)) {
-                // reconcile buffer with live ShareDB doc after subscribe
-                await this._writeMutex.atomic([`${uri}`], async () => {
-                    this._locks.add(`${uri}`);
-                    await tryCatch(async () => {
-                        const pm = this._projectManager;
-                        if (!pm) {
-                            return;
-                        }
-                        const file = pm.files.get(path);
-                        if (!file || file.type !== 'file') {
-                            return;
-                        }
-
-                        const doc = await vscode.workspace.openTextDocument(uri);
-                        const bufferText = norm(doc.getText());
-
-                        if (doc.isDirty) {
-                            // buffer has user edits made before subscribe — submit to ShareDB
-                            const userOp = delta(file.doc.text, bufferText);
-                            if (userOp) {
-                                file.doc.apply(userOp);
-                                file.dirty = true;
-                                this._events.emit('asset:file:dirty', path, true);
-                                this._log.info(`subscribe.recovered ${uri}`);
-                            }
-                        } else if (file.doc.text !== bufferText) {
-                            // buffer has stale disk content — apply live ShareDB doc to buffer
-                            const { prefix, suffix } = diff(bufferText, file.doc.text);
-                            const edit = new vscode.WorkspaceEdit();
-                            edit.replace(
-                                uri,
-                                new vscode.Range(doc.positionAt(prefix), doc.positionAt(bufferText.length - suffix)),
-                                file.doc.text.substring(prefix, file.doc.text.length - suffix)
-                            );
-                            const applied = await vscode.workspace.applyEdit(edit);
-                            if (!applied) {
-                                this._log.warn(`subscribe.resync applyEdit failed for ${uri}`);
-                            }
-                            this._log.info(`subscribe.resync ${uri}`);
-                        }
-
-                        this._bufferState.set(uri.path, norm(doc.getText()));
-                    });
-                    this._locks.delete(`${uri}`);
-                });
-            } else {
-                // sync to disk for closed files
-                const buf = buffer.from(norm(content));
-                const key = `${uri}`;
-                this._syncing.add(key);
-                void this._debouncer
-                    .debounce(key, async () => {
-                        this._echo.set(`${uri}:change`, hash(buf));
-                        await vscode.workspace.fs.writeFile(uri, buf);
-                        setTimeout(() => this._syncing.delete(key), 200);
-                    })
-                    .catch((err) => {
-                        if (/debounce/.test(err.message)) {
-                            return;
-                        }
-                        this._syncing.delete(key);
-                        this._log.error(`failed to sync subscribed ${uri}: ${err.message}`);
-                    });
-            }
-
-            if (dirty) {
-                this._events.emit('asset:file:dirty', path, true);
-            }
+            await this._subscribed(uri, path, content, dirty);
         });
         return () => {
             this._events.off('asset:file:create', assetFileCreate);
