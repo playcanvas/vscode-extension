@@ -15,7 +15,7 @@ updates:
           prefix: 'chore(deps):'
       ignore:
           - dependency-name: '@types/sharedb'
-          - dependency-name: '@types/vscode' 
+          - dependency-name: '@types/vscode'
           - dependency-name: ot-text
           - dependency-name: playcanvas
           - dependency-name: sharedb
