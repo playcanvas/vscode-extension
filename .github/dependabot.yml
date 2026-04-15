@@ -7,6 +7,8 @@ updates:
       open-pull-requests-limit: 10
       reviewers:
           - kpal81xd
+      assignees:
+          - kpal81xd
       labels:
           - dependencies
       commit-message:
@@ -21,6 +23,10 @@ updates:
       directory: /plugin
       schedule:
           interval: weekly
+      reviewers:
+          - kpal81xd
+      assignees:
+          - kpal81xd
       labels:
           - dependencies
       commit-message:
