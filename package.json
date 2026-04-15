@@ -173,7 +173,7 @@
         "@types/ws": "^8.18.1",
         "@vscode/test-cli": "^0.0.12",
         "@vscode/test-electron": "^2.5.2",
-        "@vscode/test-web": "^0.0.77",
+        "@vscode/test-web": "^0.0.80",
         "dotenv": "^17.2.3",
         "eslint": "^9.39.2",
         "eslint-config-prettier": "^10.1.8",
