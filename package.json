@@ -166,7 +166,7 @@
         "@rollup/plugin-swc": "^0.4.0",
         "@types/express": "^5.0.6",
         "@types/mocha": "^10.0.10",
-        "@types/node": "22.x",
+        "@types/node": "25.x",
         "@types/sharedb": "3.2.1",
         "@types/sinon": "^21.0.0",
         "@types/vscode": "^1.98.0",
