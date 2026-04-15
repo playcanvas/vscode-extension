@@ -58,6 +58,12 @@ const tsFilesConfig = {
     }
 };
 
+const packageJsonRules = {
+    ...pluginPackageJson.configs.recommended.rules,
+    'package-json/require-exports': 'off',
+    'package-json/require-sideEffects': 'off'
+};
+
 const packageJsonConfig = {
     files: ['**/package.json', '**/package-lock.json'],
     languageOptions: {
@@ -66,7 +72,14 @@ const packageJsonConfig = {
     plugins: {
         'package-json': pluginPackageJson
     },
-    rules: pluginPackageJson.configs.recommended.rules
+    rules: packageJsonRules
+};
+
+const rootPackageJsonConfig = {
+    files: ['package.json'],
+    rules: {
+        'package-json/require-files': 'off'
+    }
 };
 
 export default defineConfig(
@@ -79,5 +92,6 @@ export default defineConfig(
     ignoreConfig,
     baseConfig,
     tsFilesConfig,
-    packageJsonConfig
+    packageJsonConfig,
+    rootPackageJsonConfig
 );
