@@ -1,0 +1,27 @@
+version: 2
+updates:
+    - package-ecosystem: npm
+      directory: /
+      schedule:
+          interval: weekly
+      open-pull-requests-limit: 10
+      reviewers:
+          - kpal81xd
+      labels:
+          - dependencies
+      commit-message:
+          prefix: 'chore(deps):'
+      ignore:
+          - dependency-name: sharedb
+          - dependency-name: '@types/sharedb'
+          - dependency-name: playcanvas
+          - dependency-name: ot-text
+
+    - package-ecosystem: npm
+      directory: /plugin
+      schedule:
+          interval: weekly
+      labels:
+          - dependencies
+      commit-message:
+          prefix: 'chore(deps):'
