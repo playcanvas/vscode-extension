@@ -14,10 +14,11 @@ updates:
       commit-message:
           prefix: 'chore(deps):'
       ignore:
-          - dependency-name: sharedb
           - dependency-name: '@types/sharedb'
-          - dependency-name: playcanvas
+          - dependency-name: '@types/vscode' 
           - dependency-name: ot-text
+          - dependency-name: playcanvas
+          - dependency-name: sharedb
 
     - package-ecosystem: npm
       directory: /plugin
