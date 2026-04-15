@@ -66,7 +66,14 @@ const packageJsonConfig = {
     plugins: {
         'package-json': pluginPackageJson
     },
-    rules: pluginPackageJson.configs.recommended.rules
+    rules: {
+        ...pluginPackageJson.configs.recommended.rules,
+        'package-json/require-attribution': 'off',
+        'package-json/require-exports': 'off',
+        'package-json/require-files': 'off',
+        'package-json/require-repository': 'off',
+        'package-json/require-sideEffects': 'off'
+    }
 };
 
 export default defineConfig(
