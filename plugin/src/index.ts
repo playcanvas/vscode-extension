@@ -11,12 +11,6 @@ const FILES = new Map([
     ['.pc/module.d.ts', 'declare module "playcanvas" { export = pc; }\n']
 ]);
 
-const COMPILER_OPTIONS: ts.CompilerOptions = {
-    allowJs: true,
-    checkJs: true,
-    noEmit: true
-};
-
 const PROJECT_REGEX = /playcanvas\.playcanvas\/\w+\/.+ \(\d+\)/;
 
 const log = (project: ts.server.Project, message: string) => {
@@ -25,6 +19,14 @@ const log = (project: ts.server.Project, message: string) => {
 
 const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
     const ts = modules.typescript;
+
+    const compilerOptions: ts.CompilerOptions = {
+        allowJs: true,
+        checkJs: true,
+        noEmit: true,
+        target: ts.ScriptTarget.ES2020,
+        lib: ['lib.es2020.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts']
+    };
 
     const create = (info: ts.server.PluginCreateInfo): ts.LanguageService => {
         // check if we are inside a project
@@ -49,7 +51,7 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
         proxy.getCompilationSettings = () => {
             const settings = getCompilationSettings();
             log(info.project, `Merging custom compiler options into project settings.`);
-            return Object.assign(settings, COMPILER_OPTIONS);
+            return Object.assign(settings, compilerOptions);
         };
 
         // intercept getScriptSnapshot to provide a snapshot for the virtual file
