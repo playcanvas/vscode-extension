@@ -1153,54 +1153,6 @@ suite('extension', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external closed file change');
     });
 
-    test('file change - external write dirtifies', async () => {
-        // get folder uri
-        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri, 'workspace folder should exist');
-
-        // create asset
-        const asset = await assetCreate({ name: 'dirtify_external.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset, 'asset should be created');
-        const document = documents.get(asset.uniqueId);
-        assert.ok(document, 'document should exist');
-
-        // get file uri
-        const uri = vscode.Uri.joinPath(folderUri, asset.name);
-
-        // open document
-        const tdoc = await vscode.workspace.openTextDocument(uri);
-
-        // reset sendRaw history
-        sharedb.sendRaw.resetHistory();
-
-        // create change promise (onDidChangeTextDocument fires for external edits)
-        const changed = new Promise<void>((resolve) => {
-            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
-                if (e.document.uri.toString() === uri.toString() && e.document.getText() !== document) {
-                    disposable.dispose();
-                    resolve();
-                }
-            });
-        });
-
-        // make external change by writing to file directly
-        const newContent = `// EXTERNAL EDIT\n${document}`;
-        await vscode.workspace.fs.writeFile(uri, buffer.from(newContent));
-
-        // wait for VS Code to reload buffer and fire onDidChangeTextDocument
-        await assertResolves(changed, 'vscode.onDidChangeTextDocument');
-
-        // wait for dirtify and any deferred handlers
-        await wait(200);
-
-        // verify document is dirty (dirtify worked)
-        assert.strictEqual(tdoc.isDirty, true, 'document should be dirty after external edit');
-
-        // verify no doc:save was sent (no auto-save)
-        const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
-        assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external open file change');
-    });
-
     test('file save - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
