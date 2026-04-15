@@ -192,6 +192,7 @@ class Messenger extends EventEmitter<EventMap> {
         // reset backoff on successful auth
         this._reconnectAttempt = 0;
         this._lastPong = Date.now();
+        this._pings.length = 0;
 
         // reset keep alive
         if (this._alive) {
