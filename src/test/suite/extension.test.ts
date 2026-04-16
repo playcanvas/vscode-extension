@@ -1153,6 +1153,46 @@ suite('extension', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external closed file change');
     });
 
+    test('file change - open external dirties document', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'external_open_dirty.js', content: '// SAMPLE CONTENT' });
+        assert.ok(asset, 'asset should be created');
+        const document = documents.get(asset.uniqueId);
+        assert.ok(document, 'document should exist');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+        doc.submitOp.resetHistory();
+
+        const newContent = `// OPEN EXTERNAL\n${document}`;
+        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [[3, 'OPEN EXTERNAL\n// ']]);
+        const dirtied = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() !== uri.toString()) {
+                    return;
+                }
+                if (tdoc.isDirty && tdoc.getText() === newContent) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+
+        await vscode.workspace.fs.writeFile(uri, buffer.from(newContent));
+
+        await assertResolves(updated, 'sharedb.op');
+        await assertResolves(dirtied, 'document dirty after external open change');
+
+        assert.strictEqual(doc.submitOp.callCount, 1, 'should submit one op for external open file change');
+        assert.strictEqual(tdoc.isDirty, true, 'document should be dirty after external open file change');
+    });
+
     test('file save - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
