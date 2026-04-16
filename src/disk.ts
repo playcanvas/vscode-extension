@@ -585,7 +585,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         await this._subscribed(uri, path, file.doc.text, file.dirty);
     }
 
-    private _dirtify(doc: vscode.TextDocument) {
+    private _dirty(doc: vscode.TextDocument) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
@@ -617,7 +617,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         expected.substring(prefix, expected.length - suffix)
                     );
                     if (!(await vscode.workspace.applyEdit(edit))) {
-                        this._log.warn(`dirtify applyEdit failed for ${doc.uri}`);
+                        this._log.warn(`dirty applyEdit failed for ${doc.uri}`);
                     }
                 } else {
                     // content matches -- replace first char with itself to mark dirty without visible change
@@ -628,8 +628,36 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             });
             this._locks.delete(`${doc.uri}`);
 
-            this._log.debug(`dirtify ${doc.uri}`);
+            this._log.debug(`dirty ${doc.uri}`);
         });
+    }
+
+    private _dirtyReload(document: vscode.TextDocument, text: string) {
+        this._diskHash.set(document.uri.path, hash(text));
+
+        // avoid touching eol chars
+        const raw = document.getText();
+        const i = raw.search(/[^\r\n]/);
+        if (i === -1) {
+            return;
+        }
+
+        const key = `${document.uri}`;
+        const ch = raw.charAt(i);
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(document.uri, new vscode.Range(document.positionAt(i), document.positionAt(i + 1)), ch);
+
+        // set lock to prevent echo and discard from _update
+        this._locks.add(key);
+        void Promise.resolve(vscode.workspace.applyEdit(edit))
+            .then((applied) => {
+                if (!applied) {
+                    this._log.warn(`dirty reload applyEdit failed for ${document.uri}`);
+                }
+            })
+            .finally(() => {
+                this._locks.delete(key);
+            });
     }
 
     private _watchEvents(folderUri: vscode.Uri) {
@@ -817,7 +845,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._opened.add(open.uri.path);
             this._undos.set(open.uri.path, new UndoManager());
             this._events.emit('asset:doc:open', path);
-            this._dirtify(open);
+            this._dirty(open);
         }
         const onopen = vscode.workspace.onDidOpenTextDocument((document) => {
             if (!uriStartsWith(document.uri, folderUri)) {
@@ -828,7 +856,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._undos.set(document.uri.path, new UndoManager());
             this._diskHash.set(document.uri.path, hash(norm(document.getText())));
             this._events.emit('asset:doc:open', path);
-            this._dirtify(document);
+            this._dirty(document);
         });
         const onclose = vscode.workspace.onDidCloseTextDocument((document) => {
             if (!uriStartsWith(document.uri, folderUri)) {
@@ -920,7 +948,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._events.emit('asset:file:dirty', path, true);
             }
 
-            this._log.debug(`document.change ${document.uri.path} ${ops.map((o) => stat(o)).join(' ')}`);
+            // trigger VSCode dirty indicator if externally changed
+            const external = !reason && ops.length > 0 && !document.isDirty;
+            if (external) {
+                this._dirtyReload(document, text);
+            }
+
+            this._log.debug(
+                `document.change ${document.uri.path} ${ops.map((o) => stat(o)).join(' ')} external=${external}`
+            );
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
             const { document } = e;
@@ -1097,7 +1133,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                                 (d) => d.uri.path === op.uri.path
                                             );
                                             if (doc) {
-                                                this._dirtify(doc);
+                                                this._dirty(doc);
                                             }
                                         }
                                         return;
@@ -1170,7 +1206,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                             (d) => d.uri.path === op.uri.path
                                         );
                                         if (doc) {
-                                            this._dirtify(doc);
+                                            this._dirty(doc);
                                         }
                                     }
 
