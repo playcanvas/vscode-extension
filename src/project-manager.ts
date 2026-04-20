@@ -393,6 +393,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return false;
     }
 
+    private _drainSaves(uniqueId: number, path: string) {
+        if (!this._savePending.has(uniqueId)) {
+            return;
+        }
+        this._savePending.delete(uniqueId);
+        this.save(path);
+    }
+
     private _watchSharedb() {
         const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
             if (!this._assets.has(uniqueId)) {
@@ -417,7 +425,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // mark as clean (sharedb content now synced with S3)
             file.dirty = false;
             this._events.emit('asset:file:save', path);
-            this._drainSavePending(uniqueId, path);
+            this._drainSaves(uniqueId, path);
         });
         return () => {
             this._sharedb.off('doc:save', docSaveHandle);
@@ -1142,20 +1150,12 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             if (!file.dirty) {
                 this._saveInflight.delete(file.uniqueId);
                 this._events.emit('asset:file:save', path);
-                this._drainSavePending(file.uniqueId, path);
+                this._drainSaves(file.uniqueId, path);
                 return;
             }
             this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
             this._log.debug(`saved file ${path}`);
         });
-    }
-
-    private _drainSavePending(uniqueId: number, path: string) {
-        if (!this._savePending.has(uniqueId)) {
-            return;
-        }
-        this._savePending.delete(uniqueId);
-        this.save(path);
     }
 
     path(assetId: number) {
