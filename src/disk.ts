@@ -18,6 +18,9 @@ import { signal } from './utils/signal';
 import { delta, diff, norm, stat, sharedb2vscode, vscode2sharedb } from './utils/text';
 import { parsePath, relativePath, uriStartsWith, fileExists, tryCatch, hash } from './utils/utils';
 
+const FETCH_CONCURRENCY = 16;
+const WRITE_CONCURRENCY = 16;
+
 const readDirRecursive = async (uri: vscode.Uri) => {
     const entries = await vscode.workspace.fs.readDirectory(uri);
     const result: vscode.Uri[] = [];
@@ -54,10 +57,6 @@ const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder' | un
     }
     return content;
 };
-
-const FETCH_CONCURRENCY = 16;
-
-const WRITE_CONCURRENCY = 16;
 
 // Helper function for path matching (checks if paths are related - ancestor/descendant)
 const pathsRelated = (path1: string, path2: string): boolean => {
