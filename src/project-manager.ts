@@ -269,6 +269,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
         });
 
+        // sharedb silently swapped doc.data (rollback/refetch) — reconcile buffer
+        otdoc.on('reload', () => {
+            const path = this._assetPath(uniqueId);
+            const asset = this._assets.get(uniqueId);
+            const dirty = asset?.file?.hash !== hash(otdoc.text);
+            file.dirty = dirty;
+            this._events.emit('asset:file:subscribed', path, otdoc.text, dirty);
+        });
+
         // emit file created event with OTDocument content for disk
         this._events.emit('asset:file:create', path, 'file', buffer.from(otdoc.text));
 
@@ -1212,6 +1221,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             if (!d) {
                 this._events.emit('asset:file:save', p);
             }
+        });
+
+        // sharedb silently swapped doc.data (rollback/refetch) — reconcile buffer
+        otdoc.on('reload', () => {
+            const p = this._assetPath(uniqueId);
+            const a = this._assets.get(uniqueId);
+            const d = a?.file?.hash !== hash(otdoc.text);
+            promoted.dirty = d;
+            this._events.emit('asset:file:subscribed', p, otdoc.text, d);
         });
 
         this._events.emit('asset:file:subscribed', current, otdoc.text, dirty);

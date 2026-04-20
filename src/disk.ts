@@ -501,6 +501,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private async _subscribed(uri: vscode.Uri, path: string, content: string, dirty: boolean) {
+        // baseline and undo inverses reference pre-reload OT history; drop both
+        // so _update falls back to the safe fullUserOp path and undo can't
+        // resurrect content that no longer exists on the server. no-op on
+        // initial subscribe (both maps are empty then).
+        this._bufferState.delete(uri.path);
+        this._undos.get(uri.path)?.clear();
+
         if (this._opened.has(uri.path)) {
             // reconcile buffer with live ShareDB doc after subscribe
             await this._writeMutex.atomic([`${uri}`], async () => {

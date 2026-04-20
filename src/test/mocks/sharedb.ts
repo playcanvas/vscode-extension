@@ -162,6 +162,9 @@ class MockDoc extends Doc {
 
     submitOp: sinon.SinonSpy<[op: unknown, options?: { source: string }], void>;
 
+    // simulates sharedb's ingestSnapshot: replaces data wholesale and emits 'load'
+    reload!: (data: unknown) => void;
+
     constructor(sandbox: sinon.SinonSandbox, type: string, key: string) {
         super();
         switch (type) {
@@ -188,6 +191,10 @@ class MockDoc extends Doc {
             events.off(type, listener);
             return this;
         });
+        this.reload = (data: unknown) => {
+            this.data = data;
+            events.emit('load');
+        };
         this.destroy = sandbox.spy(() => {
             return;
         });

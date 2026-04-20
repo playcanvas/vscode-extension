@@ -10,6 +10,7 @@ const SOURCE = ShareDb.SOURCE;
 
 type OTDocumentEvents = {
     op: [ShareDbTextOp, string];
+    reload: [];
 };
 
 class OTDocument extends EventEmitter<OTDocumentEvents> {
@@ -29,6 +30,19 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
             const prev = this._text;
             this._text = ottext.apply(this._text, op) as string;
             this.emit('op', op, prev);
+        });
+
+        // sharedb emits 'load' on ingestSnapshot (hard rollback, version mismatch,
+        // or stale reconnect). doc.data is replaced without any 'op' events, so
+        // resync _text here or downstream reconcilers will drift.
+        doc.on('load', () => {
+            // server nullifies inactive doc data — skip; re-subscribe will repopulate
+            const next = doc.data as string | null;
+            if (next == null || next === this._text) {
+                return;
+            }
+            this._text = next;
+            this.emit('reload');
         });
     }
 
