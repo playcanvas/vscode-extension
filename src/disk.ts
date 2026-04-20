@@ -57,6 +57,8 @@ const fileContent = async (uri: vscode.Uri, type: Promise<'file' | 'folder' | un
 
 const FETCH_CONCURRENCY = 16;
 
+const WRITE_CONCURRENCY = 16;
+
 // Helper function for path matching (checks if paths are related - ancestor/descendant)
 const pathsRelated = (path1: string, path2: string): boolean => {
     if (path1 === path2) {
@@ -1424,19 +1426,34 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
         }
 
-        // write files to disk
-        for (const [path, file] of ordered) {
-            const uri = vscode.Uri.joinPath(folderUri, path);
-            let content: Uint8Array;
-            if (file.type === 'file') {
-                content = buffer.from(file.doc.text);
-            } else if (file.type === 'stub') {
-                content = fetched.get(file.uniqueId) ?? new Uint8Array();
-            } else {
-                content = new Uint8Array();
+        // write files to disk — folders first (parents before descendants), then files in parallel batches
+        const writeBatched = async (entries: typeof ordered, type: 'file' | 'folder') => {
+            for (let i = 0; i < entries.length; i += WRITE_CONCURRENCY) {
+                const batch = entries.slice(i, i + WRITE_CONCURRENCY);
+                await Promise.all(
+                    batch.map(([path, file]) => {
+                        const uri = vscode.Uri.joinPath(folderUri, path);
+                        let content: Uint8Array;
+                        if (file.type === 'file') {
+                            content = buffer.from(file.doc.text);
+                        } else if (file.type === 'stub') {
+                            content = fetched.get(file.uniqueId) ?? new Uint8Array();
+                        } else {
+                            content = new Uint8Array();
+                        }
+                        return this._create(uri, type, content);
+                    })
+                );
             }
-            await this._create(uri, file.type === 'folder' ? 'folder' : 'file', content);
-        }
+        };
+        await writeBatched(
+            ordered.filter(([, f]) => f.type === 'folder'),
+            'folder'
+        );
+        await writeBatched(
+            ordered.filter(([, f]) => f.type !== 'folder'),
+            'file'
+        );
 
         // parse ignore file (after disk write so stub content is available)
         const ignoreFile = projectManager.files.get(Disk.IGNORE_FILE);
