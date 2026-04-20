@@ -59,6 +59,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _saveRetries = new Map<number, { timeout?: NodeJS.Timeout; attempt: number }>();
 
+    private _saveInflight = new Set<number>();
+
+    private _savePending = new Set<number>();
+
     private _events: EventEmitter<EventMap>;
 
     private _sharedb: ShareDb;
@@ -389,11 +393,24 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return false;
     }
 
+    private _drainSaves(uniqueId: number, path: string) {
+        if (!this._savePending.has(uniqueId)) {
+            return;
+        }
+        this._savePending.delete(uniqueId);
+        this.save(path);
+    }
+
     private _watchSharedb() {
         const docSaveHandle = this._sharedb.on('doc:save', (state, uniqueId) => {
             if (!this._assets.has(uniqueId)) {
                 return;
             }
+
+            // clear in-flight on any ack; retry path (_verifySave) re-sends
+            // sendRaw directly without re-entering save(), so its ack will
+            // arrive with an empty _saveInflight — harmless
+            this._saveInflight.delete(uniqueId);
 
             if (!this._verifySave(state, uniqueId)) {
                 return;
@@ -408,6 +425,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // mark as clean (sharedb content now synced with S3)
             file.dirty = false;
             this._events.emit('asset:file:save', path);
+            this._drainSaves(uniqueId, path);
         });
         return () => {
             this._sharedb.off('doc:save', docSaveHandle);
@@ -1114,10 +1132,27 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
+        // coalesce: if a save is already in-flight, mark pending and let the
+        // ack drive the follow-up (Code Editor save.ts:159-162)
+        if (this._saveInflight.has(file.uniqueId)) {
+            this._savePending.add(file.uniqueId);
+            return;
+        }
+        this._saveInflight.add(file.uniqueId);
+
         // wait for pending ops to be acknowledged before saving,
         // matching the Code Editor's behavior (save.ts:144-150).
         // prevents saving stale content while ops are in-flight.
         file.doc.whenNothingPending(() => {
+            // re-check after pending drains: a remote op may have brought the
+            // doc back in line with S3 (file.dirty is kept live in the 'op' and
+            // 'reload' handlers), in which case skip the server round-trip
+            if (!file.dirty) {
+                this._saveInflight.delete(file.uniqueId);
+                this._events.emit('asset:file:save', path);
+                this._drainSaves(file.uniqueId, path);
+                return;
+            }
             this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
             this._log.debug(`saved file ${path}`);
         });
@@ -1434,6 +1469,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
             this._saveRetries.forEach(({ timeout }) => clearTimeout(timeout));
             this._saveRetries.clear();
+            this._saveInflight.clear();
+            this._savePending.clear();
 
             this._files.clear();
             this._assets.clear();
