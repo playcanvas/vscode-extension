@@ -951,6 +951,62 @@ suite('extension', () => {
         assert.strictEqual(tdoc.getText(), newDocument, 'text document content should match');
     });
 
+    test('file change - sharedb reload resyncs buffer', async () => {
+        // sharedb ingestSnapshot (hard rollback / version mismatch / stale resume)
+        // silently replaces doc.data and emits 'load' without any 'op' events.
+        // the extension must resync buffer + canonical text, otherwise subsequent
+        // ops apply to stale state and land chunks of content at the wrong offset
+        // (observed symptom: random code appearing at the top of large .js files).
+
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'reload_resync.js', content: '// OLD CONTENT\n' });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+
+        // wait for buffer to reconcile to the new data
+        const changed = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString()) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+
+        // simulate sharedb replacing doc.data wholesale (ingestSnapshot)
+        const replaced = '// NEW HEADER FROM SERVER\n// OLD CONTENT\n';
+        doc.reload(replaced);
+        documents.set(asset.uniqueId, replaced);
+
+        await assertResolves(changed, 'vscode.onDidChangeTextDocument');
+        assert.strictEqual(tdoc.getText(), replaced, 'buffer should match reloaded snapshot');
+
+        // subsequent remote op must apply at the correct offset in the NEW state.
+        // pre-fix: op was applied against stale _text, so the inserted text landed
+        // at the wrong offset.
+        const op = assertOpsPromise(`documents:${asset.uniqueId}`, [[replaced.length, '// TAIL\n']]);
+        const changedAgain = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString()) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+        doc.submitOp([replaced.length, '// TAIL\n'], { source: 'remote' });
+        await assertResolves(op, 'sharedb.op');
+        await assertResolves(changedAgain, 'vscode.onDidChangeTextDocument');
+        assert.strictEqual(tdoc.getText(), `${replaced}// TAIL\n`, 'op should append, not land at the top');
+    });
+
     test('file change - closed remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
