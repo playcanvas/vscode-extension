@@ -3,7 +3,7 @@ import { type as ottext } from 'ot-text';
 import * as vscode from 'vscode';
 
 import { NAME } from './config';
-import { simpleNotification } from './notification';
+import { progressNotification } from './notification';
 import type { ProjectManager } from './project-manager';
 import type { EventMap } from './typings/event-map';
 import type { ShareDbTextOp } from './typings/sharedb';
@@ -1385,9 +1385,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // drain stale cleanup from a previously failed link
         await super.unlink();
 
-        // read files to disk
-        const updatingDiskDone = await simpleNotification('Updating Disk');
-
         // sort into hierarchy
         // TODO: store as tree instead of flat map and sorting
         const ordered = Array.from(projectManager.files.entries()).sort((a, b) => {
@@ -1410,6 +1407,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return 0;
         });
 
+        // show progress notification early so users see feedback during REST prefetch
+        const folders = ordered.filter(([, f]) => f.type === 'folder');
+        const files = ordered.filter(([, f]) => f.type !== 'folder');
+        const updatingDiskNext = await progressNotification('Updating Disk', folders.length + files.length);
+
         // prefetch REST content for stubs (concurrent with limit)
         const stubs = ordered.filter(([, f]) => f.type === 'stub');
         const fetched = new Map<number, Uint8Array>();
@@ -1431,7 +1433,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             for (let i = 0; i < entries.length; i += WRITE_CONCURRENCY) {
                 const batch = entries.slice(i, i + WRITE_CONCURRENCY);
                 await Promise.all(
-                    batch.map(([path, file]) => {
+                    batch.map(async ([path, file]) => {
                         const uri = vscode.Uri.joinPath(folderUri, path);
                         let content: Uint8Array;
                         if (file.type === 'file') {
@@ -1441,19 +1443,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         } else {
                             content = new Uint8Array();
                         }
-                        return this._create(uri, type, content);
+                        await this._create(uri, type, content);
+                        updatingDiskNext();
                     })
                 );
             }
         };
-        await writeBatched(
-            ordered.filter(([, f]) => f.type === 'folder'),
-            'folder'
-        );
-        await writeBatched(
-            ordered.filter(([, f]) => f.type !== 'folder'),
-            'file'
-        );
+        await writeBatched(folders, 'folder');
+        await writeBatched(files, 'file');
 
         // parse ignore file (after disk write so stub content is available)
         const ignoreFile = projectManager.files.get(Disk.IGNORE_FILE);
@@ -1507,9 +1504,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         this._folderUri = folderUri;
         this._projectManager = projectManager;
-
-        // notify completion
-        updatingDiskDone();
 
         this._log.info(`linked to ${folderUri.toString()}`);
     }
