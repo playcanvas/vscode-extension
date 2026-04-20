@@ -755,6 +755,21 @@ export const activate = async (context: vscode.ExtensionContext) => {
             })
         );
 
+        // desync toast — fires once per false→true transition of the signal.
+        // signal resets to false on project unlink.
+        effect(() => {
+            if (!projectManager.desync.get()) {
+                return;
+            }
+            void vscode.window
+                .showWarningMessage('PlayCanvas project is out of sync. Reload to recover.', 'Reload project')
+                .then((choice) => {
+                    if (choice === 'Reload project') {
+                        void vscode.commands.executeCommand(`${NAME}.reloadProject`);
+                    }
+                });
+        });
+
         // disable autosave for playcanvas workspace — autosave interferes
         // with realtime collaborative editing
         const disableAutosave = () => {
