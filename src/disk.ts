@@ -18,8 +18,19 @@ import { signal } from './utils/signal';
 import { delta, diff, norm, stat, sharedb2vscode, vscode2sharedb } from './utils/text';
 import { parsePath, relativePath, uriStartsWith, fileExists, tryCatch, hash } from './utils/utils';
 
-const FETCH_CONCURRENCY = 16;
+const FETCH_CONCURRENCY = 8;
 const WRITE_CONCURRENCY = 16;
+
+const pool = async <T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) => {
+    let i = 0;
+    const next = async () => {
+        while (i < items.length) {
+            const idx = i++;
+            await worker(items[idx]);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, next));
+};
 
 const readDirRecursive = async (uri: vscode.Uri) => {
     const entries = await vscode.workspace.fs.readDirectory(uri);
@@ -1411,45 +1422,31 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const files = ordered.filter(([, f]) => f.type !== 'folder');
         const updatingDiskNext = await progressNotification('Updating Disk', folders.length + files.length);
 
-        // prefetch REST content for stubs (concurrent with limit)
+        // prefetch REST content for stubs (pooled — continuous worker saturation under concurrency cap)
         const stubs = ordered.filter(([, f]) => f.type === 'stub');
         const fetched = new Map<number, Uint8Array>();
-        for (let i = 0; i < stubs.length; i += FETCH_CONCURRENCY) {
-            const batch = stubs.slice(i, i + FETCH_CONCURRENCY);
-            const results = await Promise.all(
-                batch.map(async ([, f]) => {
-                    const [err, buf] = await tryCatch(projectManager.fetchContent(f.uniqueId));
-                    return [f.uniqueId, err ? new Uint8Array() : buf] as const;
-                })
-            );
-            for (const [id, buf] of results) {
-                fetched.set(id, buf);
-            }
-        }
+        await pool(stubs, FETCH_CONCURRENCY, async ([, f]) => {
+            const [err, buf] = await tryCatch(projectManager.fetchContent(f.uniqueId));
+            fetched.set(f.uniqueId, err ? new Uint8Array() : buf);
+        });
 
-        // write files to disk — folders first (parents before descendants), then files in parallel batches
-        const writeBatched = async (entries: typeof ordered, type: 'file' | 'folder') => {
-            for (let i = 0; i < entries.length; i += WRITE_CONCURRENCY) {
-                const batch = entries.slice(i, i + WRITE_CONCURRENCY);
-                await Promise.all(
-                    batch.map(async ([path, file]) => {
-                        const uri = vscode.Uri.joinPath(folderUri, path);
-                        let content: Uint8Array;
-                        if (file.type === 'file') {
-                            content = buffer.from(file.doc.text);
-                        } else if (file.type === 'stub') {
-                            content = fetched.get(file.uniqueId) ?? new Uint8Array();
-                        } else {
-                            content = new Uint8Array();
-                        }
-                        await this._create(uri, type, content);
-                        updatingDiskNext();
-                    })
-                );
-            }
-        };
-        await writeBatched(folders, 'folder');
-        await writeBatched(files, 'file');
+        // write files to disk — folders first (parents before descendants), then files, via worker pool
+        const writeAll = (entries: typeof ordered, type: 'file' | 'folder') =>
+            pool(entries, WRITE_CONCURRENCY, async ([path, file]) => {
+                const uri = vscode.Uri.joinPath(folderUri, path);
+                let content: Uint8Array;
+                if (file.type === 'file') {
+                    content = buffer.from(file.doc.text);
+                } else if (file.type === 'stub') {
+                    content = fetched.get(file.uniqueId) ?? new Uint8Array();
+                } else {
+                    content = new Uint8Array();
+                }
+                await this._create(uri, type, content);
+                updatingDiskNext();
+            });
+        await writeAll(folders, 'folder');
+        await writeAll(files, 'file');
 
         // parse ignore file (after disk write so stub content is available)
         const ignoreFile = projectManager.files.get(Disk.IGNORE_FILE);
