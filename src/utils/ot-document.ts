@@ -36,8 +36,9 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
         // or stale reconnect). doc.data is replaced without any 'op' events, so
         // resync _text here or downstream reconcilers will drift.
         doc.on('load', () => {
-            const next = doc.data as string;
-            if (next === this._text) {
+            // server nullifies inactive doc data — skip; re-subscribe will repopulate
+            const next = doc.data as string | null;
+            if (next == null || next === this._text) {
                 return;
             }
             this._text = next;
