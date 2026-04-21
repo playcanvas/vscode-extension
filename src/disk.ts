@@ -654,6 +654,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _dirtyReload(document: vscode.TextDocument, text: string) {
         this._diskHash.set(document.uri.path, hash(text));
 
+        // keep _bufferState fresh so the next _update doesn't re-submit the external content
+        this._bufferState.set(document.uri.path, text);
+
         // avoid touching eol chars
         const raw = document.getText();
         const i = raw.search(/[^\r\n]/);
