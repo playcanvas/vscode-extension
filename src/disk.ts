@@ -601,6 +601,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const key = `${uri}`;
 
             if (await fileExists(uri)) {
+                // check local echo by comparing content (stronger than mtime or existence check)
                 const existing = await vscode.workspace.fs.readFile(uri);
                 if (buffer.cmp(existing, buf)) {
                     this._diskHash.set(uri.path, hash(buf));
@@ -609,6 +610,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     }
                     return;
                 }
+
+                // check for divergent edits since last known state (e.g. git checkout while closed)
+                // if so, preserve on disk and push up instead of clobbering
                 const known = this._diskHash.get(uri.path);
                 const observed = hash(existing);
                 if (known === undefined || known !== observed) {
