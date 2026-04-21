@@ -255,6 +255,26 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 // for files, check content
                 const existingContent = await vscode.workspace.fs.readFile(uri);
                 if (buffer.cmp(existingContent, content)) {
+                    this._diskHash.set(uri.path, hash(content));
+                    return;
+                }
+
+                // disk differs from server. if it also differs from our last
+                // known write, treat as a local edit (e.g. git checkout while
+                // closed) and push it upstream instead of clobbering.
+                const known = this._diskHash.get(uri.path);
+                const observed = hash(existingContent);
+                if (known === undefined || known !== observed) {
+                    this._diskHash.set(uri.path, observed);
+                    const path = this._folderUri ? relativePath(uri, this._folderUri) : undefined;
+
+                    // _projectManager is unset during link's writeAll (assigned at end of link).
+                    // the push is swallowed there — fine: disk is preserved and the next subscribe
+                    // or watcher event will pick up the divergence and push it then.
+                    if (path && this._projectManager) {
+                        void this._projectManager.write(path, existingContent);
+                    }
+                    this._log.info(`create.local.preserved ${uri}`);
                     return;
                 }
             }
@@ -286,8 +306,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 case 'file': {
                     // clear any pending debounced writes and write immediately
                     this._debouncer.cancel(`${uri}`);
-                    this._echo.set(`${uri}:change`, hash(content));
+                    const h = hash(content);
+                    this._echo.set(`${uri}:change`, h);
                     await vscode.workspace.fs.writeFile(uri, content);
+                    this._diskHash.set(uri.path, h);
                     break;
                 }
                 case 'folder': {
@@ -537,14 +559,21 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const doc = await vscode.workspace.openTextDocument(uri);
                     const bufferText = norm(doc.getText());
 
-                    if (doc.isDirty) {
-                        // buffer has user edits made before subscribe — submit to ShareDB
+                    // clean buffer whose hash drifted = external reload (e.g. git checkout); push up, don't clobber
+                    const known = this._diskHash.get(uri.path);
+                    const externalReload = !doc.isDirty && known !== undefined && hash(bufferText) !== known;
+
+                    if (doc.isDirty || externalReload) {
+                        // buffer has user/external edits not yet in OT — submit to ShareDB
                         const userOp = delta(file.doc.text, bufferText);
                         if (userOp) {
                             file.doc.apply(userOp);
                             file.dirty = true;
                             this._events.emit('asset:file:dirty', path, true);
-                            this._log.info(`subscribe.recovered ${uri}`);
+                            this._diskHash.set(uri.path, hash(bufferText));
+                            this._log.info(
+                                `${externalReload ? 'subscribe.external.preserved' : 'subscribe.recovered'} ${uri}`
+                            );
                         }
                     } else if (file.doc.text !== bufferText) {
                         // buffer has stale disk content — apply live ShareDB doc to buffer
@@ -567,14 +596,49 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._locks.delete(`${uri}`);
             });
         } else {
-            // sync to disk for closed files
+            // sync to disk for closed files — guard against clobbering local edits
             const buf = buffer.from(norm(content));
             const key = `${uri}`;
+
+            if (await fileExists(uri)) {
+                // check local echo by comparing content (stronger than mtime or existence check)
+                const existing = await vscode.workspace.fs.readFile(uri);
+                if (buffer.cmp(existing, buf)) {
+                    this._diskHash.set(uri.path, hash(buf));
+                    if (dirty) {
+                        this._events.emit('asset:file:dirty', path, true);
+                    }
+                    return;
+                }
+
+                // check for divergent edits since last known state (e.g. git checkout while closed)
+                // if so, preserve on disk and push up instead of clobbering
+                const known = this._diskHash.get(uri.path);
+                const observed = hash(existing);
+                if (known === undefined || known !== observed) {
+                    this._diskHash.set(uri.path, observed);
+
+                    // _subscribed only fires via the asset:file:subscribed event, whose handler
+                    // is wired in _watchEvents after link completes — so _projectManager is
+                    // guaranteed set here; the check is a null-narrowing formality
+                    if (this._projectManager) {
+                        void this._projectManager.write(path, existing);
+                    }
+                    this._log.info(`subscribe.local.preserved ${uri}`);
+                    if (dirty) {
+                        this._events.emit('asset:file:dirty', path, true);
+                    }
+                    return;
+                }
+            }
+
             this._syncing.add(key);
             void this._debouncer
                 .debounce(key, async () => {
-                    this._echo.set(`${uri}:change`, hash(buf));
+                    const h = hash(buf);
+                    this._echo.set(`${uri}:change`, h);
                     await vscode.workspace.fs.writeFile(uri, buf);
+                    this._diskHash.set(uri.path, h);
                     setTimeout(() => this._syncing.delete(key), 200);
                 })
                 .catch((err) => {
@@ -866,6 +930,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(open.uri, folderUri);
             this._opened.add(open.uri.path);
             this._undos.set(open.uri.path, new UndoManager());
+            if (!this._diskHash.has(open.uri.path)) {
+                this._diskHash.set(open.uri.path, hash(norm(open.getText())));
+            }
             this._events.emit('asset:doc:open', path);
             this._dirty(open);
         }
