@@ -20,6 +20,7 @@ import { pool, parsePath, relativePath, uriStartsWith, fileExists, tryCatch, has
 
 const FETCH_CONCURRENCY = 8;
 const WRITE_CONCURRENCY = 16;
+const SYNC_DELAY = 200;
 
 const readDirRecursive = async (uri: vscode.Uri) => {
     const entries = await vscode.workspace.fs.readDirectory(uri);
@@ -248,19 +249,16 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                // disk differs from server. if it also differs from our last
-                // known write, treat as a local edit (e.g. git checkout while
-                // closed) and push it upstream instead of clobbering.
+                // check if local disk if different and submit delta upstream to preserve edits
                 const known = this._diskHash.get(uri.path);
                 const observed = hash(existingContent);
                 if (known === undefined || known !== observed) {
                     this._diskHash.set(uri.path, observed);
-                    const path = this._folderUri ? relativePath(uri, this._folderUri) : undefined;
 
-                    // _projectManager is unset during link's writeAll (assigned at end of link).
-                    // the push is swallowed there — fine: disk is preserved and the next subscribe
-                    // or watcher event will pick up the divergence and push it then.
-                    if (path && this._projectManager) {
+                    // safe to skip pushing up preserved edits in that case since link's writeAll
+                    // runs before we start watching for file events
+                    if (this._folderUri && this._projectManager) {
+                        const path = relativePath(uri, this._folderUri);
                         void this._projectManager.write(path, existingContent);
                     }
                     this._log.info(`create.local.preserved ${uri}`);
@@ -268,15 +266,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 }
             }
 
-            // ensure parent folder exists on disk
-            // handles race condition where child creation event is processed before parent's disk write completes
             if (!exists) {
+                // ensure parent folder exists on disk
                 const parentUri = vscode.Uri.joinPath(uri, '..');
                 if (!(await fileExists(parentUri))) {
                     const folderUri = this._folderUri;
                     if (!folderUri) {
                         throw this.error.set(() => fail`parent folder does not exist: ${parentUri.path}`);
                     }
+
                     // set echo for all missing ancestors to prevent disk watcher from re-processing
                     let ancestor = parentUri;
                     while (ancestor.path !== folderUri.path && !(await fileExists(ancestor))) {
@@ -344,7 +342,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             }
                             await new Promise((r) => setTimeout(r, 100 * Math.pow(2, attempt - 1)));
                         }
-                        setTimeout(() => this._syncing.delete(key), 200);
+                        setTimeout(() => this._syncing.delete(key), SYNC_DELAY);
                     })
                     .catch((err) => {
                         if (/debounce/.test(err.message)) {
@@ -524,10 +522,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private async _subscribed(uri: vscode.Uri, path: string, content: string, dirty: boolean) {
-        // baseline and undo inverses reference pre-reload OT history; drop both
-        // so _update falls back to the safe fullUserOp path and undo can't
-        // resurrect content that no longer exists on the server. no-op on
-        // initial subscribe (both maps are empty then).
+        // clear buffer state and undo stack as refers to outdated OT document state
         this._bufferState.delete(uri.path);
         this._undos.get(uri.path)?.clear();
 
@@ -628,7 +623,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     this._echo.set(`${uri}:change`, h);
                     await vscode.workspace.fs.writeFile(uri, buf);
                     this._diskHash.set(uri.path, h);
-                    setTimeout(() => this._syncing.delete(key), 200);
+                    setTimeout(() => this._syncing.delete(key), SYNC_DELAY);
                 })
                 .catch((err) => {
                     if (/debounce/.test(err.message)) {
@@ -806,6 +801,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const doc = await vscode.workspace.openTextDocument(uri);
                 const raw = doc.getText();
                 const buf = norm(raw);
+
                 // delta from pre-apply canonical to buffer gives true user divergence
                 const userOp = delta(pre, buf);
                 const bufOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
@@ -996,6 +992,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 if (mgr) {
                     const snap = file.doc.text;
                     const inv = ottext.semanticInvert(snap, op) as ShareDbTextOp;
+
                     // detect whitespace/newline from inserted text in the forward op
                     let ins = '';
                     for (const c of op) {
@@ -1006,6 +1003,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const hasDel = op.some((c) => typeof c === 'object');
                     const ws = !hasDel && /^ +$/.test(ins);
                     const nl = !hasDel && /^\n+$/.test(ins);
+
                     // line number from op offset
                     const off = typeof op[0] === 'number' ? op[0] : 0;
                     let line = 0;
@@ -1262,11 +1260,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                             this._log.trace(`echo.skip.newer ${op.uri}`);
                                             return;
                                         }
+
                                         // skip if hash is the same
                                         if (op.hash === hash(content)) {
                                             this._log.trace(`echo.skip.match ${op.uri}`);
                                             return;
                                         }
+
                                         // skip if content is empty
                                         // FIXME: figure out why content can be empty (maybe from readFile not returning anything)
                                         if (content.length === 0) {
@@ -1575,7 +1575,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._bufferState.clear();
         this._undos.forEach((m) => m.clear());
         this._undos.clear();
-        vscode.commands.executeCommand('setContext', 'playcanvas.active', false);
+        void vscode.commands.executeCommand('setContext', 'playcanvas.active', false);
         this._log.info(`unlinked from ${folderUri.toString()}`);
         return { folderUri, projectManager };
     }
