@@ -24,6 +24,11 @@ import { projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
 const PING_SAMPLE_MS = 60 * 1000;
+const COLORS = {
+    success: '#2ecc71',
+    warning: '#e67e22',
+    error: '#e74c3c'
+};
 
 export const activate = async (context: vscode.ExtensionContext) => {
     // ! defer by 1 tick to allow for tests to stub modules before extension loads
@@ -259,13 +264,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
 
     // connection status bar item
-    const connectionStatusColors = {
-        connected: '#2ecc71',
-        disconnected: '#e74c3c'
-    };
     const connectionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10001);
     context.subscriptions.push(connectionStatusItem);
-    connectionStatusItem.color = connectionStatusColors.disconnected;
+    connectionStatusItem.color = COLORS.error;
     connectionStatusItem.text = `$(primitive-dot) Disconnected`;
     connectionStatusItem.tooltip = 'PlayCanvas Connection';
     connectionStatusItem.show();
@@ -298,7 +299,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     }
     effect(() => {
         const enabled = connected.get();
-        connectionStatusItem.color = enabled ? connectionStatusColors.connected : connectionStatusColors.disconnected;
+        connectionStatusItem.color = enabled ? COLORS.success : COLORS.error;
         if (enabled) {
             const m = messenger.ping.get();
             const r = relay.ping.get();
@@ -322,13 +323,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     context.subscriptions.push(new vscode.Disposable(() => clearInterval(pingSampler)));
 
     // collision status bar item
-    const collisionStatusColors = {
-        none: '',
-        found: '#e67e22'
-    };
     const collisionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -9999);
     context.subscriptions.push(collisionStatusItem);
-    collisionStatusItem.color = collisionStatusColors.none;
+    collisionStatusItem.color = '';
     collisionStatusItem.command = `${NAME}.showPathCollisions`;
     collisionStatusItem.text = `$(check) Path Collisions: 0`;
     collisionStatusItem.tooltip = 'PlayCanvas Asset Path Collisions';
@@ -337,7 +334,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // desync status bar item — hidden until project.desync flips true
     const desyncStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10000);
     context.subscriptions.push(desyncStatusItem);
-    desyncStatusItem.color = '#e67e22';
+    desyncStatusItem.color = COLORS.warning;
     desyncStatusItem.command = `${NAME}.reloadProject`;
     desyncStatusItem.text = '$(warning) Out of Sync';
     desyncStatusItem.tooltip = 'PlayCanvas project is out of sync — click to reload';
@@ -718,7 +715,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         });
         effect(() => {
             const count = projectManager.collisions.count.get();
-            collisionStatusItem.color = count > 0 ? collisionStatusColors.found : collisionStatusColors.none;
+            collisionStatusItem.color = count > 0 ? COLORS.warning : '';
             collisionStatusItem.text = `$(${count > 0 ? 'warning' : 'check'}) Path Collisions: ${count}`;
         });
 
