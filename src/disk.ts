@@ -328,14 +328,52 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const key = `${uri}`;
                 this._syncing.add(key);
 
+                // disk may have diverged from pre-op canonical while the watcher was blind
+                // (unlink gap, .pcignore rule, watcher miss). detect via _diskHash and merge
+                // the remote op with local content OT-style instead of clobbering.
+                let next = buffer.from(snapshot);
+                const [, existing] = await tryCatch(
+                    Promise.resolve(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>)
+                );
+                if (existing && this._projectManager && this._folderUri) {
+                    const known = this._diskHash.get(uri.path);
+                    const observed = hash(existing);
+                    const diskText = norm(buffer.toString(existing));
+                    if (known !== undefined && known !== observed && diskText !== snapshot) {
+                        const path = relativePath(uri, this._folderUri);
+                        const file = this._projectManager.files.get(path);
+                        const userOp = file?.type === 'file' ? delta(prev, diskText) : undefined;
+                        if (userOp && file?.type === 'file') {
+                            // transform local delta against remote op, then against any
+                            // advancement of file.doc from ops that queued while we awaited
+                            // readFile (keeps upstream valid in current doc-space)
+                            const postOp = ottext.transform(userOp, op, 'left') as ShareDbTextOp;
+                            const adv = delta(content, file.doc.text);
+                            const upstream = adv ? (ottext.transform(postOp, adv, 'left') as ShareDbTextOp) : postOp;
+                            file.doc.apply(upstream);
+
+                            // file.doc.text now holds the merged state — write it so disk
+                            // converges with doc (accounts for adv if the race fired)
+                            next = buffer.from(file.doc.text);
+
+                            const wasDirty = file.dirty;
+                            file.dirty = true;
+                            if (!wasDirty) {
+                                this._events.emit('asset:file:dirty', path, true);
+                            }
+                            this._log.info(`update.local.preserved ${uri} ${stat(op)}`);
+                        }
+                    }
+                }
+
                 // debounce rapid changes to avoid overwhelming disk with writes
-                const content = buffer.from(snapshot);
                 void this._debouncer
                     .debounce(key, async () => {
-                        this._echo.set(`${uri}:change`, hash(content));
+                        const h = hash(next);
+                        this._echo.set(`${uri}:change`, h);
                         let attempt = 0;
                         while (true) {
-                            const [err] = await tryCatch(Promise.resolve(vscode.workspace.fs.writeFile(uri, content)));
+                            const [err] = await tryCatch(Promise.resolve(vscode.workspace.fs.writeFile(uri, next)));
                             if (!err) {
                                 break;
                             }
@@ -344,6 +382,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             }
                             await new Promise((r) => setTimeout(r, 100 * Math.pow(2, attempt - 1)));
                         }
+                        this._diskHash.set(uri.path, h);
                         setTimeout(() => this._syncing.delete(key), SYNC_DELAY);
                     })
                     .catch((err) => {
