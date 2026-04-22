@@ -12,7 +12,7 @@ import * as sharedbModule from '../../connections/sharedb';
 import * as uriHandlerModule from '../../handlers/uri-handler';
 import type { Asset } from '../../typings/models';
 import * as buffer from '../../utils/buffer';
-import { hash, wait } from '../../utils/utils';
+import { hash, tryCatch, wait } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
 import { assets, documents, branches, projectSettings, project, user, uniqueId } from '../mocks/models';
@@ -841,11 +841,7 @@ suite('extension', () => {
 
         // build a nested source structure outside the workspace so the watcher doesn't see it
         const tmpBase = vscode.Uri.file('/tmp/claude/race_test_src');
-        try {
-            await vscode.workspace.fs.delete(tmpBase, { recursive: true });
-        } catch {
-            // ignore if doesn't exist
-        }
+        await tryCatch(vscode.workspace.fs.delete(tmpBase, { recursive: true }) as Promise<void>);
         const srcSub = vscode.Uri.joinPath(tmpBase, 'race_sub');
         await vscode.workspace.fs.createDirectory(srcSub);
         await vscode.workspace.fs.writeFile(
@@ -1925,23 +1921,11 @@ suite('extension', () => {
         );
 
         // .git/ and its contents must survive the cleanup loop
-        let gitExists = false;
-        try {
-            await vscode.workspace.fs.stat(gitDir);
-            gitExists = true;
-        } catch {
-            gitExists = false;
-        }
-        assert.ok(gitExists, '.git/ should still exist after re-link');
+        const [gitErr] = await tryCatch(vscode.workspace.fs.stat(gitDir) as Promise<vscode.FileStat>);
+        assert.ok(!gitErr, '.git/ should still exist after re-link');
 
-        let headExists = false;
-        try {
-            await vscode.workspace.fs.stat(headUri);
-            headExists = true;
-        } catch {
-            headExists = false;
-        }
-        assert.ok(headExists, '.git/HEAD should still exist after re-link');
+        const [headErr] = await tryCatch(vscode.workspace.fs.stat(headUri) as Promise<vscode.FileStat>);
+        assert.ok(!headErr, '.git/HEAD should still exist after re-link');
     });
 
     test('vcs exclusion - inbound .git/index not written', async () => {
@@ -1998,14 +1982,8 @@ suite('extension', () => {
 
         // .git/index must not be written to disk by the extension
         const gitIndexUri = vscode.Uri.joinPath(folderUri, '.git', 'index');
-        let indexExists = false;
-        try {
-            await vscode.workspace.fs.stat(gitIndexUri);
-            indexExists = true;
-        } catch {
-            indexExists = false;
-        }
-        assert.strictEqual(indexExists, false, '.git/index should not be written to disk');
+        const [indexErr] = await tryCatch(vscode.workspace.fs.stat(gitIndexUri) as Promise<vscode.FileStat>);
+        assert.ok(indexErr, '.git/index should not be written to disk');
     });
 
     test('collision - file path remote to local', async () => {
@@ -2172,14 +2150,8 @@ suite('extension', () => {
         // child is skipped due to parent collision (not tracked as collision itself)
         // verify child file does not exist on disk
         const childUri = vscode.Uri.joinPath(folderUri, folderName, 'child.js');
-        let childExists = false;
-        try {
-            await vscode.workspace.fs.stat(childUri);
-            childExists = true;
-        } catch {
-            childExists = false;
-        }
-        assert.strictEqual(childExists, false, 'child file should not exist due to parent collision');
+        const [childErr] = await tryCatch(vscode.workspace.fs.stat(childUri) as Promise<vscode.FileStat>);
+        assert.ok(childErr, 'child file should not exist due to parent collision');
     });
 
     test('collision - rename remote to local', async () => {
