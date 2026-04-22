@@ -7,7 +7,7 @@ import type { ShareDbTextOp } from '../typings/sharedb';
 import { EventEmitter } from './event-emitter';
 
 const SOURCE = ShareDb.SOURCE;
-const PENDING_TIMEOUT_MS = 5000;
+const PENDING_TIMEOUT_MS = 30 * 1000; // max potential timeout
 
 type OTDocumentEvents = {
     op: [ShareDbTextOp, string];
@@ -20,7 +20,7 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
 
     private _doc: Doc;
 
-    private _watchdog: NodeJS.Timeout | null = null;
+    private _timers = new Set<NodeJS.Timeout>();
 
     private _stuck = false;
 
@@ -51,19 +51,18 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
             this.emit('reload');
         });
 
-        // submitted ops acknowledged — cancel any armed stuck timer.
+        // ops drained — allow future stalls to be re-detected. project-level
+        // desync stays sticky until unlink, so this only re-arms the doc-local
+        // one-shot guard.
         doc.on('no write pending', () => {
-            if (this._watchdog) {
-                clearTimeout(this._watchdog);
-                this._watchdog = null;
-            }
+            this._stuck = false;
         });
 
         doc.on('destroy', () => {
-            if (this._watchdog) {
-                clearTimeout(this._watchdog);
-                this._watchdog = null;
+            for (const t of this._timers) {
+                clearTimeout(t);
             }
+            this._timers.clear();
         });
     }
 
@@ -75,21 +74,32 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
         // ot-text checkOp rejects skip=0, so strip leading zero
         const clean = (typeof op[0] === 'number' && op[0] === 0 ? op.slice(1) : op) as ShareDbTextOp;
         this._text = ottext.apply(this._text, clean) as string;
-        this._doc.submitOp(clean, { source: SOURCE });
 
-        // arm a stuck timer on the first apply after a drain. if the timer
-        // fires while ops remain pending, surface stuck so callers can decide
-        // (e.g., check connection, mark desync). 'no write pending' above
-        // cancels on ack.
-        if (this._watchdog === null && !this._stuck) {
-            this._watchdog = setTimeout(() => {
-                this._watchdog = null;
-                if (this._doc.hasPending()) {
-                    this._stuck = true;
-                    this.emit('stuck');
-                }
-            }, PENDING_TIMEOUT_MS);
+        // already stuck — submit without arming a redundant timer
+        if (this._stuck) {
+            this._doc.submitOp(clean, { source: SOURCE });
+            return;
         }
+
+        const timer = setTimeout(() => {
+            this._timers.delete(timer);
+            if (!this._stuck) {
+                this._stuck = true;
+                this.emit('stuck');
+            }
+        }, PENDING_TIMEOUT_MS);
+        this._timers.add(timer);
+
+        this._doc.submitOp(clean, { source: SOURCE }, (err) => {
+            clearTimeout(timer);
+            this._timers.delete(timer);
+
+            // explicit server rejection is a strictly stronger signal timeout
+            if (err && !this._stuck) {
+                this._stuck = true;
+                this.emit('stuck');
+            }
+        });
     }
 
     get pending() {
