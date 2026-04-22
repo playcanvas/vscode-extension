@@ -517,7 +517,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 // subscribe to asset document
                 const doc2 = await this._sharedb.subscribe('documents', `${uniqueId}`);
                 if (!doc2) {
-                    this._log.error(`failed to subscribe to new document ${uniqueId}`);
+                    this._log.error(fail`failed to subscribe to new document ${uniqueId}`);
                     return;
                 }
 
@@ -1218,7 +1218,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private async _doSubscribe(path: string, uniqueId: number) {
         const doc = await this._sharedb.subscribe('documents', `${uniqueId}`);
         if (!doc) {
-            this._log.error(`failed to subscribe to document ${uniqueId}`);
+            this._log.error(fail`failed to subscribe to document ${uniqueId}`);
             return undefined;
         }
 
@@ -1362,7 +1362,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 const doc = docs[j];
                 const uniqueId = batch[j].uniqueId;
                 if (!doc) {
-                    this._log.error(`failed to subscribe to asset ${uniqueId}`);
+                    this._log.error(fail`failed to subscribe to asset ${uniqueId}`);
                     loadAssetNext();
                     continue;
                 }
