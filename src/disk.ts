@@ -16,21 +16,10 @@ import { Linker } from './utils/linker';
 import { Mutex } from './utils/mutex';
 import { signal } from './utils/signal';
 import { delta, diff, norm, stat, sharedb2vscode, vscode2sharedb } from './utils/text';
-import { parsePath, relativePath, uriStartsWith, fileExists, tryCatch, hash } from './utils/utils';
+import { pool, parsePath, relativePath, uriStartsWith, fileExists, tryCatch, hash } from './utils/utils';
 
 const FETCH_CONCURRENCY = 8;
 const WRITE_CONCURRENCY = 16;
-
-const pool = async <T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) => {
-    let i = 0;
-    const next = async () => {
-        while (i < items.length) {
-            const idx = i++;
-            await worker(items[idx]);
-        }
-    };
-    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, next));
-};
 
 const readDirRecursive = async (uri: vscode.Uri) => {
     const entries = await vscode.workspace.fs.readDirectory(uri);

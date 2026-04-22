@@ -15,6 +15,17 @@ export const wait = (ms: number) => {
     return new Promise((resolve) => setTimeout(resolve, ms));
 };
 
+export const pool = async <T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) => {
+    let i = 0;
+    const next = async () => {
+        while (i < items.length) {
+            const idx = i++;
+            await worker(items[idx]);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, next));
+};
+
 export const hash = (data: string | Uint8Array) => {
     return crypto.createHash('md5').update(data).digest('hex');
 };
