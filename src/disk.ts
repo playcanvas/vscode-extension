@@ -454,10 +454,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // remove from disk
+            // remove from disk. callers iterate bottom-up so folders are
+            // always empty here — no recursion, no cascading OS events
             this._echo.set(`${uri}:delete`, '');
             await vscode.workspace.fs.delete(uri, {
-                recursive: true,
+                recursive: false,
                 useTrash: false
             });
 
@@ -1525,13 +1526,22 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // write type definition files to .pc/
         await this._writeTypeFiles(folderUri);
 
-        // remove old files
-        const existing = await readDirRecursive(folderUri);
-        for (const uri of existing) {
+        // remove old files deepest-first — siblings at each level parallelize
+        const levels = new Map<number, vscode.Uri[]>();
+        for (const uri of await readDirRecursive(folderUri)) {
             const path = relativePath(uri, folderUri);
             if (!projectManager.files.has(path) && path !== Disk.TYPE_DIR && !path.startsWith(`${Disk.TYPE_DIR}/`)) {
-                await this._delete(uri);
+                const depth = path.split('/').length;
+                const bucket = levels.get(depth);
+                if (bucket) {
+                    bucket.push(uri);
+                } else {
+                    levels.set(depth, [uri]);
+                }
             }
+        }
+        for (const depth of [...levels.keys()].sort((a, b) => b - a)) {
+            await pool(levels.get(depth)!, WRITE_CONCURRENCY, (uri) => this._delete(uri));
         }
 
         // watchers

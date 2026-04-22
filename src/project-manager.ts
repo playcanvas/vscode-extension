@@ -547,7 +547,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         });
         const assetDeleteHandle = this._messenger.on('assets.delete', async ({ data: { assets } }) => {
             // filter assets to only include valid ones
-            const valid: [number, string, Asset][] = assets.reduce(
+            const valid: [number, string, Asset, number][] = assets.reduce(
                 (paths, raw) => {
                     // check for valid number
                     const uniqueId = parseInt(raw, 10);
@@ -568,11 +568,14 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
                     // get path
                     const path = this._assetPath(uniqueId);
-                    paths.push([uniqueId, path, asset]);
+                    paths.push([uniqueId, path, asset, path.split('/').length]);
                     return paths;
                 },
-                [] as [number, string, Asset][]
+                [] as [number, string, Asset, number][]
             );
+
+            // deepest-first so disk deletes reach empty folders, never non-empty ones
+            valid.sort((a, b) => b[3] - a[3]);
 
             let skipsDirty = false;
 
