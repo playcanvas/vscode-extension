@@ -91,6 +91,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     error = signal<Error | undefined>(undefined);
 
+    desync = signal<boolean>(false);
+
     constructor({
         events,
         sharedb,
@@ -280,6 +282,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             const dirty = asset?.file?.hash !== hash(otdoc.text);
             file.dirty = dirty;
             this._events.emit('asset:file:subscribed', path, otdoc.text, dirty);
+        });
+
+        // local ops unacked past the stuck threshold — flip project-level
+        // desync only if sharedb is connected (offline queueing is expected).
+        otdoc.on('stuck', () => {
+            if (!this._sharedb.connected.get()) {
+                return;
+            }
+            this.desync.set(() => true);
         });
 
         // emit file created event with OTDocument content for disk
@@ -1267,6 +1278,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._events.emit('asset:file:subscribed', p, otdoc.text, d);
         });
 
+        // local ops unacked past the stuck threshold — flip project-level
+        // desync only if sharedb is connected (offline queueing is expected).
+        otdoc.on('stuck', () => {
+            if (!this._sharedb.connected.get()) {
+                return;
+            }
+            this.desync.set(() => true);
+        });
+
         this._events.emit('asset:file:subscribed', current, otdoc.text, dirty);
         this._log.debug(`subscribed ${current} (${dirty ? 'dirty' : 'clean'})`);
         return promoted;
@@ -1497,6 +1517,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         await super.unlink();
         this._projectId = undefined;
         this._branchId = undefined;
+        this.desync.set(() => false);
         this._log.info(`project ${projectId} (branch ${branchId}) unloaded`);
         return { projectId, branchId };
     }

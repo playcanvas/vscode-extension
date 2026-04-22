@@ -7,16 +7,22 @@ import type { ShareDbTextOp } from '../typings/sharedb';
 import { EventEmitter } from './event-emitter';
 
 const SOURCE = ShareDb.SOURCE;
+const PENDING_TIMEOUT_MS = 30 * 1000; // max potential timeout
 
 type OTDocumentEvents = {
     op: [ShareDbTextOp, string];
     reload: [];
+    stuck: [];
 };
 
 class OTDocument extends EventEmitter<OTDocumentEvents> {
     private _text: string;
 
     private _doc: Doc;
+
+    private _timers = new Set<NodeJS.Timeout>();
+
+    private _stuck = false;
 
     constructor(doc: Doc) {
         super();
@@ -44,6 +50,20 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
             this._text = next;
             this.emit('reload');
         });
+
+        // ops drained — allow future stalls to be re-detected. project-level
+        // desync stays sticky until unlink, so this only re-arms the doc-local
+        // one-shot guard.
+        doc.on('no write pending', () => {
+            this._stuck = false;
+        });
+
+        doc.on('destroy', () => {
+            for (const t of this._timers) {
+                clearTimeout(t);
+            }
+            this._timers.clear();
+        });
     }
 
     get text() {
@@ -54,7 +74,32 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
         // ot-text checkOp rejects skip=0, so strip leading zero
         const clean = (typeof op[0] === 'number' && op[0] === 0 ? op.slice(1) : op) as ShareDbTextOp;
         this._text = ottext.apply(this._text, clean) as string;
-        this._doc.submitOp(clean, { source: SOURCE });
+
+        // already stuck — submit without arming a redundant timer
+        if (this._stuck) {
+            this._doc.submitOp(clean, { source: SOURCE });
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            this._timers.delete(timer);
+            if (!this._stuck) {
+                this._stuck = true;
+                this.emit('stuck');
+            }
+        }, PENDING_TIMEOUT_MS);
+        this._timers.add(timer);
+
+        this._doc.submitOp(clean, { source: SOURCE }, (err) => {
+            clearTimeout(timer);
+            this._timers.delete(timer);
+
+            // explicit server rejection is a strictly stronger signal timeout
+            if (err && !this._stuck) {
+                this._stuck = true;
+                this.emit('stuck');
+            }
+        });
     }
 
     get pending() {
@@ -63,10 +108,6 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
 
     whenNothingPending(fn: () => void) {
         this._doc.whenNothingPending(fn);
-    }
-
-    get raw() {
-        return this._doc;
     }
 }
 
