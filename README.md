@@ -69,7 +69,7 @@ sequenceDiagram
     rect rgba(50, 120, 200, 0.15)
     Note over D, S: Realtime Edit — Remote (closed file)
     S ->> OT: ShareDB op event
-    OT ->> D: _sync() debounced writeFile
+    OT ->> D: debouncer.debounce → writeFile
     end
 
     rect rgba(50, 170, 80, 0.15)
