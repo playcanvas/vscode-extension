@@ -78,6 +78,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     static TYPE_DIR = '.pc';
 
+    // injected into the ignore ruleset so vcs metadata dirs are never synced
+    static VCS_IGNORE = '.git\n.hg\n.svn\n';
+
     private _events: EventEmitter<EventMap>;
 
     private _folderUri?: vscode.Uri;
@@ -156,13 +159,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _parseIgnoreText(text: string, folderUri: vscode.Uri, h = hash(text)) {
         this._ignoreHash = h;
 
-        if (!text) {
-            this._ignoring = (_uri: vscode.Uri) => false;
-            this._log.debug(`cleared ignore rules from empty ignore file`);
-            return;
-        }
-
-        const ig = ignore().add(text);
+        // prepend vcs rules so .git/.hg/.svn are always excluded (prevents binary round-trip corruption)
+        const ig = ignore().add(`${Disk.VCS_IGNORE}${text}`);
         this._ignoring = (uri: vscode.Uri) => {
             const path = relativePath(uri, folderUri);
 
@@ -178,7 +176,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             return ig.ignores(path);
         };
-        this._log.debug(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
+        if (text) {
+            this._log.debug(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
+        }
     }
 
     private async _writeTypeFiles(folderUri: vscode.Uri) {
@@ -1497,6 +1497,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // drain stale cleanup from a previously failed link
         await super.unlink();
 
+        // install baseline vcs-aware ignore filter before any disk writes —
+        // .pcignore content is parsed later once stubs are on disk
+        this._parseIgnoreText('', folderUri);
+
         // sort into hierarchy
         // TODO: store as tree instead of flat map and sorting
         const ordered = Array.from(projectManager.files.entries()).sort((a, b) => {
@@ -1569,7 +1573,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const levels = new Map<number, vscode.Uri[]>();
         for (const uri of await readDirRecursive(folderUri)) {
             const path = relativePath(uri, folderUri);
-            if (!projectManager.files.has(path) && path !== Disk.TYPE_DIR && !path.startsWith(`${Disk.TYPE_DIR}/`)) {
+            if (
+                !projectManager.files.has(path) &&
+                path !== Disk.TYPE_DIR &&
+                !path.startsWith(`${Disk.TYPE_DIR}/`) &&
+                !this._ignoring(uri)
+            ) {
                 const depth = path.split('/').length;
                 const bucket = levels.get(depth);
                 if (bucket) {

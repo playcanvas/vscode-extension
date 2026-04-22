@@ -12,7 +12,7 @@ import * as sharedbModule from '../../connections/sharedb';
 import * as uriHandlerModule from '../../handlers/uri-handler';
 import type { Asset } from '../../typings/models';
 import * as buffer from '../../utils/buffer';
-import { hash, wait } from '../../utils/utils';
+import { hash, tryCatch, wait } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
 import { assets, documents, branches, projectSettings, project, user, uniqueId } from '../mocks/models';
@@ -841,11 +841,7 @@ suite('extension', () => {
 
         // build a nested source structure outside the workspace so the watcher doesn't see it
         const tmpBase = vscode.Uri.file('/tmp/claude/race_test_src');
-        try {
-            await vscode.workspace.fs.delete(tmpBase, { recursive: true });
-        } catch {
-            // ignore if doesn't exist
-        }
+        await tryCatch(vscode.workspace.fs.delete(tmpBase, { recursive: true }) as Promise<void>);
         const srcSub = vscode.Uri.joinPath(tmpBase, 'race_sub');
         await vscode.workspace.fs.createDirectory(srcSub);
         await vscode.workspace.fs.writeFile(
@@ -1878,6 +1874,118 @@ suite('extension', () => {
         assert.ok(infoMessageStub.notCalled, 'info message should not be shown for non-pcignore file');
     });
 
+    test('vcs exclusion - .git not synced', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const gitDir = vscode.Uri.joinPath(folderUri, '.git');
+        await assertResolves(vscode.workspace.fs.createDirectory(gitDir), 'fs.createDirectory');
+
+        const watcher = watchFilePromise(folderUri, '.git/HEAD', 'create');
+        const headUri = vscode.Uri.joinPath(gitDir, 'HEAD');
+        await assertResolves(
+            vscode.workspace.fs.writeFile(headUri, buffer.from('ref: refs/heads/main\n')),
+            'fs.writeFile'
+        );
+        await assertResolves(watcher, 'watcher.create');
+
+        assert.strictEqual(
+            Array.from(assets.values()).find((a) => a.name === 'HEAD'),
+            undefined,
+            '.git/HEAD should not exist as asset'
+        );
+        assert.strictEqual(
+            Array.from(assets.values()).find((a) => a.name === '.git'),
+            undefined,
+            '.git folder should not exist as asset'
+        );
+    });
+
+    test('vcs exclusion - .git survives re-link cleanup', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // ensure .git/ and a child file exist on disk before reload
+        const gitDir = vscode.Uri.joinPath(folderUri, '.git');
+        const headUri = vscode.Uri.joinPath(gitDir, 'HEAD');
+        await assertResolves(vscode.workspace.fs.createDirectory(gitDir), 'fs.createDirectory');
+        await assertResolves(
+            vscode.workspace.fs.writeFile(headUri, buffer.from('ref: refs/heads/main\n')),
+            'fs.writeFile'
+        );
+
+        // full unlink + link cycle
+        await assertResolves(
+            vscode.commands.executeCommand(`${NAME}.reloadProject`) as Promise<unknown>,
+            'reloadProject'
+        );
+
+        // .git/ and its contents must survive the cleanup loop
+        const [gitErr] = await tryCatch(vscode.workspace.fs.stat(gitDir) as Promise<vscode.FileStat>);
+        assert.ok(!gitErr, '.git/ should still exist after re-link');
+
+        const [headErr] = await tryCatch(vscode.workspace.fs.stat(headUri) as Promise<vscode.FileStat>);
+        assert.ok(!headErr, '.git/HEAD should still exist after re-link');
+    });
+
+    test('vcs exclusion - inbound .git/index not written', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // inject a fake .git folder asset at the root
+        const gitFolderId = uniqueId.next().value as number;
+        const gitFolder: Asset = {
+            uniqueId: gitFolderId,
+            item_id: `${gitFolderId}`,
+            name: '.git',
+            type: 'folder',
+            path: []
+        };
+        assets.set(gitFolderId, gitFolder);
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: gitFolder.item_id,
+                    name: gitFolder.name,
+                    type: gitFolder.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        // inject a child "index" file — so _assetPath() resolves to ".git/index"
+        const indexId = uniqueId.next().value as number;
+        const indexDoc = 'binary-junk';
+        const indexAsset: Asset = {
+            uniqueId: indexId,
+            item_id: `${indexId}`,
+            name: 'index',
+            type: 'script',
+            path: [gitFolderId],
+            file: { filename: 'index', hash: hash(indexDoc) }
+        };
+        assets.set(indexId, indexAsset);
+        documents.set(indexId, indexDoc);
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: indexAsset.item_id,
+                    name: indexAsset.name,
+                    type: indexAsset.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        // let the subscribe + _addFile + asset:file:create pipeline settle
+        await wait(process.env.CI ? 500 : 200);
+
+        // .git/index must not be written to disk by the extension
+        const gitIndexUri = vscode.Uri.joinPath(folderUri, '.git', 'index');
+        const [indexErr] = await tryCatch(vscode.workspace.fs.stat(gitIndexUri) as Promise<vscode.FileStat>);
+        assert.ok(indexErr, '.git/index should not be written to disk');
+    });
+
     test('collision - file path remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -2042,14 +2150,8 @@ suite('extension', () => {
         // child is skipped due to parent collision (not tracked as collision itself)
         // verify child file does not exist on disk
         const childUri = vscode.Uri.joinPath(folderUri, folderName, 'child.js');
-        let childExists = false;
-        try {
-            await vscode.workspace.fs.stat(childUri);
-            childExists = true;
-        } catch {
-            childExists = false;
-        }
-        assert.strictEqual(childExists, false, 'child file should not exist due to parent collision');
+        const [childErr] = await tryCatch(vscode.workspace.fs.stat(childUri) as Promise<vscode.FileStat>);
+        assert.ok(childErr, 'child file should not exist due to parent collision');
     });
 
     test('collision - rename remote to local', async () => {
