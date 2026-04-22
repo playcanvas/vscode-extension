@@ -334,6 +334,14 @@ export const activate = async (context: vscode.ExtensionContext) => {
     collisionStatusItem.tooltip = 'PlayCanvas Asset Path Collisions';
     collisionStatusItem.show();
 
+    // desync status bar item — hidden until project.desync flips true
+    const desyncStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10000);
+    context.subscriptions.push(desyncStatusItem);
+    desyncStatusItem.color = '#e67e22';
+    desyncStatusItem.command = `${NAME}.reloadProject`;
+    desyncStatusItem.text = '$(warning) Out of Sync';
+    desyncStatusItem.tooltip = 'PlayCanvas project is out of sync — click to reload';
+
     // branch status bar item
     const branchStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10001);
     context.subscriptions.push(branchStatusBarItem);
@@ -755,10 +763,14 @@ export const activate = async (context: vscode.ExtensionContext) => {
             })
         );
 
-        // desync toast — fires once per false→true transition of the signal.
-        // signal resets to false on project unlink.
+        // desync surfaces — sticky status-bar item + one-shot toast per
+        // false→true transition. signal resets to false on project unlink.
         effect(() => {
-            if (!projectManager.desync.get()) {
+            const desynced = projectManager.desync.get();
+            if (desynced) {
+                desyncStatusItem.show();
+            } else {
+                desyncStatusItem.hide();
                 return;
             }
             void vscode.window
