@@ -1878,6 +1878,136 @@ suite('extension', () => {
         assert.ok(infoMessageStub.notCalled, 'info message should not be shown for non-pcignore file');
     });
 
+    test('vcs exclusion - .git not synced', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const gitDir = vscode.Uri.joinPath(folderUri, '.git');
+        await assertResolves(vscode.workspace.fs.createDirectory(gitDir), 'fs.createDirectory');
+
+        const watcher = watchFilePromise(folderUri, '.git/HEAD', 'create');
+        const headUri = vscode.Uri.joinPath(gitDir, 'HEAD');
+        await assertResolves(
+            vscode.workspace.fs.writeFile(headUri, buffer.from('ref: refs/heads/main\n')),
+            'fs.writeFile'
+        );
+        await assertResolves(watcher, 'watcher.create');
+
+        assert.strictEqual(
+            Array.from(assets.values()).find((a) => a.name === 'HEAD'),
+            undefined,
+            '.git/HEAD should not exist as asset'
+        );
+        assert.strictEqual(
+            Array.from(assets.values()).find((a) => a.name === '.git'),
+            undefined,
+            '.git folder should not exist as asset'
+        );
+    });
+
+    test('vcs exclusion - .git survives re-link cleanup', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // ensure .git/ and a child file exist on disk before reload
+        const gitDir = vscode.Uri.joinPath(folderUri, '.git');
+        const headUri = vscode.Uri.joinPath(gitDir, 'HEAD');
+        await assertResolves(vscode.workspace.fs.createDirectory(gitDir), 'fs.createDirectory');
+        await assertResolves(
+            vscode.workspace.fs.writeFile(headUri, buffer.from('ref: refs/heads/main\n')),
+            'fs.writeFile'
+        );
+
+        // full unlink + link cycle
+        await assertResolves(
+            vscode.commands.executeCommand(`${NAME}.reloadProject`) as Promise<unknown>,
+            'reloadProject'
+        );
+
+        // .git/ and its contents must survive the cleanup loop
+        let gitExists = false;
+        try {
+            await vscode.workspace.fs.stat(gitDir);
+            gitExists = true;
+        } catch {
+            gitExists = false;
+        }
+        assert.ok(gitExists, '.git/ should still exist after re-link');
+
+        let headExists = false;
+        try {
+            await vscode.workspace.fs.stat(headUri);
+            headExists = true;
+        } catch {
+            headExists = false;
+        }
+        assert.ok(headExists, '.git/HEAD should still exist after re-link');
+    });
+
+    test('vcs exclusion - inbound .git/index not written', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // inject a fake .git folder asset at the root
+        const gitFolderId = uniqueId.next().value as number;
+        const gitFolder: Asset = {
+            uniqueId: gitFolderId,
+            item_id: `${gitFolderId}`,
+            name: '.git',
+            type: 'folder',
+            path: []
+        };
+        assets.set(gitFolderId, gitFolder);
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: gitFolder.item_id,
+                    name: gitFolder.name,
+                    type: gitFolder.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        // inject a child "index" file — so _assetPath() resolves to ".git/index"
+        const indexId = uniqueId.next().value as number;
+        const indexDoc = 'binary-junk';
+        const indexAsset: Asset = {
+            uniqueId: indexId,
+            item_id: `${indexId}`,
+            name: 'index',
+            type: 'script',
+            path: [gitFolderId],
+            file: { filename: 'index', hash: hash(indexDoc) }
+        };
+        assets.set(indexId, indexAsset);
+        documents.set(indexId, indexDoc);
+        messenger.emit('asset.new', {
+            data: {
+                asset: {
+                    id: indexAsset.item_id,
+                    name: indexAsset.name,
+                    type: indexAsset.type,
+                    branchId: projectSettings.branch
+                }
+            }
+        });
+
+        // let the subscribe + _addFile + asset:file:create pipeline settle
+        await wait(process.env.CI ? 500 : 200);
+
+        // .git/index must not be written to disk by the extension
+        const gitIndexUri = vscode.Uri.joinPath(folderUri, '.git', 'index');
+        let indexExists = false;
+        try {
+            await vscode.workspace.fs.stat(gitIndexUri);
+            indexExists = true;
+        } catch {
+            indexExists = false;
+        }
+        assert.strictEqual(indexExists, false, '.git/index should not be written to disk');
+    });
+
     test('collision - file path remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
