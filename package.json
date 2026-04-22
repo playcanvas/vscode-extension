@@ -1,7 +1,7 @@
 {
     "name": "playcanvas",
     "displayName": "PlayCanvas",
-    "version": "1.8.2",
+    "version": "1.8.3",
     "description": "PlayCanvas Editor VS Code Extension",
     "categories": [
         "Other"
@@ -150,7 +150,7 @@
         "onStartupFinished"
     ],
     "dependencies": {
-        "@sentry/browser": "^10.39.0",
+        "@sentry/browser": "^10.49.0",
         "ignore": "^7.0.5",
         "isomorphic-ws": "^5.0.0",
         "ot-text": "github:playcanvas/ot-text",
@@ -184,13 +184,13 @@
         "eslint-plugin-prettier": "^5.5.4",
         "globals": "^17.0.0",
         "jsonc-eslint-parser": "^2.4.2",
-        "playcanvas": "2.17.2",
+        "playcanvas": "2.18.0",
         "prettier": "^3.7.4",
-        "rollup": "^4.55.1",
+        "rollup": "^4.60.2",
         "rollup-plugin-polyfill-node": "^0.13.0",
         "sinon": "^21.0.1",
-        "typescript": "^6.0.2",
-        "typescript-eslint": "^8.58.2"
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.59.0"
     },
     "engines": {
         "vscode": "^1.98.0"
