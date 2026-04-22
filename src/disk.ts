@@ -249,14 +249,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                // check if local disk if different and submit delta upstream to preserve edits
+                // disk differs from server and from our last known write — treat as a
+                // local edit (e.g. git checkout while closed) and push it upstream
                 const known = this._diskHash.get(uri.path);
                 const observed = hash(existingContent);
                 if (known === undefined || known !== observed) {
                     this._diskHash.set(uri.path, observed);
 
-                    // safe to skip pushing up preserved edits in that case since link's writeAll
-                    // runs before we start watching for file events
+                    // _projectManager is unset during link's writeAll; safe to skip the push
+                    // there since watchers aren't live yet and disk is already preserved
                     if (this._folderUri && this._projectManager) {
                         const path = relativePath(uri, this._folderUri);
                         void this._projectManager.write(path, existingContent);
@@ -267,7 +268,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             if (!exists) {
-                // ensure parent folder exists on disk
+                // ensure parent folder exists — handles race where a child create event
+                // is processed before the parent's disk write completes
                 const parentUri = vscode.Uri.joinPath(uri, '..');
                 if (!(await fileExists(parentUri))) {
                     const folderUri = this._folderUri;
@@ -522,7 +524,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private async _subscribed(uri: vscode.Uri, path: string, content: string, dirty: boolean) {
-        // clear buffer state and undo stack as refers to outdated OT document state
+        // baseline and undo inverses reference pre-reload OT history — drop both so _update
+        // falls back to the safe fullUserOp path and undo can't resurrect missing content
         this._bufferState.delete(uri.path);
         this._undos.get(uri.path)?.clear();
 
