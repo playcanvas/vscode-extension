@@ -322,14 +322,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
     }, PING_SAMPLE_MS);
     context.subscriptions.push(new vscode.Disposable(() => clearInterval(pingSampler)));
 
-    // collision status bar item
+    // collision status bar item — hidden until collisions.count > 0
     const collisionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -9999);
     context.subscriptions.push(collisionStatusItem);
-    collisionStatusItem.color = '';
+    collisionStatusItem.color = COLORS.warning;
     collisionStatusItem.command = `${NAME}.showPathCollisions`;
-    collisionStatusItem.text = `$(check) Path Collisions: 0`;
     collisionStatusItem.tooltip = 'PlayCanvas Asset Path Collisions';
-    collisionStatusItem.show();
 
     // desync status bar item — hidden until project.desync flips true
     const desyncStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10000);
@@ -715,8 +713,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
         });
         effect(() => {
             const count = projectManager.collisions.count.get();
-            collisionStatusItem.color = count > 0 ? COLORS.warning : '';
-            collisionStatusItem.text = `$(${count > 0 ? 'warning' : 'check'}) Path Collisions: ${count}`;
+            if (count > 0) {
+                collisionStatusItem.text = `$(warning) Path Collisions: ${count}`;
+                collisionStatusItem.show();
+            } else {
+                collisionStatusItem.hide();
+            }
         });
 
         // store in cache early so messenger events during loading can find it
