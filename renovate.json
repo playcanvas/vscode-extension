@@ -4,13 +4,7 @@
     "labels": ["dependencies"],
     "reviewers": ["kpal81xd"],
     "assignees": ["kpal81xd"],
-    "ignoreDeps": [
-        "@types/sharedb",
-        "@types/vscode",
-        "ot-text",
-        "playcanvas",
-        "sharedb"
-    ],
+    "ignoreDeps": ["@types/sharedb", "@types/vscode", "ot-text", "playcanvas", "sharedb"],
     "packageRules": [
         {
             "matchUpdateTypes": ["major"],
