@@ -202,9 +202,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
             // update branch id if provided (branch switch flow)
             projectState.branchId = branchId ?? projectState.branchId;
 
-            // TODO: figure out why this is needed to avoid ShareDB issues
-            await wait(1000);
-
             // relink everything
             await projectManager.link(projectState);
             await disk.link(diskState);
