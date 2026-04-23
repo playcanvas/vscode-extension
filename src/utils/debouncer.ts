@@ -31,6 +31,10 @@ class Debouncer<T> {
         }
     }
 
+    has(key: string) {
+        return this._pending.has(key);
+    }
+
     clear() {
         for (const [, { timeout, reject }] of this._pending) {
             clearTimeout(timeout);

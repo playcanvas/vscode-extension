@@ -331,10 +331,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 // disk may have diverged from pre-op canonical while the watcher was blind
                 // (unlink gap, .pcignore rule, watcher miss). detect via _diskHash and merge
                 // the remote op with local content OT-style instead of clobbering.
+                // skip when our own write is already queued — disk is about to be rewritten
+                // anyway, so the readFile + hash work per op would be wasted in the hot path
+                // of collaborator-driven op streams.
                 let next = buffer.from(snapshot);
-                const [, existing] = await tryCatch(
-                    Promise.resolve(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>)
-                );
+                const [, existing] = this._debouncer.has(key)
+                    ? [undefined, undefined]
+                    : await tryCatch(Promise.resolve(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>));
                 if (existing && this._projectManager && this._folderUri) {
                     const known = this._diskHash.get(uri.path);
                     const observed = hash(existing);
