@@ -909,6 +909,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     }
                     const pos = doc.positionAt(cursor);
                     active.selection = new vscode.Selection(pos, pos);
+                    active.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.Default);
                 }
 
                 // mark dirty
