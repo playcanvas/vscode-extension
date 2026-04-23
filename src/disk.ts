@@ -334,53 +334,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const key = `${uri}`;
                 this._syncing.add(key);
 
-                // merge remote op with divergent disk content OT-style instead of clobbering
-                // (watcher miss, unlink gap, former .pcignore match). skip the check when
-                // our own write is pending or when stat matches the last-known anchor —
-                // disk can't have diverged in either case.
-                let next = buffer.from(snapshot);
-                const anchor = this._diskStat.get(uri.path);
-                const pending = this._debouncer.has(key);
-                const [, st] =
-                    !pending && anchor ? await tryCatch(Promise.resolve(vscode.workspace.fs.stat(uri))) : [null, null];
-                const fresh = !!st && st.mtime === anchor?.mtime && st.size === anchor?.size;
-
-                if (!pending && !fresh && this._projectManager && this._folderUri) {
-                    const [, existing] = await tryCatch(
-                        Promise.resolve(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>)
-                    );
-                    if (existing) {
-                        const known = this._diskHash.get(uri.path);
-                        const observed = hash(existing);
-                        const diskText = norm(buffer.toString(existing));
-                        if (known !== undefined && known !== observed && diskText !== snapshot) {
-                            const path = relativePath(uri, this._folderUri);
-                            const file = this._projectManager.files.get(path);
-                            const userOp = file?.type === 'file' ? delta(prev, diskText) : undefined;
-                            if (userOp && file?.type === 'file') {
-                                // transform local delta against remote op, then against any
-                                // advancement of file.doc from ops queued while we awaited readFile
-                                const postOp = ottext.transform(userOp, op, 'left') as ShareDbTextOp;
-                                const adv = delta(content, file.doc.text);
-                                const upstream = adv
-                                    ? (ottext.transform(postOp, adv, 'left') as ShareDbTextOp)
-                                    : postOp;
-                                file.doc.apply(upstream);
-
-                                next = buffer.from(file.doc.text);
-
-                                const wasDirty = file.dirty;
-                                file.dirty = true;
-                                if (!wasDirty) {
-                                    this._events.emit('asset:file:dirty', path, true);
-                                }
-                                this._log.info(`update.local.preserved ${uri} ${stat(op)}`);
-                            }
-                        }
-                    }
-                }
-
                 // debounce rapid changes to avoid overwhelming disk with writes
+                const next = buffer.from(snapshot);
                 void this._debouncer
                     .debounce(key, async () => {
                         const h = hash(next);
