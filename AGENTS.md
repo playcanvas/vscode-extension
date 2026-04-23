@@ -1,60 +1,104 @@
 # AGENTS.md - PlayCanvas VS Code Extension
 
-VS Code extension for real-time collaborative editing of PlayCanvas assets. Syncs bidirectionally with PlayCanvas Editor via ShareDB (Operational Transform).
+VS Code extension for real-time collaborative editing of PlayCanvas assets. Syncs bidirectionally with PlayCanvas Editor via ShareDB (Operational Transform). Many users can be connected to the same project at once — a bug on this side can corrupt state for all of them, so the rules in the Invariants section below are non-negotiable.
+
+## Invariants (must not violate)
+
+### OT compliance
+
+- All buffer mutations flow through `OTDocument.apply()` (`src/utils/ot-document.ts`). Never assign `doc.text` directly outside the snapshot-reload path.
+- Local edits: convert `contentChanges` via `vscode2sharedb()` in `src/utils/text.ts`. Adjust each change's offset by the cumulative `insertLength − deleteLength` of preceding changes in the same batch — raw `contentChanges` offsets are relative to the pre-batch buffer and will misalign if applied naively.
+- Replace ops use the atomic form `[offset, text, { d: len }]`. Never emit separate delete+insert for a replace, and never emit a leading `0` skip (ot-text rejects it).
+- Remote ops are applied under the per-URI lock `_locks` (`src/disk.ts`). While the lock is held, `onDidChangeTextDocument` must not submit ops; post-lock reconciliation in `_update` recovers keystrokes typed during `applyEdit` by diffing observed-vs-expected and transforming against queued ops.
+- Closed-file remote updates must run the divergence-merge path in `Disk._update`: if the on-disk hash differs from `_diskHash` AND disk differs from the server snapshot, compute `userOp = delta(serverPrev, diskContent)`, transform it against the incoming remote op (and any queued ops), submit `userOp`, then write the merged result and advance `_diskHash`. Without this, a local save made while the file was closed is silently clobbered by the next remote op.
+- `UndoManager` (`src/undo-manager.ts`) stores inverses of **local edits only**. On every remote op, call `transform()` to rebase both stacks; `clear()` on document reload. Route undo/redo through `OTDocument.apply()` — never mutate `doc.text` directly.
+- On `OTDocument` `reload` (ingestSnapshot) or fresh subscribe: take `_writeMutex` for the URI, push divergent buffer content upstream as an op before overwriting, then clear undo/redo.
+- Do not rely on `fs.writeFile` to an open document triggering VS Code's native reload — use the buffer-apply path.
+
+### Data integrity (one client must not corrupt others)
+
+- File I/O: always `vscode.workspace.fs`, never Node `fs`.
+- Feedback loop guard: every disk mutation pre-sets an echo hash keyed `${uri}:create|change|delete` in `Disk`. The disk watcher must skip events whose hash matches (no-op) or is superseded by newer on-disk content. Do not write to disk without setting an echo first.
+- `_diskHash` and `_diskStat` must be deleted whenever the file is deleted, renamed, or unlinked. Stale entries cause false "divergent" merges on re-create.
+- Deletes are batched deepest-first and use non-recursive `fs.delete`. Folders become empty before removal, so a parent-delete can never cascade into server-side asset deletions.
+- VCS directories are hard-excluded via `Disk.VCS_IGNORE` (`.git`, `.hg`, `.svn`) prepended to `.pcignore`. Do not remove the prefix.
+- `CollisionManager` (`src/collision-manager.ts`) blocks loading two assets that map to the same disk path (same path or ancestor shadowing). Check collisions during ingestion — otherwise one asset overwrites another on link.
+- Stub assets (`type: 'stub'` in `ProjectManager`) are metadata-only placeholders. Do not write them to disk or subscribe to them until explicitly opened. Deleting a stub from VS Code must not propagate an asset delete to the server.
+- Never call `_dirtify` from `onDidChangeTextDocument` — causes the double-line bug. The only legitimate dirtify path is `_writeMutex`-guarded `Disk._dirty()`.
+- `disk.ts` must not take a direct reference to ShareDB. Any state it needs is exposed by `ProjectManager`.
+- Project-wide desync is detected when any `OTDocument` emits `stuck` (30s with no ack, or explicit server reject). `ProjectManager.desync` flips true and surfaces a status-bar item + one-shot toast. Do not silently swallow `stuck`.
+- Initial link: prefetch via `FETCH_CONCURRENCY=8`, write via `pool(WRITE_CONCURRENCY=16)` grouped folders-before-files. `ProjectManager` stays unset until link completes so the file watcher cannot interfere.
+- Mutexes in `Disk`:
+    - `_writeMutex` (path-related matcher) guards every mutation: `_create`, `_update`, `_delete`, `_rename`, `_subscribed`, `_dirty`, `_dirtyReload`.
+    - `_readMutex` guards disk-watcher reads.
+    - `_locks` (per URI) blocks `onDidChangeTextDocument` during remote apply and reconciliation.
 
 ## Directory Structure
 
 ```
 src/
-├── extension.ts          # entry point, commands, orchestration
-├── project-manager.ts    # virtual file system, asset state, collisions
-├── disk.ts               # file system sync (ShareDB <-> VS Code)
-├── auth.ts               # OAuth authentication
-├── config.ts             # environment constants
-├── log.ts                # logging utility
-├── notification.ts       # progress/simple notifications
+├── extension.ts              # entry point, commands, orchestration
+├── project-manager.ts        # virtual file system, asset state, desync signal
+├── disk.ts                   # file system sync (ShareDB <-> VS Code)
+├── auth.ts                   # OAuth authentication
+├── collision-manager.ts      # path-collision detector for asset ingestion
+├── undo-manager.ts           # OT-aware undo/redo with transform-on-remote
+├── metrics.ts                # Graphene telemetry sender
+├── sentry.ts                 # error reporter with scrubbing + fingerprinting
+├── config.ts                 # environment constants
+├── log.ts                    # logging utility
+├── notification.ts           # progress/simple notifications
 ├── connections/
-│   ├── sharedb.ts        # OT collaborative editing (WebSocket)
-│   ├── messenger.ts      # project events (WebSocket)
-│   ├── relay.ts          # presence/collaboration (WebSocket)
-│   └── rest.ts           # REST API client
+│   ├── sharedb.ts            # OT collaborative editing (WebSocket)
+│   ├── messenger.ts          # project events (WebSocket)
+│   ├── relay.ts              # presence/collaboration (WebSocket)
+│   ├── rest.ts               # REST API client
+│   ├── constants.ts          # shared timeouts and close codes
+│   └── latency.ts            # dev-only WebSocket latency injection
 ├── handlers/
-│   └── uri-handler.ts    # deep linking from Editor
+│   └── uri-handler.ts        # deep linking from Editor
 ├── providers/
-│   └── collab-provider.ts # collaborators tree view
+│   ├── collab-provider.ts    # collaborators tree view
+│   └── decoration-provider.ts # .pc/ badge + dirty-file decoration
 ├── utils/
-│   ├── linker.ts         # Linker pattern base class
-│   ├── signal.ts         # reactive state (signal/computed/effect)
-│   ├── event-emitter.ts  # type-safe event emitter
-│   ├── mutex.ts          # path-based mutex for atomic ops
-│   ├── debouncer.ts      # key-based debouncing
-│   ├── bimap.ts          # bidirectional map
-│   ├── buffer.ts         # text/buffer conversion
-│   ├── deferred.ts       # deferred promise pattern
-│   └── utils.ts          # hash, tryCatch, guard, vscode2sharedb, etc.
+│   ├── ot-document.ts        # ShareDB Doc wrapper; emits op/reload/stuck
+│   ├── text.ts               # norm, diff, delta, stat, vscode2sharedb, sharedb2vscode
+│   ├── buffer.ts             # TextEncoder/Decoder wrappers
+│   ├── error.ts              # FingerprintedError + `fail` tagged template
+│   ├── linker.ts             # Linker pattern base class
+│   ├── signal.ts             # reactive state (signal/computed/effect)
+│   ├── event-emitter.ts      # type-safe event emitter
+│   ├── mutex.ts              # path-based mutex for atomic ops
+│   ├── debouncer.ts          # key-based debouncing
+│   ├── bimap.ts              # bidirectional map
+│   ├── deferred.ts           # deferred promise pattern
+│   └── utils.ts              # hash, tryCatch, guard, pool, withTimeout, etc.
 ├── typings/
-│   ├── event-map.d.ts    # event type definitions
-│   ├── models.d.ts       # Asset, Project, Branch, User types
-│   ├── sharedb.d.ts      # ShareDB operation types
-│   └── ot-text.d.ts      # ot-text module declaration
+│   ├── event-map.d.ts        # event type definitions
+│   ├── models.d.ts           # Asset, Project, Branch, User types
+│   ├── sharedb.d.ts          # ShareDB operation types
+│   └── ot-text.d.ts          # ot-text module declaration
 └── test/
-    ├── mocks/            # mock implementations for testing
-    └── suite/            # test suites
-plugin/                   # TypeScript language server plugin
-scripts/                  # build & codegen scripts
+    ├── mocks/                # mock implementations for testing
+    └── suite/                # test suites (extension.test.ts + utils.test.ts)
+plugin/                       # TypeScript language server plugin
+scripts/                      # build & codegen scripts
 ```
 
 ## Key Patterns
 
-- **Linker Pattern**: Components extend `Linker<T>` with `link()`/`unlink()` lifecycle
-- **Signal Pattern**: Reactive state via `signal()`, `computed()`, `effect()`
-- **Event-Driven**: Type-safe `EventEmitter` for component communication
-- **Mutex**: Path-based mutex (`_writeMutex`, `_readMutex`) to serialize related operations
-- **Debouncer**: Key-based debouncing for batching disk writes (50ms default)
-- **Atomic OT Ops**: Single replace ops `[offset, text, { d: len }]` instead of separate delete+insert
-- **Minimal Diff**: Prefix/suffix matching in `projectManager.write()` to minimize op size
-- **Echo Mechanism**: Hash-based echo map to prevent feedback loops on disk writes
-- **Naming**: Private members prefixed with `_`, files in kebab-case
+- **Linker Pattern**: Components extend `Linker<T>` with `link()`/`unlink()` lifecycle.
+- **Signal Pattern**: Reactive state via `signal()`, `computed()`, `effect()`.
+- **Event-Driven**: Type-safe `EventEmitter` for component communication.
+- **Mutex**: Path-based mutex (`_writeMutex`, `_readMutex`) serializes ancestor/descendant operations.
+- **Debouncer**: Key-based debouncing batches disk writes (50ms default).
+- **Atomic OT Ops**: Single replace ops `[offset, text, { d: len }]` instead of separate delete+insert.
+- **Minimal Diff**: Prefix/suffix matching in `text.ts` `delta()` minimizes op size for closed-file updates.
+- **Divergence Merge**: Closed-file remote updates reconcile against divergent on-disk content via `delta() + transform()` before applying.
+- **Echo Mechanism**: Hash-based echo map in `Disk`, keyed `${uri}:${kind}`, prevents feedback loops on disk writes.
+- **Buffer-state tracking**: `_bufferState` holds the canonical-before-op snapshot so the next keystroke diff does not re-submit already-applied remote content.
+- **Stuck → desync**: `OTDocument` emits `stuck` after 30s without ack or on explicit server reject; `ProjectManager.desync` surfaces this as a status-bar item and toast.
+- **Naming**: Private members prefixed with `_`, files in kebab-case.
 
 ## Data Flow
 
@@ -63,21 +107,24 @@ Remote: ShareDB → ProjectManager → Disk → VS Code
 Local:  VS Code → Disk → ProjectManager → ShareDB
 ```
 
-### Sync Architecture
+### Sync paths
 
-- **Local edits (open files)**: `vscode2sharedb()` converts `contentChanges` to atomic ShareDB ops with offset adjustment for batched changes, submitted directly to ShareDB for real-time collaboration
-- **Remote edits (open files)**: `sharedb2vscode()` converts ShareDB ops to VS Code `TextEdit[]`, applied under per-URI lock with post-lock reconciliation for keystrokes dropped during the lock window
-- **Closed file writes**: `projectManager.write()` computes minimal diff via prefix/suffix matching and submits a single atomic op
-- **Disk sync**: Debounced writes with echo hash set at write time to prevent re-processing by the file watcher
+- **Local edits (open files)**: `vscode2sharedb()` (`utils/text.ts`) converts `contentChanges` into atomic ShareDB ops with per-change offset adjustment, then submits through `OTDocument.apply()`.
+- **Remote edits (open files)**: `sharedb2vscode()` (`utils/text.ts`) converts ops to VS Code `TextEdit[]`, applied under the per-URI `_locks` lock. After the lock releases, reconciliation transforms any keystrokes typed during the apply window against queued remote ops so no local input is lost.
+- **Closed-file remote updates**: `Disk._update` runs the divergence-merge path above when `_diskHash` disagrees with on-disk content.
+- **Closed-file local writes**: `ProjectManager.write()` computes a minimal diff via `delta()` and submits one atomic op.
+- **Disk sync**: Debounced writes pre-set the echo hash; the watcher skips matching or superseded events. `_diskHash` / `_diskStat` are cleared on delete/rename/unlink so re-creates don't see false divergence.
 
 ## Commands
 
-- `playcanvas.login` - Authenticate
-- `playcanvas.logout` - Log out
-- `playcanvas.openProject` - Open project
-- `playcanvas.reloadProject` - Reload project
-- `playcanvas.switchBranch` - Switch branch
-- `playcanvas.showPathCollisions` - Show path collisions
+- `playcanvas.login` — Authenticate
+- `playcanvas.logout` — Log out
+- `playcanvas.openProject` — Open project
+- `playcanvas.reloadProject` — Reload project
+- `playcanvas.switchBranch` — Switch branch
+- `playcanvas.showPathCollisions` — Show path collisions
+- `playcanvas.undo` — Collaborative undo (reverts local edits only)
+- `playcanvas.redo` — Collaborative redo
 
 ## Build & Test
 
@@ -92,4 +139,19 @@ npm run lint            # prettier + eslint check
 npm run lint:fix        # auto-fix formatting + eslint
 ```
 
-Note: `npm test` requires a VS Code instance and network access; use `npm run lint` and `npm run pretest` to validate changes locally.
+`npm test` requires a VS Code instance and network access; use `npm run lint` and `npm run pretest` to validate changes locally.
+
+## Testing
+
+- Integration tests live in `src/test/suite/extension.test.ts`. Add cases there; don't create new test files per feature.
+- Skip integration tests for trivial visual/viewport fixes — manual repro is sufficient.
+- Mocks in `src/test/mocks/` mirror the real network/auth surfaces. Extend those rather than stubbing ShareDB or the file system ad-hoc — divergence from production semantics hides real bugs.
+- The OT invariants above apply to tests too: don't bypass `OTDocument.apply()` or drive edits by writing to `vscode.workspace.fs` expecting a native reload (the harness doesn't behave like a real editor session).
+
+## PR & Git
+
+- PR titles: describe the change; do not include issue numbers (the PR linker handles that).
+- Branch names: `type/description` (e.g. `fix/divergence-merge`, `feat/undo-manager`). Don't prefix with a username.
+- When updating an existing branch after rewriting history, force-push directly — don't rebase-then-push.
+- Commit messages follow recent `git log` style: lowercase `type: description (#N)` (`fix:`, `feat:`, `chore:`, `refactor:`, `perf:`).
+- Run `npm run lint` before pushing.
