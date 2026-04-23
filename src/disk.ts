@@ -301,6 +301,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     this._echo.set(`${uri}:change`, h);
                     await vscode.workspace.fs.writeFile(uri, content);
                     this._diskHash.set(uri.path, h);
+                    const [, st] = await tryCatch(Promise.resolve(vscode.workspace.fs.stat(uri)));
+                    if (st) {
+                        this._diskStat.set(uri.path, { mtime: st.mtime, size: st.size });
+                    }
                     break;
                 }
                 case 'folder': {
