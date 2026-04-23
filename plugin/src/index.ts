@@ -47,11 +47,18 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
         const readFile = proxy.readFile.bind(proxy);
         const getCompilationSettings = proxy.getCompilationSettings.bind(proxy);
 
-        // intercept to merge custom compiler options to enable JS support
+        // project tsconfig wins over plugin defaults; cache by settings
+        // identity since ts reuses the object until tsconfig reloads
+        let cache: { settings: ts.CompilerOptions; merged: ts.CompilerOptions } | undefined;
         proxy.getCompilationSettings = () => {
             const settings = getCompilationSettings();
-            log(info.project, `Merging custom compiler options into project settings.`);
-            return Object.assign(settings, compilerOptions);
+            if (cache?.settings === settings) {
+                return cache.merged;
+            }
+            const merged = { ...compilerOptions, ...settings };
+            merged.lib = [...(compilerOptions.lib ?? []), ...(settings.lib ?? [])];
+            cache = { settings, merged };
+            return merged;
         };
 
         // intercept getScriptSnapshot to provide a snapshot for the virtual file
