@@ -519,6 +519,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 useTrash: false
             });
 
+            this._diskHash.delete(uri.path);
+            this._diskStat.delete(uri.path);
+
             this._log.debug(`delete.remote file ${uri}`);
         });
     }
@@ -541,6 +544,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             await vscode.workspace.fs.rename(oldUri, newUri, {
                 overwrite: false
             });
+
+            // next _update or _create write on newUri.path will repopulate
+            this._diskHash.delete(oldUri.path);
+            this._diskStat.delete(oldUri.path);
 
             this._log.debug(`rename.remote ${oldUri.path} -> ${newUri.path}`);
         });
@@ -1653,6 +1660,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._folderUri = undefined;
         this._projectManager = undefined;
         this._bufferState.clear();
+        this._diskHash.clear();
+        this._diskStat.clear();
         this._undos.forEach((m) => m.clear());
         this._undos.clear();
         void vscode.commands.executeCommand('setContext', 'playcanvas.active', false);
