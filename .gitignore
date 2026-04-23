@@ -3,6 +3,7 @@ dist
 node_modules
 .npmrc
 .env
+.claude/worktrees
 .cursor/rules/remote
 .vscode-test/
 .vscode-test-web/
