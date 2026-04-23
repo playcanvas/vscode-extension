@@ -1042,6 +1042,46 @@ suite('extension', () => {
         assert.strictEqual(buffer.toString(content), `// REMOTE COMMENT\n${document}`, 'file content should match');
     });
 
+    test('file change - closed remote sequence does not trigger spurious submissions', async () => {
+        // guards the divergence check: after a closed-file remote op, _diskHash must be
+        // advanced so subsequent remote ops don't mistake disk state as diverged and
+        // submit a bogus merge op upstream
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'closed_remote_sequence.js', content: '// ORIGINAL\n' });
+        assert.ok(asset, 'asset should be created');
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+
+        // first remote op — bootstraps _diskHash + _diskStat via the debounced write
+        const watcher1 = watchFilePromise(folderUri, asset.name, 'change');
+        doc.submitOp(['// FIRST\n'], { source: 'remote' });
+        await assertResolves(watcher1, 'watcher.change 1');
+        await wait(process.env.CI ? 200 : 100);
+
+        // reset history so only post-op-1 submissions are counted
+        doc.submitOp.resetHistory();
+
+        // second remote op — should flow through as a pure remote update
+        const watcher2 = watchFilePromise(folderUri, asset.name, 'change');
+        doc.submitOp([8, 'SECOND\n'], { source: 'remote' });
+        await assertResolves(watcher2, 'watcher.change 2');
+        await wait(process.env.CI ? 200 : 100);
+
+        // local-sourced submitOps (source !== 'remote') indicate the merge branch
+        // spuriously fired and pushed disk content back upstream
+        const localCalls = doc.submitOp
+            .getCalls()
+            .filter((c) => (c.args[1] as { source?: string } | undefined)?.source !== 'remote');
+        assert.strictEqual(
+            localCalls.length,
+            0,
+            'no local submitOp should fire for pure remote updates (divergence branch must stay dormant)'
+        );
+    });
+
     test('file change - open local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
