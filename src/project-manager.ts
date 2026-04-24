@@ -126,6 +126,21 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return this._files;
     }
 
+    // called when any doc's pending queue drains. clears desync once the connection
+    // is healthy and no other doc has outstanding ops — so the toast/status-bar
+    // recovers automatically after a transient stall instead of staying stuck.
+    private _heal() {
+        if (!this.desync.get() || !this._sharedb.connected.get()) {
+            return;
+        }
+        for (const file of this._files.values()) {
+            if (file.type === 'file' && file.doc.pending) {
+                return;
+            }
+        }
+        this.desync.set(() => false);
+    }
+
     private _assetPath(uniqueId: number, override: { path?: number[]; name?: string } = {}) {
         const asset = this._assets.get(uniqueId);
         if (!asset) {
@@ -275,22 +290,27 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
         });
 
-        // sharedb silently swapped doc.data (rollback/refetch) — reconcile buffer
+        // sharedb silently swapped doc.data (rollback/refetch) — reconcile buffer.
+        // do NOT recompute dirty from hash(otdoc.text): a server resync can swap _text
+        // back to an S3-matching snapshot, which would falsely clear dirty and mask
+        // lost local edits. OTDocument emits 'stuck' when this happens with pending ops.
         otdoc.on('reload', () => {
             const path = this._assetPath(uniqueId);
-            const asset = this._assets.get(uniqueId);
-            const dirty = asset?.file?.hash !== hash(otdoc.text);
-            file.dirty = dirty;
-            this._events.emit('asset:file:subscribed', path, otdoc.text, dirty);
+            this._events.emit('asset:file:subscribed', path, otdoc.text, file.dirty);
         });
 
-        // local ops unacked past the stuck threshold — flip project-level
-        // desync only if sharedb is connected (offline queueing is expected).
+        // local ops unacked past the stuck threshold — surface desync regardless of
+        // sharedb.connected. a "healthy" connection that silently stalls for 30s is
+        // exactly the failure mode we need to alarm on; a genuine offline stretch is
+        // also worth surfacing so users don't assume their edits are syncing.
         otdoc.on('stuck', () => {
-            if (!this._sharedb.connected.get()) {
-                return;
-            }
             this.desync.set(() => true);
+        });
+
+        // queue drained — if we're connected and no other doc is still pending,
+        // clear desync so the UI recovers instead of staying stuck on the banner.
+        otdoc.on('drained', () => {
+            this._heal();
         });
 
         // emit file created event with OTDocument content for disk
@@ -1272,22 +1292,22 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
         });
 
-        // sharedb silently swapped doc.data (rollback/refetch) — reconcile buffer
+        // sharedb silently swapped doc.data (rollback/refetch) — reconcile buffer.
+        // do NOT recompute dirty from hash(otdoc.text): a server resync can swap _text
+        // back to an S3-matching snapshot, which would falsely clear dirty and mask
+        // lost local edits. OTDocument emits 'stuck' when this happens with pending ops.
         otdoc.on('reload', () => {
             const p = this._assetPath(uniqueId);
-            const a = this._assets.get(uniqueId);
-            const d = a?.file?.hash !== hash(otdoc.text);
-            promoted.dirty = d;
-            this._events.emit('asset:file:subscribed', p, otdoc.text, d);
+            this._events.emit('asset:file:subscribed', p, otdoc.text, promoted.dirty);
         });
 
-        // local ops unacked past the stuck threshold — flip project-level
-        // desync only if sharedb is connected (offline queueing is expected).
+        // local ops unacked past the stuck threshold — surface desync unconditionally
+        // (see _addFile for rationale). 'drained' clears desync when the queue recovers.
         otdoc.on('stuck', () => {
-            if (!this._sharedb.connected.get()) {
-                return;
-            }
             this.desync.set(() => true);
+        });
+        otdoc.on('drained', () => {
+            this._heal();
         });
 
         this._events.emit('asset:file:subscribed', current, otdoc.text, dirty);
