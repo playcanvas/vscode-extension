@@ -254,22 +254,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                // disk differs from server and from our last known write — treat as a
-                // local edit (e.g. git checkout while closed) and push it upstream
-                const known = this._diskHash.get(uri.path);
-                const observed = hash(existingText);
-                if (known === undefined || known !== observed) {
-                    this._diskHash.set(uri.path, observed);
-
-                    // _projectManager is unset during link's writeAll; safe to skip the push
-                    // there since watchers aren't live yet and disk is already preserved
-                    if (this._folderUri && this._projectManager) {
-                        const path = relativePath(uri, this._folderUri);
-                        void this._projectManager.write(path, existingContent);
-                    }
-                    this._log.info(`create.local.preserved ${uri}`);
-                    return;
-                }
+                // server is authoritative — fall through to overwrite divergent disk
             }
 
             if (!exists) {
@@ -569,24 +554,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const doc = await vscode.workspace.openTextDocument(uri);
                     const bufferText = norm(doc.getText());
 
-                    // clean buffer whose hash drifted = external reload (e.g. git checkout); push up, don't clobber
-                    const known = this._diskHash.get(uri.path);
-                    const externalReload = !doc.isDirty && known !== undefined && hash(bufferText) !== known;
-
-                    if (doc.isDirty || externalReload) {
-                        // buffer has user/external edits not yet in OT — submit to ShareDB
-                        const userOp = delta(file.doc.text, bufferText);
-                        if (userOp) {
-                            file.doc.apply(userOp);
-                            file.dirty = true;
-                            this._events.emit('asset:file:dirty', path, true);
-                            this._diskHash.set(uri.path, hash(bufferText));
-                            this._log.info(
-                                `${externalReload ? 'subscribe.external.preserved' : 'subscribe.recovered'} ${uri}`
-                            );
-                        }
-                    } else if (file.doc.text !== bufferText) {
-                        // buffer has stale disk content — apply live ShareDB doc to buffer
+                    // server is authoritative — apply live ShareDB doc to buffer on any divergence
+                    if (file.doc.text !== bufferText) {
                         const { prefix, suffix } = diff(bufferText, file.doc.text);
                         const edit = new vscode.WorkspaceEdit();
                         edit.replace(
@@ -606,38 +575,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._locks.delete(`${uri}`);
             });
         } else {
-            // sync to disk for closed files — guard against clobbering local edits
+            // sync server snapshot to disk for closed files — server is authoritative
             const buf = buffer.from(norm(content));
             const key = `${uri}`;
 
+            // skip if disk already matches server
             if (await fileExists(uri)) {
-                // check local echo by comparing normalized text — CRLF on disk must not
-                // read as "diverged" against LF-canonical server content
                 const existing = await vscode.workspace.fs.readFile(uri);
                 const existingText = norm(buffer.toString(existing));
                 const bufText = norm(buffer.toString(buf));
                 if (existingText === bufText) {
                     this._diskHash.set(uri.path, hash(bufText));
-                    if (dirty) {
-                        this._events.emit('asset:file:dirty', path, true);
-                    }
-                    return;
-                }
-
-                // check for divergent edits since last known state (e.g. git checkout while closed)
-                // if so, preserve on disk and push up instead of clobbering
-                const known = this._diskHash.get(uri.path);
-                const observed = hash(existingText);
-                if (known === undefined || known !== observed) {
-                    this._diskHash.set(uri.path, observed);
-
-                    // _subscribed only fires via the asset:file:subscribed event, whose handler
-                    // is wired in _watchEvents after link completes — so _projectManager is
-                    // guaranteed set here; the check is a null-narrowing formality
-                    if (this._projectManager) {
-                        void this._projectManager.write(path, existing);
-                    }
-                    this._log.info(`subscribe.local.preserved ${uri}`);
                     if (dirty) {
                         this._events.emit('asset:file:dirty', path, true);
                     }

@@ -10,9 +10,10 @@ VS Code extension for real-time collaborative editing of PlayCanvas assets. Sync
 - Local edits: convert `contentChanges` via `vscode2sharedb()` in `src/utils/text.ts`. Adjust each change's offset by the cumulative `insertLength − deleteLength` of preceding changes in the same batch — raw `contentChanges` offsets are relative to the pre-batch buffer and will misalign if applied naively.
 - Replace ops use the atomic form `[offset, text, { d: len }]`. Never emit separate delete+insert for a replace, and never emit a leading `0` skip (ot-text rejects it).
 - Remote ops are applied under the per-URI lock `_locks` (`src/disk.ts`). While the lock is held, `onDidChangeTextDocument` must not submit ops; post-lock reconciliation in `_update` recovers keystrokes typed during `applyEdit` by diffing observed-vs-expected and transforming against queued ops.
-- Closed-file remote updates must run the divergence-merge path in `Disk._update`: if the on-disk hash differs from `_diskHash` AND disk differs from the server snapshot, compute `userOp = delta(serverPrev, diskContent)`, transform it against the incoming remote op (and any queued ops), submit `userOp`, then write the merged result and advance `_diskHash`. Without this, a local save made while the file was closed is silently clobbered by the next remote op.
+- **Server is authoritative on reconciliation.** On `_create`, `_subscribed`, and closed-file remote updates, divergent disk content is overwritten by the server snapshot — never push local disk upstream as part of open/subscribe/reopen. Local edits reach the server only via `onDidChangeTextDocument` (keystrokes) and the disk watcher's explicit `change` event (external file edits). Accept the narrow loss of watcher-blind external edits rather than risk collab data loss from stale local files clobbering server state.
 - `UndoManager` (`src/undo-manager.ts`) stores inverses of **local edits only**. On every remote op, call `transform()` to rebase both stacks; `clear()` on document reload. Route undo/redo through `OTDocument.apply()` — never mutate `doc.text` directly.
-- On `OTDocument` `reload` (ingestSnapshot) or fresh subscribe: take `_writeMutex` for the URI, push divergent buffer content upstream as an op before overwriting, then clear undo/redo.
+- On `OTDocument` `reload` (ingestSnapshot) or fresh subscribe: take `_writeMutex` for the URI, apply server content to the buffer via `applyEdit`, then clear undo/redo. Never submit buffer content upstream during subscribe.
+- OT canonical state is LF. All text crossing the disk↔server boundary is normalized via `norm()` (`src/utils/text.ts`); `files.eol` is forced to `\n` at workspace level. Never compare raw disk bytes against server-produced bytes — always compare normalized strings.
 - Do not rely on `fs.writeFile` to an open document triggering VS Code's native reload — use the buffer-apply path.
 
 ### Data integrity (one client must not corrupt others)
@@ -94,7 +95,8 @@ scripts/                      # build & codegen scripts
 - **Debouncer**: Key-based debouncing batches disk writes (50ms default).
 - **Atomic OT Ops**: Single replace ops `[offset, text, { d: len }]` instead of separate delete+insert.
 - **Minimal Diff**: Prefix/suffix matching in `text.ts` `delta()` minimizes op size for closed-file updates.
-- **Divergence Merge**: Closed-file remote updates reconcile against divergent on-disk content via `delta() + transform()` before applying.
+- **Server-Authoritative Reconciliation**: On open/subscribe/reopen, server content overwrites divergent disk/buffer. Local edits reach the server only via keystrokes or explicit disk-watcher change events.
+- **LF Canonicalization**: All text crossing disk↔server goes through `norm()`; workspace `files.eol` is forced to LF.
 - **Echo Mechanism**: Hash-based echo map in `Disk`, keyed `${uri}:${kind}`, prevents feedback loops on disk writes.
 - **Buffer-state tracking**: `_bufferState` holds the canonical-before-op snapshot so the next keystroke diff does not re-submit already-applied remote content.
 - **Stuck → desync**: `OTDocument` emits `stuck` after 30s without ack or on explicit server reject; `ProjectManager.desync` surfaces this as a status-bar item and toast.
@@ -111,7 +113,7 @@ Local:  VS Code → Disk → ProjectManager → ShareDB
 
 - **Local edits (open files)**: `vscode2sharedb()` (`utils/text.ts`) converts `contentChanges` into atomic ShareDB ops with per-change offset adjustment, then submits through `OTDocument.apply()`.
 - **Remote edits (open files)**: `sharedb2vscode()` (`utils/text.ts`) converts ops to VS Code `TextEdit[]`, applied under the per-URI `_locks` lock. After the lock releases, reconciliation transforms any keystrokes typed during the apply window against queued remote ops so no local input is lost.
-- **Closed-file remote updates**: `Disk._update` runs the divergence-merge path above when `_diskHash` disagrees with on-disk content.
+- **Closed-file remote updates**: `Disk._update` writes the server snapshot straight to disk via the debounced write — server is authoritative, no readback.
 - **Closed-file local writes**: `ProjectManager.write()` computes a minimal diff via `delta()` and submits one atomic op.
 - **Disk sync**: Debounced writes pre-set the echo hash; the watcher skips matching or superseded events. `_diskHash` / `_diskStat` are cleared on delete/rename/unlink so re-creates don't see false divergence.
 
