@@ -78,8 +78,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     static TYPE_DIR = '.pc';
 
-    // injected into the ignore ruleset so vcs metadata dirs are never synced
-    static VCS_IGNORE = '.git\n.hg\n.svn\n';
+    // injected into the ignore ruleset so editor/vcs metadata dirs are never synced.
+    // .vscode holds workspace settings we write ourselves (files.autoSave, files.eol);
+    // .cursor is Cursor's equivalent editor-local config dir.
+    static VCS_IGNORE = '.git\n.hg\n.svn\n.vscode\n.cursor\n';
 
     private _events: EventEmitter<EventMap>;
 
