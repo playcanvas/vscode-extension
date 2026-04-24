@@ -244,17 +244,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                // for files, check content
+                // for files, check content — compare normalized text so CRLF on disk
+                // doesn't read as "diverged" against LF-canonical server content
                 const existingContent = await vscode.workspace.fs.readFile(uri);
-                if (buffer.cmp(existingContent, content)) {
-                    this._diskHash.set(uri.path, hash(content));
+                const existingText = norm(buffer.toString(existingContent));
+                const contentText = norm(buffer.toString(content));
+                if (existingText === contentText) {
+                    this._diskHash.set(uri.path, hash(contentText));
                     return;
                 }
 
                 // disk differs from server and from our last known write — treat as a
                 // local edit (e.g. git checkout while closed) and push it upstream
                 const known = this._diskHash.get(uri.path);
-                const observed = hash(existingContent);
+                const observed = hash(existingText);
                 if (known === undefined || known !== observed) {
                     this._diskHash.set(uri.path, observed);
 
@@ -608,10 +611,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const key = `${uri}`;
 
             if (await fileExists(uri)) {
-                // check local echo by comparing content (stronger than mtime or existence check)
+                // check local echo by comparing normalized text — CRLF on disk must not
+                // read as "diverged" against LF-canonical server content
                 const existing = await vscode.workspace.fs.readFile(uri);
-                if (buffer.cmp(existing, buf)) {
-                    this._diskHash.set(uri.path, hash(buf));
+                const existingText = norm(buffer.toString(existing));
+                const bufText = norm(buffer.toString(buf));
+                if (existingText === bufText) {
+                    this._diskHash.set(uri.path, hash(bufText));
                     if (dirty) {
                         this._events.emit('asset:file:dirty', path, true);
                     }
@@ -621,7 +627,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 // check for divergent edits since last known state (e.g. git checkout while closed)
                 // if so, preserve on disk and push up instead of clobbering
                 const known = this._diskHash.get(uri.path);
-                const observed = hash(existing);
+                const observed = hash(existingText);
                 if (known === undefined || known !== observed) {
                     this._diskHash.set(uri.path, observed);
 
@@ -1515,7 +1521,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const fetched = new Map<number, Uint8Array>();
         await pool(stubs, FETCH_CONCURRENCY, async ([, f]) => {
             const [err, buf] = await tryCatch(projectManager.fetchContent(f.uniqueId));
-            fetched.set(f.uniqueId, err ? new Uint8Array() : buf);
+            // normalize REST content to LF — S3 may hold CRLF from pre-fix uploads
+            fetched.set(f.uniqueId, err ? new Uint8Array() : buffer.from(norm(buffer.toString(buf))));
         });
 
         // write files to disk — folders first (parents before descendants), then files, via worker pool
@@ -1544,7 +1551,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const ignoreUri = vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE);
             const [, raw] = await tryCatch(vscode.workspace.fs.readFile(ignoreUri) as Promise<Uint8Array>);
             if (raw) {
-                this._parseIgnoreText(buffer.toString(raw), folderUri);
+                this._parseIgnoreText(norm(buffer.toString(raw)), folderUri);
             }
         }
 

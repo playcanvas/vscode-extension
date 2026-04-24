@@ -787,11 +787,24 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 void f.update('autoSave', 'off', vscode.ConfigurationTarget.Workspace);
             }
         };
+        // force LF — OT canonical state is always LF, and native CRLF saves
+        // cause false "diverged" readings on reopen that overwrite collaborator edits
+        const forceLF = () => {
+            const f = vscode.workspace.getConfiguration('files');
+            if (f.get('eol') !== '\n') {
+                log.debug('forcing files.eol to LF for workspace');
+                void f.update('eol', '\n', vscode.ConfigurationTarget.Workspace);
+            }
+        };
         disableAutosave();
+        forceLF();
         context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration((e) => {
                 if (e.affectsConfiguration('files.autoSave')) {
                     disableAutosave();
+                }
+                if (e.affectsConfiguration('files.eol')) {
+                    forceLF();
                 }
             })
         );

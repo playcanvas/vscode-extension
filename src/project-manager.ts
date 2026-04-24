@@ -903,7 +903,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 assetType: 'text',
                 blobType: 'text/plain'
             };
-            const src = content?.length ? buffer.toString(content) : '\n';
+            const src = content?.length ? norm(buffer.toString(content)) : '\n';
             ext = EXT_TO_ASSET.has(ext) ? ext : 'txt';
             data = {
                 type: assetType,
