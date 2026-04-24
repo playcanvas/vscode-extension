@@ -78,8 +78,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     static TYPE_DIR = '.pc';
 
-    // injected into the ignore ruleset so vcs metadata dirs are never synced
-    static VCS_IGNORE = '.git\n.hg\n.svn\n';
+    // injected into the ignore ruleset so editor/vcs metadata dirs are never synced.
+    // .vscode holds workspace settings we write ourselves (files.autoSave, files.eol);
+    // .cursor is Cursor's equivalent editor-local config dir.
+    static VCS_IGNORE = '.git\n.hg\n.svn\n.vscode\n.cursor\n';
 
     private _events: EventEmitter<EventMap>;
 
@@ -244,29 +246,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                // for files, check content
+                // for files, check content — compare normalized text so CRLF on disk
+                // doesn't read as "diverged" against LF-canonical server content
                 const existingContent = await vscode.workspace.fs.readFile(uri);
-                if (buffer.cmp(existingContent, content)) {
-                    this._diskHash.set(uri.path, hash(content));
+                const existingText = norm(buffer.toString(existingContent));
+                const contentText = norm(buffer.toString(content));
+                if (existingText === contentText) {
+                    this._diskHash.set(uri.path, hash(contentText));
                     return;
                 }
 
-                // disk differs from server and from our last known write — treat as a
-                // local edit (e.g. git checkout while closed) and push it upstream
-                const known = this._diskHash.get(uri.path);
-                const observed = hash(existingContent);
-                if (known === undefined || known !== observed) {
-                    this._diskHash.set(uri.path, observed);
-
-                    // _projectManager is unset during link's writeAll; safe to skip the push
-                    // there since watchers aren't live yet and disk is already preserved
-                    if (this._folderUri && this._projectManager) {
-                        const path = relativePath(uri, this._folderUri);
-                        void this._projectManager.write(path, existingContent);
-                    }
-                    this._log.info(`create.local.preserved ${uri}`);
-                    return;
-                }
+                // server is authoritative — fall through to overwrite divergent disk
             }
 
             if (!exists) {
@@ -566,24 +556,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const doc = await vscode.workspace.openTextDocument(uri);
                     const bufferText = norm(doc.getText());
 
-                    // clean buffer whose hash drifted = external reload (e.g. git checkout); push up, don't clobber
-                    const known = this._diskHash.get(uri.path);
-                    const externalReload = !doc.isDirty && known !== undefined && hash(bufferText) !== known;
-
-                    if (doc.isDirty || externalReload) {
-                        // buffer has user/external edits not yet in OT — submit to ShareDB
-                        const userOp = delta(file.doc.text, bufferText);
-                        if (userOp) {
-                            file.doc.apply(userOp);
-                            file.dirty = true;
-                            this._events.emit('asset:file:dirty', path, true);
-                            this._diskHash.set(uri.path, hash(bufferText));
-                            this._log.info(
-                                `${externalReload ? 'subscribe.external.preserved' : 'subscribe.recovered'} ${uri}`
-                            );
-                        }
-                    } else if (file.doc.text !== bufferText) {
-                        // buffer has stale disk content — apply live ShareDB doc to buffer
+                    // server is authoritative — apply live ShareDB doc to buffer on any divergence
+                    if (file.doc.text !== bufferText) {
                         const { prefix, suffix } = diff(bufferText, file.doc.text);
                         const edit = new vscode.WorkspaceEdit();
                         edit.replace(
@@ -603,35 +577,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._locks.delete(`${uri}`);
             });
         } else {
-            // sync to disk for closed files — guard against clobbering local edits
+            // sync server snapshot to disk for closed files — server is authoritative
             const buf = buffer.from(norm(content));
             const key = `${uri}`;
 
+            // skip if disk already matches server
             if (await fileExists(uri)) {
-                // check local echo by comparing content (stronger than mtime or existence check)
                 const existing = await vscode.workspace.fs.readFile(uri);
-                if (buffer.cmp(existing, buf)) {
-                    this._diskHash.set(uri.path, hash(buf));
-                    if (dirty) {
-                        this._events.emit('asset:file:dirty', path, true);
-                    }
-                    return;
-                }
-
-                // check for divergent edits since last known state (e.g. git checkout while closed)
-                // if so, preserve on disk and push up instead of clobbering
-                const known = this._diskHash.get(uri.path);
-                const observed = hash(existing);
-                if (known === undefined || known !== observed) {
-                    this._diskHash.set(uri.path, observed);
-
-                    // _subscribed only fires via the asset:file:subscribed event, whose handler
-                    // is wired in _watchEvents after link completes — so _projectManager is
-                    // guaranteed set here; the check is a null-narrowing formality
-                    if (this._projectManager) {
-                        void this._projectManager.write(path, existing);
-                    }
-                    this._log.info(`subscribe.local.preserved ${uri}`);
+                const existingText = norm(buffer.toString(existing));
+                const bufText = norm(buffer.toString(buf));
+                if (existingText === bufText) {
+                    this._diskHash.set(uri.path, hash(bufText));
                     if (dirty) {
                         this._events.emit('asset:file:dirty', path, true);
                     }
@@ -1515,7 +1471,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const fetched = new Map<number, Uint8Array>();
         await pool(stubs, FETCH_CONCURRENCY, async ([, f]) => {
             const [err, buf] = await tryCatch(projectManager.fetchContent(f.uniqueId));
-            fetched.set(f.uniqueId, err ? new Uint8Array() : buf);
+            // normalize REST content to LF — S3 may hold CRLF from pre-fix uploads
+            fetched.set(f.uniqueId, err ? new Uint8Array() : buffer.from(norm(buffer.toString(buf))));
         });
 
         // write files to disk — folders first (parents before descendants), then files, via worker pool
@@ -1544,7 +1501,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const ignoreUri = vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE);
             const [, raw] = await tryCatch(vscode.workspace.fs.readFile(ignoreUri) as Promise<Uint8Array>);
             if (raw) {
-                this._parseIgnoreText(buffer.toString(raw), folderUri);
+                this._parseIgnoreText(norm(buffer.toString(raw)), folderUri);
             }
         }
 
