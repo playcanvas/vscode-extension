@@ -172,6 +172,9 @@ suite('extension', () => {
 
     teardown(async () => {
         sandbox.resetHistory();
+        // clear per-doc test-injection flags (_latency, _rejectNext) so a stuck/desync
+        // test in one slot doesn't bleed into the next test's first submit.
+        sharedb.resetAdversarial();
         // settle deferred queue / mutex between tests
         await wait(process.env.CI ? 2000 : 50);
     });
@@ -2565,5 +2568,144 @@ suite('extension', () => {
 
         assert.strictEqual(tdoc.getText(), '// REMOTE\n// ORIGINAL', 'remote edit preserved, local reverted');
         assert.strictEqual(documents.get(asset.uniqueId), '// REMOTE\n// ORIGINAL', 'OT doc should match buffer');
+    });
+
+    test('mock fidelity - sharedb doc is LF-canonicalized on subscribe', async () => {
+        // production server (collab-server/lib/documents.js) replaces \r\n and \r with \n
+        // before storing, and the client's norm() in src/utils/text.ts mirrors this on the
+        // outbound side. without this normalization the buffer would diverge from doc.text
+        // on any disk↔server crossing — the mock must match or assertions about doc.data
+        // drift from production.
+        const id = 9999;
+        documents.set(id, 'a\r\nb\rc\n');
+        assets.set(id, { uniqueId: id, item_id: `${id}`, name: 'crlf.txt', path: [], type: 'script' });
+        try {
+            const doc = await sharedb.subscribe('documents', `${id}`);
+            assert.strictEqual(doc.data, 'a\nb\nc\n', 'sharedb-loaded doc must be LF-canonical');
+        } finally {
+            await sharedb.unsubscribe('documents', `${id}`);
+            documents.delete(id);
+            assets.delete(id);
+        }
+    });
+
+    test('undo stack cleared after server-driven reload', async () => {
+        // sharedb ingestSnapshot (hard rollback / version mismatch) replaces doc.data
+        // wholesale; the inverse ops on the undo stack reference offsets in the
+        // pre-reload buffer and would corrupt content if applied. Disk._dirtyReload
+        // clears the per-uri UndoManager — verify that running undo after a reload
+        // is a no-op (does not resurrect content, does not crash).
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'undo_after_reload.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        // local edit so undo has something to revert
+        const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL\n');
+        await vscode.workspace.applyEdit(edit);
+        await assertResolves(localOp, 'local op');
+        assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIG\n');
+
+        // server ingestSnapshot replaces buffer; undo must drop its inverses
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb doc should exist');
+        const replaced = '// SERVER REPLACED\n';
+        const reloaded = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && tdoc.getText() === replaced) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+        doc.reload(replaced);
+        documents.set(asset.uniqueId, replaced);
+        await assertResolves(reloaded, 'reload applied');
+
+        // undo should be a no-op now — stack was cleared. buffer must stay at server snapshot.
+        await vscode.commands.executeCommand('playcanvas.undo');
+        await wait(50);
+        assert.strictEqual(tdoc.getText(), replaced, 'undo after reload must not resurrect pre-reload content');
+    });
+
+    test('submit rejection surfaces stuck → desync', async () => {
+        // production: collab-server middleware/submit.js rejects ops with strings like
+        // `forbidden(N)` or `invalid:path`. OTDocument's submit callback calls _stick
+        // on err, which surfaces ProjectManager.desync, which lights the status-bar
+        // item and fires a one-shot toast. without async/reject hooks in the mock this
+        // entire surface was unreachable from tests.
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'stuck_rejection.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb doc should exist');
+        warningMessageStub.resetHistory();
+        doc._rejectNext = 'forbidden(5)';
+
+        // local edit triggers submit; mock callback fires err → OTDocument._stick → desync
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// REJECTED\n');
+        await vscode.workspace.applyEdit(edit);
+        // signal effect runs synchronously after desync.set; one microtask covers any
+        // pending .then in the toast wiring before we assert.
+        await wait(0);
+
+        assert.ok(
+            warningMessageStub.calledWith(sinon.match(/out of sync/i)),
+            'desync toast must fire after submit rejection'
+        );
+    });
+
+    test('multi-edit batch offsets cumulate correctly', async () => {
+        // CLAUDE.md OT-compliance invariant: vscode2sharedb adjusts each contentChange
+        // offset by the cumulative insertLength − deleteLength of preceding changes in
+        // the same batch — raw contentChanges offsets are pre-batch-relative. without
+        // this adjustment the second/third edit lands at the wrong offset on the wire.
+        // Drive a single applyEdit with three inserts and verify each op resolves to a
+        // pre-batch offset that, when applied in order, reproduces the final buffer.
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'multi_edit_batch.js', content: 'AAA\nBBB\nCCC\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        // expected ops: each prefixed by a skip equal to where the insertion lands in the
+        // server's buffer at the moment that op is applied. Three inserts at original
+        // positions [0,0], [1,0], [2,0] of the pre-batch buffer (lines AAA / BBB / CCC).
+        // Server-side, the inserts apply sequentially, so each offset is relative to the
+        // already-mutated buffer — the cumulative-adjust logic in vscode2sharedb turns
+        // VS Code's pre-batch offsets into the post-batch-cumulative offsets ot-text wants.
+        const collected: unknown[] = [];
+        const docMock = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(docMock, 'sharedb doc should exist');
+        const onop = (args: unknown) => {
+            collected.push(args);
+        };
+        docMock.on('op', onop);
+
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '1');
+        edit.insert(uri, new vscode.Position(1, 0), '2');
+        edit.insert(uri, new vscode.Position(2, 0), '3');
+        await vscode.workspace.applyEdit(edit);
+        await wait(50);
+        docMock.off('op', onop);
+
+        // final document must match what VS Code rendered locally — confirms the wire
+        // ops, when applied in their submitted order, reproduce the buffer state.
+        assert.strictEqual(tdoc.getText(), '1AAA\n2BBB\n3CCC\n', 'buffer content sanity');
+        assert.strictEqual(documents.get(asset.uniqueId), '1AAA\n2BBB\n3CCC\n', 'mock-applied ops must match buffer');
     });
 });

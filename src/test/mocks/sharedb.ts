@@ -149,6 +149,10 @@ class Doc implements sharedb.Doc {
     }
 }
 
+// matches the server-side normalization in collab-server/lib/documents.js — text crossing
+// the wire is canonicalized to LF. norm() in src/utils/text.ts mirrors this on the client.
+const normLF = (data: unknown) => (typeof data === 'string' ? data.replace(/\r\n|\r/g, '\n') : data);
+
 class MockDoc extends Doc {
     on: sinon.SinonSpy<[type: string, listener: (...args: unknown[]) => void], this>;
 
@@ -160,10 +164,21 @@ class MockDoc extends Doc {
 
     resume: sinon.SinonSpy<[], void>;
 
-    submitOp: sinon.SinonSpy<[op: unknown, options?: { source: string }], void>;
+    submitOp: sinon.SinonSpy<[op: unknown, options?: { source: string }, callback?: (err?: Error) => void], void>;
 
     // simulates sharedb's ingestSnapshot: replaces data wholesale and emits 'load'
     reload!: (data: unknown) => void;
+
+    // adversarial test hooks. _latency > 0 delays the submitOp callback (and its 'op'
+    // emit) by the given ms — production has a network round-trip, the mock had none,
+    // so _locks reconciliation and the 30s queue-age stuck timer were unreachable from
+    // tests. _rejectNext queues a single error string the next submit will surface via
+    // the callback, mirroring the server's `forbidden(N)` / `invalid:*` rejections.
+    _latency = 0;
+
+    _rejectNext: string | null = null;
+
+    private _pending = 0;
 
     constructor(sandbox: sinon.SinonSandbox, type: string, key: string) {
         super();
@@ -173,7 +188,7 @@ class MockDoc extends Doc {
                 break;
             }
             case 'documents': {
-                this.data = documents.get(parseInt(key, 10));
+                this.data = normLF(documents.get(parseInt(key, 10)));
                 break;
             }
             case 'settings': {
@@ -192,7 +207,7 @@ class MockDoc extends Doc {
             return this;
         });
         this.reload = (data: unknown) => {
-            this.data = data;
+            this.data = type === 'documents' ? normLF(data) : data;
             events.emit('load');
         };
         this.destroy = sandbox.spy(() => {
@@ -204,14 +219,40 @@ class MockDoc extends Doc {
         this.resume = sandbox.spy(() => {
             return;
         });
-        this.submitOp = sandbox.spy((op: unknown, options?: { source: string }) => {
-            // apply op via ot-text (same logic as OTDocument)
-            if (Array.isArray(op) && type === 'documents' && typeof this.data === 'string') {
-                this.data = ottext.apply(this.data, op as ShareDbTextOp) as string;
-                documents.set(parseInt(key, 10), this.data as string);
+        this.hasPending = () => this._pending > 0;
+        this.hasWritePending = () => this._pending > 0;
+        this.submitOp = sandbox.spy((op: unknown, options?: { source: string }, callback?: (err?: Error) => void) => {
+            this._pending++;
+            const apply = () => {
+                // server-rejected op: callback gets the error, 'op' is not emitted, and
+                // _pending stays bumped so 'no write pending' never fires — matches the
+                // production stuck queue, which OTDocument observes via the err callback
+                // (synchronous _stick) and the 30s queue-age timer (timeout fallback).
+                if (this._rejectNext) {
+                    const reason = this._rejectNext;
+                    this._rejectNext = null;
+                    // sharedb Error shape: { code, message }, not a JS Error subclass
+                    callback?.({ code: 4001, message: reason });
+                    return;
+                }
+                if (Array.isArray(op) && type === 'documents' && typeof this.data === 'string') {
+                    this.data = ottext.apply(this.data, op as ShareDbTextOp) as string;
+                    documents.set(parseInt(key, 10), this.data as string);
+                }
+                events.emit('op', op as unknown[], options?.source || '');
+                this._pending--;
+                callback?.();
+                if (this._pending === 0) {
+                    events.emit('no write pending');
+                }
+            };
+            // default: synchronous to preserve existing tests that assert state right
+            // after submitOp. _latency > 0 opts into async timing for race tests.
+            if (this._latency > 0) {
+                setTimeout(apply, this._latency);
+            } else {
+                apply();
             }
-
-            events.emit('op', op as unknown[], options?.source || '');
         });
     }
 }
@@ -232,6 +273,8 @@ class MockShareDb extends ShareDb {
     bulkUnsubscribe: sinon.SinonSpy<[[string, string][]], Promise<void>>;
 
     sendRaw: sinon.SinonSpy<[Parameters<WebSocket['send']>[0]], Promise<void>>;
+
+    resetAdversarial!: () => void;
 
     constructor(sandbox: sinon.SinonSandbox, messenger: MockMessenger) {
         super({ url: '', origin: '' });
@@ -256,6 +299,15 @@ class MockShareDb extends ShareDb {
         this.bulkUnsubscribe = sandbox.spy(async (subscriptions: [string, string][]) => {
             await Promise.all(subscriptions.map(([type, key]) => this.unsubscribe(type, key)));
         });
+        // clears per-doc adversarial flags (_latency, _rejectNext) at test boundaries.
+        // tests own these directly on the MockDoc; without a sweep, a leftover
+        // _rejectNext from one test would surface as a stuck timer in the next.
+        this.resetAdversarial = () => {
+            for (const doc of this.subscriptions.values()) {
+                doc._latency = 0;
+                doc._rejectNext = null;
+            }
+        };
         this.sendRaw = sandbox.spy(async (data: Parameters<WebSocket['send']>[0]) => {
             // check for fs operations
             if (`${data}`.startsWith('fs')) {
@@ -319,4 +371,4 @@ class MockShareDb extends ShareDb {
     }
 }
 
-export { MockShareDb };
+export { MockShareDb, MockDoc };
