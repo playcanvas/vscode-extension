@@ -56,6 +56,9 @@ const warningMessageStub = sandbox.stub(vscode.window, 'showWarningMessage').res
 // stub info message for ignore update prompts
 const infoMessageStub = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
+// stub error message — handleError() in extension.ts:105 surfaces pm.error here
+const errorMessageStub = sandbox.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+
 // spy vscode methods
 const openTextDocumentSpy = sandbox.spy(vscode.workspace, 'openTextDocument');
 
@@ -175,6 +178,9 @@ suite('extension', () => {
         // clear per-doc test-injection flags (_latency, _rejectNext) so a stuck/desync
         // test in one slot doesn't bleed into the next test's first submit.
         sharedb.resetAdversarial();
+        // clear per-method REST failure queues so a failNext from one test doesn't
+        // get consumed by the next test's first call.
+        rest.resetFailures();
         // settle deferred queue / mutex between tests
         await wait(process.env.CI ? 2000 : 50);
     });
@@ -2707,5 +2713,117 @@ suite('extension', () => {
         // ops, when applied in their submitted order, reproduce the buffer state.
         assert.strictEqual(tdoc.getText(), '1AAA\n2BBB\n3CCC\n', 'buffer content sanity');
         assert.strictEqual(documents.get(asset.uniqueId), '1AAA\n2BBB\n3CCC\n', 'mock-applied ops must match buffer');
+    });
+
+    test('mock fidelity - asset doc op mutates snapshot (rename)', async () => {
+        // production handler at src/project-manager.ts:212-216 applies oi/od/li/ld
+        // against an internal snapshot when the asset doc emits an 'op' event. mock
+        // must mirror this so doc.data and assets.get(id) stay in lockstep — without
+        // the applier, an asset rename test would only pass because MockRest.assetRename
+        // mutates the assets map directly, masking real op-handler regressions.
+        const asset = await assetCreate({ name: 'rename_via_op.js', content: '// X\n' });
+        const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
+        assert.ok(doc, 'asset doc should exist');
+
+        doc.submitOp([{ p: ['name'], oi: 'renamed_via_op.js' }], { source: 'remote' });
+        await wait(0);
+
+        const data = doc.data as { name: string };
+        assert.strictEqual(data.name, 'renamed_via_op.js', 'doc.data should reflect oi');
+        assert.strictEqual(assets.get(asset.uniqueId)?.name, 'renamed_via_op.js', 'assets map shares the reference');
+    });
+
+    test('mock fidelity - asset doc op updates path on folder move', async () => {
+        // exercises the loose splice semantics: [{p:['path'], li: folderId}] lands
+        // li at index parseInt('path',10)||0 === 0 — same as production's _addAsset
+        // handler at src/project-manager.ts:227-231.
+        const folder = await assetCreate({ name: 'move_target_folder' });
+        const file = await assetCreate({ name: 'move_subject.js', content: '// X\n' });
+        const doc = sharedb.subscriptions.get(`assets:${file.uniqueId}`);
+        assert.ok(doc, 'asset doc should exist');
+
+        doc.submitOp([{ p: ['path'], li: folder.uniqueId }], { source: 'remote' });
+        await wait(0);
+
+        const data = doc.data as { path: number[] };
+        assert.deepStrictEqual(data.path, [folder.uniqueId], 'path array should have the folder id appended at idx 0');
+    });
+
+    test('mock fidelity - settings doc remote op mutates singleton', async () => {
+        // settings doc.data is a reference to the projectSettings singleton
+        // (src/test/mocks/sharedb.ts:195) — mutation must land on the same object so
+        // production-style settings consumers (none today, but forward-insurance) see
+        // the change. use an unused field so other tests reading projectSettings.branch
+        // are unaffected.
+        const doc = sharedb.subscriptions.get(`settings:project_${project.id}_${user.id}`);
+        assert.ok(doc, 'settings doc should exist');
+
+        doc.submitOp([{ p: ['_p2_marker'], oi: 'x' }], { source: 'remote' });
+        await wait(0);
+
+        const data = doc.data as Record<string, unknown>;
+        assert.strictEqual(data._p2_marker, 'x', 'doc.data should reflect oi');
+        assert.strictEqual(
+            (projectSettings as Record<string, unknown>)._p2_marker,
+            'x',
+            'projectSettings singleton should be mutated in place'
+        );
+        // cleanup so the marker doesn't leak into a downstream test
+        delete (projectSettings as Record<string, unknown>)._p2_marker;
+    });
+
+    test('save retry recovers after single doc:save:error', async () => {
+        // collab-server may respond doc:save:error:N (e.g. transient S3 hiccup).
+        // ProjectManager._verifySave (src/project-manager.ts:399-422) schedules a
+        // retry after SAVE_RETRY_DELAY_MS (2000ms): doc:reconnect:N then doc:save:N.
+        // without P2.3's failNextSave hook this branch was unreachable from tests.
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'save_retry.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        // dirty the doc so a save actually rounds the server
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// EDIT\n');
+        await vscode.workspace.applyEdit(edit);
+
+        sharedb.failNextSave(asset.uniqueId, 1);
+        sharedb.sendRaw.resetHistory();
+        await tdoc.save();
+
+        // wait past the retry delay (2s) + small buffer for the reconnect/save round trip
+        await wait(2200);
+
+        const calls = sharedb.sendRaw.getCalls().map((c) => `${c.args[0]}`);
+        const docSaves = calls.filter((c) => c === `doc:save:${asset.uniqueId}`);
+        const reconnects = calls.filter((c) => c === `doc:reconnect:${asset.uniqueId}`);
+        assert.strictEqual(docSaves.length, 2, 'expected initial doc:save + retry doc:save');
+        assert.strictEqual(reconnects.length, 1, 'expected one doc:reconnect during retry');
+    });
+
+    test('rest assetCreate failure surfaces error to user', async () => {
+        // production: pm.create wraps rest.assetCreate in guard() (project-manager.ts:939)
+        // which sets pm.error on throw; the effect at extension.ts:706 calls handleError
+        // which posts via vscode.window.showErrorMessage. without P2.4's failNext hook
+        // this entire user-visible path was unreachable from tests.
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        errorMessageStub.resetHistory();
+        rest.failNext('assetCreate', new Error('mock 500: assetCreate refused'));
+
+        const fileUri = vscode.Uri.joinPath(folderUri, 'rest_fail_create.js');
+        await vscode.workspace.fs.writeFile(fileUri, new TextEncoder().encode('// LOCAL\n'));
+
+        // wait for the disk watcher → pm.create → rest.assetCreate → guard → error effect chain
+        await wait(process.env.CI ? 1500 : 500);
+
+        const errorCall = errorMessageStub
+            .getCalls()
+            .find((c) => `${c.args[0]}`.includes('mock 500: assetCreate refused'));
+        assert.ok(errorCall, 'showErrorMessage must surface the rest failure');
     });
 });
