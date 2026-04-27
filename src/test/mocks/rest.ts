@@ -43,6 +43,41 @@ class MockRest extends Rest {
 
     assetFile: sinon.SinonSpy<[number, string, string], Promise<ArrayBuffer>>;
 
+    // FIFO of errors to throw on the next N calls of a given method. mirrors a final
+    // post-retry failure from src/connections/rest.ts (MAX_RETRIES=3) — exercises the
+    // ProjectManager error/guard path without simulating the retry loop itself.
+    private _failures = new Map<string, Error[]>();
+
+    failNext(
+        method:
+            | 'id'
+            | 'user'
+            | 'userThumb'
+            | 'userProjects'
+            | 'projectAssets'
+            | 'projectBranches'
+            | 'branchCheckout'
+            | 'assetCreate'
+            | 'assetRename'
+            | 'assetFile',
+        err: Error = new Error(`HTTP 500 (mock): ${method}`)
+    ) {
+        const q = this._failures.get(method) ?? [];
+        q.push(err);
+        this._failures.set(method, q);
+    }
+
+    resetFailures() {
+        this._failures.clear();
+    }
+
+    private _maybeFail(method: string) {
+        const err = this._failures.get(method)?.shift();
+        if (err) {
+            throw err;
+        }
+    }
+
     constructor(sandbox: sinon.SinonSandbox, messenger: MockMessenger, sharedb: MockShareDb) {
         super({
             url: '',
@@ -50,13 +85,34 @@ class MockRest extends Rest {
             accessToken
         });
 
-        this.id = sandbox.spy(async () => user.id);
-        this.user = sandbox.spy(async () => user);
-        this.userThumb = sandbox.spy(async () => new ArrayBuffer(0));
-        this.userProjects = sandbox.spy(async (_userId: number, _view?: string) => [project]);
-        this.projectAssets = sandbox.spy(async (_projectId: number) => Array.from(assets.values()));
-        this.projectBranches = sandbox.spy(async (_projectId: number) => Array.from(branches.values()));
-        this.branchCheckout = sandbox.spy(async (branchId: string) => branches.get(branchId)!);
+        this.id = sandbox.spy(async () => {
+            this._maybeFail('id');
+            return user.id;
+        });
+        this.user = sandbox.spy(async () => {
+            this._maybeFail('user');
+            return user;
+        });
+        this.userThumb = sandbox.spy(async () => {
+            this._maybeFail('userThumb');
+            return new ArrayBuffer(0);
+        });
+        this.userProjects = sandbox.spy(async (_userId: number, _view?: string) => {
+            this._maybeFail('userProjects');
+            return [project];
+        });
+        this.projectAssets = sandbox.spy(async (_projectId: number) => {
+            this._maybeFail('projectAssets');
+            return Array.from(assets.values());
+        });
+        this.projectBranches = sandbox.spy(async (_projectId: number) => {
+            this._maybeFail('projectBranches');
+            return Array.from(branches.values());
+        });
+        this.branchCheckout = sandbox.spy(async (branchId: string) => {
+            this._maybeFail('branchCheckout');
+            return branches.get(branchId)!;
+        });
         this.assetCreate = sandbox.spy(
             async (
                 _projectId: number,
@@ -70,6 +126,7 @@ class MockRest extends Rest {
                     file?: Blob;
                 }
             ) => {
+                this._maybeFail('assetCreate');
                 // calculate path
                 let path: number[] = [];
                 if (data.parent) {
@@ -118,6 +175,7 @@ class MockRest extends Rest {
             }
         );
         this.assetRename = sandbox.spy(async (_projectId: number, _branchId: string, assetId: number, name: string) => {
+            this._maybeFail('assetRename');
             // find asset and document
             const asset = assets.get(assetId);
             assert(asset, `asset with ID ${assetId} not found`);
@@ -143,6 +201,7 @@ class MockRest extends Rest {
             return asset;
         });
         this.assetFile = sandbox.spy(async (assetId: number, _branchId: string, _filename: string) => {
+            this._maybeFail('assetFile');
             const content = documents.get(assetId) ?? '';
             return new TextEncoder().encode(content).buffer;
         });

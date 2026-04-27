@@ -6,7 +6,7 @@ import type { Snapshot, Callback, ShareDBSourceOptions, DocEventMap, Error } fro
 import type sinon from 'sinon';
 
 import { ShareDb } from '../../connections/sharedb';
-import type { ShareDbTextOp } from '../../typings/sharedb';
+import type { ShareDbOp, ShareDbTextOp } from '../../typings/sharedb';
 
 import type { MockMessenger } from './messenger';
 import { projectSettings, assets, documents } from './models';
@@ -153,6 +153,41 @@ class Doc implements sharedb.Doc {
 // the wire is canonicalized to LF. norm() in src/utils/text.ts mirrors this on the client.
 const normLF = (data: unknown) => (typeof data === 'string' ? data.replace(/\r\n|\r/g, '\n') : data);
 
+// in-place applier that mirrors the loose semantics of ProjectManager._addAsset
+// (src/project-manager.ts:189-239). production walks o.p[0..n-2], reads o.p[n-1] as
+// a key, and applies array ops via splice(parseInt(key,10) || 0, ...). existing tests
+// submit ops shaped like [{p:['path'], li: folderId}] which strict ot-json0 would
+// reject (parent is the asset object, not the array) — the loose form is load-bearing,
+// so we hand-roll instead of importing ot-json0.
+const applyAssetOp = (data: Record<string, unknown>, ops: ShareDbOp[]) => {
+    for (const o of ops) {
+        let obj = data as Record<string, unknown>;
+        for (let i = 0; i < o.p.length - 1; i++) {
+            const p = o.p[i];
+            if (obj[p] == null) {
+                obj[p] = {};
+            }
+            obj = obj[p] as Record<string, unknown>;
+        }
+        const key = o.p[o.p.length - 1];
+        const idx = parseInt(String(key), 10) || 0;
+        const val = obj[key];
+        if (o.oi !== undefined && o.od !== undefined) {
+            obj[key] = o.oi;
+        } else if (o.oi !== undefined) {
+            obj[key] = o.oi;
+        } else if (o.od !== undefined) {
+            delete obj[key];
+        } else if (o.li !== undefined && o.ld !== undefined && Array.isArray(val)) {
+            val[idx] = o.li;
+        } else if (o.li !== undefined && Array.isArray(val)) {
+            val.splice(idx, 0, o.li);
+        } else if (o.ld !== undefined && Array.isArray(val)) {
+            val.splice(idx, 1);
+        }
+    }
+};
+
 class MockDoc extends Doc {
     on: sinon.SinonSpy<[type: string, listener: (...args: unknown[]) => void], this>;
 
@@ -238,6 +273,16 @@ class MockDoc extends Doc {
                 if (Array.isArray(op) && type === 'documents' && typeof this.data === 'string') {
                     this.data = ottext.apply(this.data, op as ShareDbTextOp) as string;
                     documents.set(parseInt(key, 10), this.data as string);
+                } else if (
+                    Array.isArray(op) &&
+                    (type === 'assets' || type === 'settings') &&
+                    this.data &&
+                    typeof this.data === 'object'
+                ) {
+                    // mutate in place — this.data shares its reference with the assets
+                    // Map / projectSettings singleton (sharedb.ts:187/195), so cloning
+                    // would silently desync the mock from the maps.
+                    applyAssetOp(this.data as Record<string, unknown>, op as ShareDbOp[]);
                 }
                 events.emit('op', op as unknown[], options?.source || '');
                 this._pending--;
@@ -276,6 +321,19 @@ class MockShareDb extends ShareDb {
 
     resetAdversarial!: () => void;
 
+    // FIFO of save responses to inject per uniqueId. empty queue → emit 'success'
+    // (today's default). drives ProjectManager._verifySave's retry path
+    // (src/project-manager.ts:399-422), which re-sends doc:reconnect + doc:save.
+    saveResponses = new Map<number, ('success' | 'error')[]>();
+
+    failNextSave(uniqueId: number, count = 1) {
+        const q = this.saveResponses.get(uniqueId) ?? [];
+        for (let i = 0; i < count; i++) {
+            q.push('error');
+        }
+        this.saveResponses.set(uniqueId, q);
+    }
+
     constructor(sandbox: sinon.SinonSandbox, messenger: MockMessenger) {
         super({ url: '', origin: '' });
 
@@ -307,6 +365,7 @@ class MockShareDb extends ShareDb {
                 doc._latency = 0;
                 doc._rejectNext = null;
             }
+            this.saveResponses.clear();
         };
         this.sendRaw = sandbox.spy(async (data: Parameters<WebSocket['send']>[0]) => {
             // check for fs operations
@@ -363,7 +422,9 @@ class MockShareDb extends ShareDb {
             if (`${data}`.startsWith('doc:save')) {
                 const raw = data.toString().slice(9);
                 const id = parseInt(raw, 10);
-                this.emit('doc:save', 'success', id);
+                const q = this.saveResponses.get(id);
+                const state = q?.shift() ?? 'success';
+                this.emit('doc:save', state, id);
                 return;
             }
             return;
