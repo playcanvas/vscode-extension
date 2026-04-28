@@ -103,8 +103,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _saving = new Set<string>();
 
-    private _bufferState = new Map<string, string>();
-
     private _undos = new Map<string, UndoManager>();
 
     private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
@@ -407,7 +405,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             const range = new vscode.Range(document.positionAt(0), document.positionAt(curRaw.length));
                             reset.replace(uri, range, file.doc.text);
                             await vscode.workspace.applyEdit(reset);
-                            this._bufferState.set(uri.path, norm(file.doc.text));
                             this._log.warn(`sync.remote.resync ${uri} applied=false`);
                             return;
                         }
@@ -417,7 +414,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         const postRaw = document.getText();
                         const postText = norm(postRaw);
                         const expected = ottext.apply(bufferText, bufferOp) as string;
-                        this._bufferState.set(uri.path, postText);
 
                         const late = delta(expected, postText);
                         if (late) {
@@ -533,9 +529,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private async _subscribed(uri: vscode.Uri, path: string, content: string, dirty: boolean) {
-        // baseline and undo inverses reference pre-reload OT history — drop both so _update
-        // falls back to the safe fullUserOp path and undo can't resurrect missing content
-        this._bufferState.delete(uri.path);
+        // undo inverses reference pre-reload OT history — clear so undo can't resurrect missing content
         this._undos.get(uri.path)?.clear();
 
         if (this._opened.has(uri.path)) {
@@ -570,8 +564,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         }
                         this._log.info(`subscribe.resync ${uri}`);
                     }
-
-                    this._bufferState.set(uri.path, norm(doc.getText()));
                 });
                 this._locks.delete(`${uri}`);
             });
@@ -679,9 +671,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _dirtyReload(document: vscode.TextDocument, text: string) {
         this._diskHash.set(document.uri.path, hash(text));
-
-        // keep _bufferState fresh so the next _update doesn't re-submit the external content
-        this._bufferState.set(document.uri.path, text);
 
         // avoid touching eol chars
         const raw = document.getText();
@@ -794,7 +783,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 // reconcile: recover keystrokes typed during applyEdit await
                 const postText = norm(doc.getText());
                 const expected = ottext.apply(buf, bufOp) as string;
-                this._bufferState.set(uri.path, postText);
 
                 const late = delta(expected, postText);
                 if (late) {
@@ -922,7 +910,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._diskHash.delete(document.uri.path);
             this._diskStat.delete(document.uri.path);
             this._saving.delete(document.uri.path);
-            this._bufferState.delete(document.uri.path);
             this._events.emit('asset:doc:close', path);
         });
 
@@ -1571,7 +1558,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         await super.unlink();
         this._folderUri = undefined;
         this._projectManager = undefined;
-        this._bufferState.clear();
         this._diskHash.clear();
         this._diskStat.clear();
         this._undos.forEach((m) => m.clear());
