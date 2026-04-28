@@ -270,6 +270,10 @@ class MockDoc extends Doc {
                     callback?.({ code: 4001, message: reason });
                     return;
                 }
+
+                // mirror sharedb's emit order: 'before op' fires with pre-apply data so
+                // subscribers can capture the snapshot, then data mutates, then 'op' fires.
+                events.emit('before op', op as unknown[], options?.source || '');
                 if (Array.isArray(op) && type === 'documents' && typeof this.data === 'string') {
                     this.data = ottext.apply(this.data, op as ShareDbTextOp) as string;
                     documents.set(parseInt(key, 10), this.data as string);

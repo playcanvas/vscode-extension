@@ -2670,6 +2670,26 @@ suite('extension', () => {
             warningMessageStub.calledWith(sinon.match(/out of sync/i)),
             'desync toast must fire after submit rejection'
         );
+
+        // canonical state must converge after rejection: doc.data is rolled back by sharedb,
+        // and emit('reload') reverts the open buffer via _subscribed.
+        await wait(50);
+        assert.strictEqual(
+            tdoc.getText(),
+            '// ORIG\n',
+            'buffer must revert after rejection — REJECTED text must not linger'
+        );
+
+        // follow-up edit lands at the right offset only if the canonical state rolled back.
+        const followUp = new vscode.WorkspaceEdit();
+        followUp.insert(uri, new vscode.Position(0, 0), '// FOLLOWUP\n');
+        await vscode.workspace.applyEdit(followUp);
+        await wait(50);
+        assert.strictEqual(
+            documents.get(asset.uniqueId),
+            '// FOLLOWUP\n// ORIG\n',
+            'follow-up edit must apply to the rolled-back canonical state'
+        );
     });
 
     test('multi-edit batch offsets cumulate correctly', async () => {
