@@ -2672,6 +2672,75 @@ suite('extension', () => {
         );
     });
 
+    test('_update does not resubmit already-applied keystrokes', async () => {
+        // regression for #275 / #279. pre-fix _update derived its post-applyEdit OT submission
+        // from delta(_bufferState, bufferText). _bufferState was only refreshed at the END of
+        // each _update — never on every keystroke — so between consecutive _updates every
+        // keystroke processed via apply() was already on the server but still inside that
+        // delta window, and the safety-net resubmitted them all, transformed against the new
+        // remote op. server applied duplicates at shifted offsets — visible to reporters as
+        // chunks of recently-typed lines reappearing later in the file. fix uses
+        // delta(prev, bufferText) instead, which by construction excludes already-applied
+        // keystrokes. test exercises the exact race: prior remote op seeds the post-_update
+        // baseline, normal keystroke advances buffer + canonical state, second remote op
+        // races against an in-flight applyEdit so a bailed keystroke makes fullUserOp non-null
+        // (the only condition that triggered the over-count block pre-fix).
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'no_resubmit.js', content: 'XYZ\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb doc should exist');
+
+        // count local-source ops sent across the wire (excludes server-driven 'remote' ops)
+        let localOpCount = 0;
+        const onop = (...args: unknown[]) => {
+            if (args[1] !== 'remote') {
+                localOpCount++;
+            }
+        };
+        doc.on('op', onop);
+
+        // first remote op — triggers the prior _update that pre-fix would have used
+        // to seed _bufferState
+        doc.submitOp(['// R1\n'], { source: 'remote' });
+        await wait(50);
+
+        // user types K — handler runs, submits one op via apply()
+        const e1 = new vscode.WorkspaceEdit();
+        e1.insert(uri, new vscode.Position(1, 0), 'K');
+        await vscode.workspace.applyEdit(e1);
+        await wait(50);
+
+        const afterK = localOpCount;
+        assert.strictEqual(afterK, 1, 'K submitted once after typing');
+
+        // second remote op + an immediately-following keystroke that bails on _locks.
+        // pre-fix: K is in delta(_bufferState, bufferText) so the over-count block fires
+        // and resubmits K transformed against R2. post-fix: only the bailed K2 is submitted.
+        doc.submitOp([7, '// R2\n'], { source: 'remote' });
+        const e2 = new vscode.WorkspaceEdit();
+        e2.insert(uri, new vscode.Position(0, 0), 'L');
+        void vscode.workspace.applyEdit(e2);
+        await wait(100);
+
+        doc.off('op', onop);
+
+        // post-fix: K typed once + L recovered once = 2 wire ops, server state reflects each op
+        // exactly once. pre-fix: same count (over-count submitted as a single combined op) but
+        // the combined op contains a duplicate K, so server state is corrupted.
+        assert.strictEqual(localOpCount, 2, 'each keystroke should produce exactly one wire op');
+        assert.strictEqual(
+            documents.get(asset.uniqueId),
+            'L// R1\nK// R2\nXYZ\n',
+            'server state must match each op applied exactly once with no duplication'
+        );
+    });
+
     test('multi-edit batch offsets cumulate correctly', async () => {
         // CLAUDE.md OT-compliance invariant: vscode2sharedb adjusts each contentChange
         // offset by the cumulative insertLength − deleteLength of preceding changes in
