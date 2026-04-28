@@ -669,8 +669,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
-    private _dirtyReload(document: vscode.TextDocument, text: string) {
-        this._diskHash.set(document.uri.path, hash(text));
+    private async _dirtyReload(document: vscode.TextDocument, text: string) {
+        // only refresh _diskHash if buffer actually matches disk. external=true
+        // is also a false positive on the first keystroke (VS Code reports
+        // isDirty=false transiently), where buffer ≠ disk — and stomping
+        // _diskHash there breaks the discard guard on later close-discard (#278).
+        const [, bytes] = await tryCatch(
+            Promise.resolve(vscode.workspace.fs.readFile(document.uri) as Promise<Uint8Array>)
+        );
+        if (bytes && norm(buffer.toString(bytes)) === text) {
+            this._diskHash.set(document.uri.path, hash(text));
+        }
 
         // avoid touching eol chars
         const raw = document.getText();

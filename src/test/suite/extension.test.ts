@@ -1222,6 +1222,55 @@ suite('extension', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external closed file change');
     });
 
+    test('file close - discard after first-keystroke does not roll back doc', async () => {
+        // regression #278: first onChange after open fires with isDirty=false
+        // (transient), so external=true was a false positive. _dirtyReload then
+        // stomped _diskHash to hash(buffer+keystroke), and a later close-discard
+        // failed the discard guard and submitted rollback ops.
+
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({
+            name: 'discard_after_first_keystroke.js',
+            content: '// ORIGINAL CONTENT'
+        });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+        await wait(50);
+
+        // first keystroke — fires onChange with isDirty=false (false positive external)
+        const first = new vscode.WorkspaceEdit();
+        first.insert(uri, new vscode.Position(0, 0), 'X');
+        await vscode.workspace.applyEdit(first);
+        await wait(50);
+
+        // more edits to grow the dirty state
+        const second = new vscode.WorkspaceEdit();
+        second.insert(uri, new vscode.Position(0, 1), 'YZ');
+        await vscode.workspace.applyEdit(second);
+        await wait(50);
+
+        const before = documents.get(asset.uniqueId);
+        assert.ok(before?.startsWith('XYZ'), 'doc state should reflect edits');
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'subscription should exist');
+        doc.submitOp.resetHistory();
+
+        // close with discard — fires onChange (revert to disk) then onDidCloseTextDocument
+        await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+        await wait(200);
+
+        assert.strictEqual(documents.get(asset.uniqueId), before, 'doc state should not roll back on dirty close');
+
+        const ops = doc.submitOp.getCalls();
+        assert.strictEqual(ops.length, 0, 'should not submit rollback ops on dirty close');
+    });
+
     test('file save - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
