@@ -46,6 +46,9 @@ export const projectSettings = {
 
 export const documents = new Map<number, string>([[1, `console.log('Hello, World!');`]]);
 
+// S3 baseline per uniqueId; re-syncs on doc:save, replaces `documents` on close:document
+export const persisted = new Map<number, string>(documents);
+
 export const assets = new Map<number, Asset>(
     [
         {

@@ -7,7 +7,7 @@ import type { Asset, Branch, Project, User } from '../../typings/models';
 import { hash } from '../../utils/utils';
 
 import type { MockMessenger } from './messenger';
-import { user, project, assets, branches, documents, accessToken, uniqueId } from './models';
+import { user, project, assets, branches, documents, persisted, accessToken, uniqueId } from './models';
 import type { MockShareDb } from './sharedb';
 
 class MockRest extends Rest {
@@ -156,8 +156,9 @@ class MockRest extends Rest {
                 };
                 assets.set(id, asset);
 
-                // add document to documents map
+                // add document to documents map (in-memory) and persisted (S3 baseline)
                 documents.set(asset.uniqueId, document);
+                persisted.set(asset.uniqueId, document);
 
                 // call messenger assetCreated signal
                 messenger.emit('asset.new', {

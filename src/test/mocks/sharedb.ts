@@ -9,7 +9,7 @@ import { ShareDb } from '../../connections/sharedb';
 import type { ShareDbOp, ShareDbTextOp } from '../../typings/sharedb';
 
 import type { MockMessenger } from './messenger';
-import { projectSettings, assets, documents } from './models';
+import { projectSettings, assets, documents, persisted } from './models';
 
 class Doc implements sharedb.Doc {
     id = '';
@@ -424,7 +424,30 @@ class MockShareDb extends ShareDb {
                 const id = parseInt(raw, 10);
                 const q = this.saveResponses.get(id);
                 const state = q?.shift() ?? 'success';
+                if (state === 'success') {
+                    const current = documents.get(id);
+                    if (current !== undefined) {
+                        persisted.set(id, current);
+                    }
+                }
                 this.emit('doc:save', state, id);
+                return;
+            }
+
+            // server drops in-memory state on close:document; mirror by reverting
+            // `documents` to the persisted baseline (and 'load'-emit any subscriber)
+            if (`${data}`.startsWith('close:document:')) {
+                const raw = data.toString().slice('close:document:'.length);
+                const id = parseInt(raw, 10);
+                const baseline = persisted.get(id);
+                const current = documents.get(id);
+                if (baseline !== undefined && current !== undefined && baseline !== current) {
+                    documents.set(id, baseline);
+                    const doc = this.subscriptions.get(`documents:${id}`);
+                    if (doc) {
+                        doc.reload(baseline);
+                    }
+                }
                 return;
             }
             return;

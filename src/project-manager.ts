@@ -1328,6 +1328,13 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return;
         }
 
+        // close:document drops in-memory ShareDB state; sending it while dirty
+        // rolls back peer edits on re-hydration (#278)
+        if (file.dirty) {
+            this._log.debug(`skipping unsubscribe of ${path} (dirty)`);
+            return;
+        }
+
         const uniqueId = file.uniqueId;
         await this._sharedb.unsubscribe('documents', `${uniqueId}`);
         this._sharedb.sendRaw(`close:document:${uniqueId}`);

@@ -1222,6 +1222,45 @@ suite('extension', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external closed file change');
     });
 
+    test('file close - dirty without save preserves in-memory doc', async () => {
+        // regression #278: dirty close sent close:document, reverting peer edits
+
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'dirty_close_preserves.js', content: '// ORIGINAL' });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL EDIT\n');
+        await vscode.workspace.applyEdit(edit);
+        await wait(100);
+
+        const before = documents.get(asset.uniqueId);
+        assert.ok(before?.includes('LOCAL EDIT'), 'in-memory doc should reflect edit');
+
+        sharedb.sendRaw.resetHistory();
+
+        // revert+close fires asset:doc:close → unsubscribe without prompting
+        await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+        await wait(200);
+
+        const closeCalls = sharedb.sendRaw
+            .getCalls()
+            .filter((c) => `${c.args[0]}` === `close:document:${asset.uniqueId}`);
+        assert.strictEqual(closeCalls.length, 0, 'should not send close:document for dirty file');
+
+        assert.strictEqual(
+            documents.get(asset.uniqueId),
+            before,
+            'in-memory ShareDB doc should not be reverted on dirty close'
+        );
+    });
+
     test('file save - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
