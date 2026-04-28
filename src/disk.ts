@@ -373,12 +373,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const raw = document.getText();
                 const bufferText = norm(raw);
 
-                // all differences from canonical-before-op to buffer (for transforms)
+                // bailed keystrokes (typed during _locks) — prev already includes every
+                // keystroke the handler processed via apply(), so this delta is exactly
+                // the lock-window edits that still need to reach the server. computing it
+                // off any older baseline would resubmit already-acked ops and the server
+                // would land them at offsets shifted by op — silent positional divergence.
                 const fullUserOp = delta(prev, bufferText);
-
-                // only new keystrokes since last _update (avoids re-submitting already-handled ones)
-                const baseline = this._bufferState.get(uri.path);
-                const newUserOp = baseline !== undefined ? delta(baseline, bufferText) : fullUserOp;
 
                 // transform remote op into buffer-space so positions align
                 const bufferOp = fullUserOp ? (ottext.transform(op, fullUserOp, 'right') as ShareDbTextOp) : op;
@@ -389,10 +389,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const path = relativePath(uri, this._folderUri);
                     const file = this._projectManager.files.get(path);
                     if (file?.type === 'file') {
-                        // submit only new user keystrokes to OT (transformed against remote op)
-                        // guard: skip if fullUserOp is null — canonical already includes them
-                        if (fullUserOp && newUserOp) {
-                            const transformed = ottext.transform(newUserOp, op, 'left') as ShareDbTextOp;
+                        // submit bailed keystrokes only, transformed against the remote op
+                        if (fullUserOp) {
+                            const transformed = ottext.transform(fullUserOp, op, 'left') as ShareDbTextOp;
                             file.doc.apply(transformed);
                             const wasDirty = file.dirty;
                             file.dirty = true;
