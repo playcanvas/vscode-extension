@@ -8,6 +8,7 @@ import packageJson from '../package.json';
 
 import { DEBUG, ENV, SENTRY_DSN } from './config';
 import type { FingerprintedError } from './utils/error';
+import * as redact from './utils/redact';
 
 const OS_NAMES: Record<string, string> = {
     darwin: 'Mac OS X',
@@ -15,43 +16,20 @@ const OS_NAMES: Record<string, string> = {
     win32: 'Windows'
 };
 
+// sentry breadcrumb levels — log.ts maps trace→debug since sentry has no trace
+type BreadcrumbLevel = 'fatal' | 'error' | 'warning' | 'log' | 'info' | 'debug';
+
 const isFingerprintedError = (e: unknown): e is FingerprintedError =>
     e instanceof Error && 'fingerprint' in e && typeof (e as FingerprintedError).fingerprint === 'string';
-
-// NOTE: sensitive keys to scrub from event data (matches monorepo sentry-utils.js)
-const SANITIZE_KEYS = /password|token|secret|passwd|authorization|api_key|apikey|sentry_dsn|access_token|credentials/i;
 
 type GroupingEvent = {
     message?: string;
     extra?: Record<string, unknown>;
     fingerprint?: string[];
+    event_id?: string;
 };
 
-const sanitize = (obj: unknown, memo = new WeakSet()): unknown => {
-    if (Array.isArray(obj)) {
-        if (memo.has(obj)) {
-            return obj;
-        }
-        memo.add(obj);
-        const result = obj.map((v) => sanitize(v, memo));
-        memo.delete(obj);
-        return result;
-    }
-    if (obj && typeof obj === 'object' && Object.getPrototypeOf(obj) === Object.prototype) {
-        if (memo.has(obj)) {
-            return obj;
-        }
-        memo.add(obj);
-        const record = obj as Record<string, unknown>;
-        const result: Record<string, unknown> = {};
-        for (const key of Object.keys(record)) {
-            result[key] = SANITIZE_KEYS.test(key) ? '********' : sanitize(record[key], memo);
-        }
-        memo.delete(obj);
-        return result;
-    }
-    return obj;
-};
+let _lastEventId: string | undefined;
 
 const client = new BrowserClient({
     dsn: DEBUG ? '' : SENTRY_DSN,
@@ -78,7 +56,11 @@ const client = new BrowserClient({
             };
         }
 
-        return sanitize(typedEvent) as typeof event;
+        if (typedEvent.event_id) {
+            _lastEventId = typedEvent.event_id;
+        }
+
+        return redact.object(typedEvent) as typeof event;
     }
 });
 
@@ -98,13 +80,38 @@ export const captureException = (error: Error, source?: string) => {
     s.captureException(error);
 };
 
-export const captureMessage = (message: string, level: 'warning' | 'error' = 'error', source?: string) => {
+export const captureMessage = (message: string, level: 'info' | 'warning' | 'error' = 'error', source?: string) => {
     const s = source ? scope.clone() : scope;
     if (source) {
         s.setTag('source', source);
     }
-    s.captureMessage(message, level);
+    return s.captureMessage(message, level);
 };
+
+// user-driven report — captureEvent directly so no synthetic stacktrace.
+// transaction → big main line (description), message → small top label.
+// fingerprint includes the description so distinct descriptions form distinct
+// issues (default grouping uses message, which is constant here).
+export const captureIssue = (description: string, contexts?: Record<string, Record<string, unknown>>) =>
+    scope.captureEvent({
+        message: 'User Report',
+        level: 'info',
+        tags: { kind: 'report' },
+        transaction: description,
+        fingerprint: ['playcanvas-user-report', description],
+        contexts
+    });
+
+export const addBreadcrumb = (b: { level: BreadcrumbLevel; category: string; message: string }) => {
+    scope.addBreadcrumb({ level: b.level, category: b.category, message: b.message });
+};
+
+// caller must redact — attachments bypass beforeSend
+export const addAttachment = (a: { filename: string; data: string | Uint8Array; contentType?: string }) => {
+    scope.addAttachment(a);
+};
+
+export const getLastSentryEventId = () => _lastEventId;
 
 export const setSentryUser = (id: number) => {
     scope.setUser({ id: String(id) });

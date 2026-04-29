@@ -2,6 +2,7 @@ import crypto from 'crypto';
 
 import * as vscode from 'vscode';
 
+import type { LogEntry } from '../log';
 import type { Project } from '../typings/models';
 
 import type { signal } from './signal';
@@ -41,6 +42,14 @@ export const withTimeout = <T>(promise: Promise<T>, ms: number, msg: string) => 
 export const tryCatch = async <T>(task: Promise<T> | (() => Promise<T>)): Promise<[Error, null] | [null, T]> => {
     try {
         return [null, await (typeof task === 'function' ? task() : task)];
+    } catch (err: unknown) {
+        return [err as Error, null];
+    }
+};
+
+export const tryCatchSync = <T>(task: () => T): [Error, null] | [null, T] => {
+    try {
+        return [null, task()];
     } catch (err: unknown) {
         return [err as Error, null];
     }
@@ -91,6 +100,15 @@ export const sanitizeName = (name: string) => {
 export const projectToName = (project: Project, encode = true) => {
     const name = encode ? sanitizeName(project.name) : project.name;
     return `${name} (${project.id})`;
+};
+
+export const fmtLog = (e: LogEntry) => {
+    const d = new Date(e.ts);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    const ms = String(d.getMilliseconds()).padStart(3, '0');
+    return `[${hh}:${mm}:${ss}.${ms}] [${e.level}] [${e.source}] ${e.message}`;
 };
 
 export const summarize = (data: unknown): string => {
