@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 
 import packageJson from '../package.json';
 
-import { ENV, SENTRY_DSN } from './config';
+import { DEBUG, ENV, SENTRY_DSN } from './config';
 import type { FingerprintedError } from './utils/error';
 import * as redact from './utils/redact';
 
@@ -32,7 +32,7 @@ type GroupingEvent = {
 let _lastEventId: string | undefined;
 
 const client = new BrowserClient({
-    dsn: SENTRY_DSN,
+    dsn: DEBUG ? '' : SENTRY_DSN,
     transport: makeFetchTransport,
     stackParser: defaultStackParser,
     environment: `extension_${ENV === 'prod' ? 'live' : ENV}`,
