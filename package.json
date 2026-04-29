@@ -10,6 +10,9 @@
         "type": "git",
         "url": "https://github.com/playcanvas/vscode-extension.git"
     },
+    "bugs": {
+        "url": "https://github.com/playcanvas/vscode-extension/issues"
+    },
     "author": "PlayCanvas",
     "license": "MIT",
     "publisher": "PlayCanvas",
@@ -78,6 +81,10 @@
             {
                 "command": "playcanvas.showPathCollisions",
                 "title": "PlayCanvas: Show Path Collisions"
+            },
+            {
+                "command": "playcanvas.reportIssue",
+                "title": "PlayCanvas: Report Issue"
             },
             {
                 "command": "playcanvas.undo",

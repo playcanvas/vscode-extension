@@ -1,4 +1,8 @@
+import * as os from 'os';
+
 import * as vscode from 'vscode';
+
+import packageJson from '../package.json';
 
 import { Auth } from './auth';
 import { API_URL, ENV, NAME, HOME_URL, MESSENGER_URL, REALTIME_URL, RELAY_URL, ROOT_FOLDER, DEBUG } from './config';
@@ -14,13 +18,22 @@ import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
 import { DecorationProvider } from './providers/decoration-provider';
-import { closeSentry, setSentryCollaborators, setSentryProject, setSentryUser } from './sentry';
+import {
+    addAttachment,
+    captureIssue,
+    closeSentry,
+    getLastSentryEventId,
+    setSentryCollaborators,
+    setSentryProject,
+    setSentryUser
+} from './sentry';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { fail } from './utils/error';
 import { EventEmitter } from './utils/event-emitter';
+import * as redact from './utils/redact';
 import { computed, effect } from './utils/signal';
-import { projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
+import { fmtLog, projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
 const PING_SAMPLE_MS = 60 * 1000;
@@ -102,7 +115,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await auth.reset(`Auth Error: ${error.message}`);
         }
 
-        void vscode.window.showErrorMessage(`PlayCanvas Error: ${error.message}`);
+        void vscode.window.showErrorMessage(`PlayCanvas Error: ${error.message}`, 'Report Issue').then((choice) => {
+            if (choice === 'Report Issue') {
+                void vscode.commands.executeCommand(`${NAME}.reportIssue`, error.message);
+            }
+        });
     };
 
     // create events
@@ -602,6 +619,52 @@ export const activate = async (context: vscode.ExtensionContext) => {
         })
     );
 
+    // report issue — accepts an optional defaultDescription so callers with
+    // an inherent context (error toast, desync toast) submit instantly.
+    context.subscriptions.push(
+        vscode.commands.registerCommand(`${NAME}.reportIssue`, async (defaultDescription?: string) => {
+            const description =
+                defaultDescription ??
+                (await vscode.window.showInputBox({
+                    title: 'PlayCanvas: Report Issue',
+                    prompt: 'Describe the issue',
+                    placeHolder: 'e.g. scripts are not syncing with online IDE',
+                    ignoreFocusOut: true,
+                    validateInput: (v) => (v.trim() ? undefined : 'Description is required')
+                }));
+            if (!description) {
+                return;
+            }
+
+            const project = state.projectId ? cache.get(state.projectId) : undefined;
+
+            const bundle = redact.text(Log.dump().map(fmtLog).join('\n'));
+            addAttachment({ filename: `${userId}.log`, data: bundle, contentType: 'text/plain' });
+
+            const eventId = captureIssue(description, {
+                report: {
+                    extension: packageJson.version,
+                    vscode: vscode.version,
+                    platform: `${process.platform} ${os.release()}`,
+                    env: ENV,
+                    project: state.projectId ?? 'none',
+                    branch: project?.branchId ?? 'none',
+                    desync: project?.projectManager.desync.get() ?? false,
+                    last_sentry_event: getLastSentryEventId() ?? 'none'
+                }
+            });
+
+            const copy = 'Copy ID';
+            void vscode.window
+                .showInformationMessage(`Report sent to PlayCanvas team. Reference: ${eventId}`, copy)
+                .then((choice) => {
+                    if (choice === copy) {
+                        void vscode.env.clipboard.writeText(eventId);
+                    }
+                });
+        })
+    );
+
     // load project
     const projects = await rest.userProjects(userId, 'profile');
     const valid: [vscode.WorkspaceFolder, Project][] = (vscode.workspace.workspaceFolders ?? []).reduce(
@@ -770,10 +833,21 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 return;
             }
             void vscode.window
-                .showWarningMessage('PlayCanvas project is out of sync. Reload to recover.', 'Reload project')
+                .showWarningMessage(
+                    'PlayCanvas project is out of sync. Reload to recover.',
+                    'Reload project',
+                    'Report Issue'
+                )
                 .then((choice) => {
-                    if (choice === 'Reload project') {
-                        void vscode.commands.executeCommand(`${NAME}.reloadProject`);
+                    switch (choice) {
+                        case 'Reload project': {
+                            void vscode.commands.executeCommand(`${NAME}.reloadProject`);
+                            break;
+                        }
+                        case 'Report Issue': {
+                            void vscode.commands.executeCommand(`${NAME}.reportIssue`, 'Out of sync');
+                            break;
+                        }
                     }
                 });
         });

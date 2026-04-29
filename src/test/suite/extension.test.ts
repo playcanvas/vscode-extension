@@ -10,6 +10,8 @@ import * as relayModule from '../../connections/relay';
 import * as restModule from '../../connections/rest';
 import * as sharedbModule from '../../connections/sharedb';
 import * as uriHandlerModule from '../../handlers/uri-handler';
+import { Log } from '../../log';
+import * as sentryModule from '../../sentry';
 import type { Asset } from '../../typings/models';
 import * as buffer from '../../utils/buffer';
 import { hash, tryCatch, wait } from '../../utils/utils';
@@ -61,6 +63,11 @@ const errorMessageStub = sandbox.stub(vscode.window, 'showErrorMessage').resolve
 
 // spy vscode methods
 const openTextDocumentSpy = sandbox.spy(vscode.workspace, 'openTextDocument');
+
+// stub sentry submission for reportIssue test — keep call args inspectable
+const addAttachmentStub = sandbox.stub(sentryModule, 'addAttachment');
+const captureIssueStub = sandbox.stub(sentryModule, 'captureIssue').returns('test-event-id');
+const inputBoxStub = sandbox.stub(vscode.window, 'showInputBox');
 
 // FIXME: increase timeout to improve stability in CI environment
 const assertResolves = async <T>(promise: PromiseLike<T>, name: string, timeout = process.env.CI ? 2000 : 1000) => {
@@ -353,6 +360,56 @@ suite('extension', () => {
         const quickPickCall = quickPickStub.getCall(0);
         const quickPickOptions = quickPickCall.args[1] as { title: string };
         assert.ok(quickPickOptions.title.includes('Collision'), 'quick pick should have collision title');
+    });
+
+    test(`command ${NAME}.reportIssue`, async () => {
+        // reset and seed the log buffer with a known trace entry. the channel level
+        // may be anything — the buffer captures regardless, which is the point.
+        Log.reset();
+        const log = new Log('ReportIssueTest');
+        const marker = `marker-${Date.now()}`;
+        log.trace('seed', marker);
+
+        // reset spies/stubs
+        infoMessageStub.resetHistory();
+        infoMessageStub.resolves(undefined);
+        addAttachmentStub.resetHistory();
+        captureIssueStub.resetHistory();
+        inputBoxStub.resetHistory();
+
+        // simulate the user typing a description in the prompt
+        const description = 'scene fails to load on branch switch';
+        inputBoxStub.resolves(description);
+
+        await assertResolves(vscode.commands.executeCommand(`${NAME}.reportIssue`), `${NAME}.reportIssue`);
+
+        // attachment was added with a user-<id>.log filename and plain-text bundle
+        assert.ok(addAttachmentStub.calledOnce, 'addAttachment should fire');
+        const attachment = addAttachmentStub.getCall(0).args[0] as {
+            filename: string;
+            data: string;
+            contentType?: string;
+        };
+        assert.match(attachment.filename, /^\d+\.log$/, 'attachment filename should be <id>.log');
+        assert.strictEqual(attachment.contentType, 'text/plain');
+        // log dump only — env metadata lives in event.contexts.report; no header in the file
+        assert.ok(attachment.data.startsWith('['), 'attachment should start with a log line, no header');
+        assert.ok(!attachment.data.includes('Extension:'), 'attachment should not include env metadata');
+        assert.ok(!attachment.data.includes('user ('), 'attachment should not include a user/project header');
+        assert.ok(attachment.data.includes('[trace]'), 'attachment should include trace entries');
+        assert.ok(attachment.data.includes(marker), 'attachment should include the seeded marker');
+
+        // captureIssue fired with the description as message and the report context
+        assert.ok(captureIssueStub.calledOnce, 'captureIssue should fire');
+        const [msg, contexts] = captureIssueStub.getCall(0).args as [string, Record<string, Record<string, unknown>>];
+        assert.strictEqual(msg, description, 'first arg should be the user description');
+        assert.ok(contexts.report, 'report context should be set');
+        assert.ok('extension' in contexts.report, 'report context should include extension version');
+
+        // user saw a notification with the (stubbed) event id
+        assert.ok(infoMessageStub.called, 'follow-up info message should be shown');
+        const lastMsg = infoMessageStub.getCall(infoMessageStub.callCount - 1).args[0] as string;
+        assert.ok(/test-event-id/.test(lastMsg), 'notification should include the event id');
     });
 
     test('uri open - file', async () => {
