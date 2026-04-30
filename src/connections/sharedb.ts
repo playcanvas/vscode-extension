@@ -1,7 +1,7 @@
 import WebSocket, { type Data } from 'isomorphic-ws';
 import { type } from 'ot-text';
 import * as sharedb from 'sharedb/lib/client/index.js';
-import type { Socket } from 'sharedb/lib/sharedb.js';
+import type { Error as ShareDbError, Socket } from 'sharedb/lib/sharedb.js';
 
 import { WEB } from '../config';
 import { Log } from '../log';
@@ -246,45 +246,80 @@ class ShareDb extends EventEmitter<EventMap> {
     }
 
     async subscribe(type: string, key: string) {
-        // check if already subscribed
-        if (this.subscriptions.has(`${type}:${key}`)) {
+        const id = `${type}:${key}`;
+        const cached = this.subscriptions.get(id);
+        if (cached) {
             this._log.debug('skipped as already subscribed to', type, key);
-            return this.subscriptions.get(`${type}:${key}`);
+            return cached;
         }
 
         // subscribe to doc
         const [connection] = await this._active.promise;
         const doc = connection.get(type, key);
-        const onload = () => {
-            this._log.debug('doc.load', type, key);
-            this.subscriptions.set(`${type}:${key}`, doc);
-        };
+        let done = false;
+        let off = () => undefined;
         const pending = new Promise<sharedb.Doc | undefined>((resolve) => {
-            doc.on('load', () => {
-                onload();
-                resolve(doc);
-            });
-            doc.on('error', (err) => {
+            const finish = (value: sharedb.Doc | undefined) => {
+                if (done) {
+                    return;
+                }
+                done = true;
+                off();
+                resolve(value);
+            };
+            const ready = (source: string) => {
+                if (done || !doc.subscribed || doc.data === undefined) {
+                    return;
+                }
+                doc.on('error', (err: ShareDbError) => {
+                    this._log.debug('doc.error', err);
+                    this.subscriptions.delete(id);
+                    doc.destroy();
+                });
+                doc.on('destroy', () => {
+                    this._log.debug('doc.destroy', type, key);
+                    this.subscriptions.delete(id);
+                });
+                this.subscriptions.set(id, doc);
+                this._log.debug(source, type, key);
+                finish(doc);
+            };
+            const abort = (err: ShareDbError) => {
+                if (done) {
+                    return;
+                }
                 this._log.debug('doc.error', err);
-                this.subscriptions.delete(`${type}:${key}`);
+                this.subscriptions.delete(id);
+                finish(undefined);
                 doc.destroy();
-                resolve(undefined);
+            };
+            const onload = () => ready('doc.load');
+            const onerror = (err: ShareDbError) => abort(err);
+
+            off = () => {
+                doc.removeListener('load', onload);
+                doc.removeListener('error', onerror);
+            };
+
+            doc.on('load', onload);
+            doc.on('error', onerror);
+            doc.subscribe((err?: ShareDbError) => {
+                if (err) {
+                    abort(err);
+                    return;
+                }
+                ready('doc.subscribe');
             });
-            doc.on('destroy', () => {
-                this._log.debug('doc.destroy', type, key);
-                this.subscriptions.delete(`${type}:${key}`);
-            });
-            doc.subscribe();
             this._log.debug('doc.subscribe', type, key);
         });
         const [err, value] = await tryCatch(
             withTimeout(pending, SUBSCRIBE_TIMEOUT_MS, `subscribe timed out for ${type}:${key}`)
         );
         if (err) {
+            done = true;
             this._log.warn(err.message);
-            doc.removeAllListeners('load');
-            doc.removeAllListeners('error');
-            this.subscriptions.delete(`${type}:${key}`);
+            off();
+            this.subscriptions.delete(id);
             doc.destroy();
             return undefined;
         }
