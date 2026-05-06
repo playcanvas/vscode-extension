@@ -570,6 +570,28 @@ export const activate = async (context: vscode.ExtensionContext) => {
         },
         [] as [vscode.WorkspaceFolder, Project][]
     );
+    if (valid.length === 0) {
+        const msg = 'This PlayCanvas workspace is not available for the current account.';
+        const login = 'Log in';
+        const open = 'Open Project';
+
+        connectionStatusItem.text = `$(primitive-dot) Not Available`;
+        connectionStatusItem.tooltip = msg;
+        connectionStatusItem.show();
+        void vscode.window.showWarningMessage(msg, login, open).then((choice) => {
+            switch (choice) {
+                case login: {
+                    void vscode.commands.executeCommand(`${NAME}.login`);
+                    break;
+                }
+                case open: {
+                    void vscode.commands.executeCommand(`${NAME}.openProject`);
+                    break;
+                }
+            }
+        });
+        return;
+    }
 
     for (const [folder, project] of valid) {
         connectionStatusItem.show();
