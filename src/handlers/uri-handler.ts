@@ -263,7 +263,15 @@ class UriHandler
 
         this._cleanup.push(async () => this._clearErrorDecoration());
 
-        // retrieve and clear stored open file (always consume)
+        await this._openFile(folderUri, projectManager);
+
+        this._folderUri = folderUri;
+        this._projectManager = projectManager;
+
+        this._log.info(`linked to ${folderUri.toString()}`);
+    }
+
+    protected async _openFile(folderUri: vscode.Uri, projectManager: ProjectManager) {
         const open = this._context.globalState.get<
             OpenFile & {
                 folderUriStr: string;
@@ -273,11 +281,6 @@ class UriHandler
         if (open?.assetId && open.folderUriStr === folderUri.toString()) {
             await this._openDocument(folderUri, projectManager, open);
         }
-
-        this._folderUri = folderUri;
-        this._projectManager = projectManager;
-
-        this._log.info(`linked to ${folderUri.toString()}`);
     }
 
     async unlink() {
