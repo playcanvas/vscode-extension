@@ -1,8 +1,7 @@
-import * as os from 'os';
-
 import * as vscode from 'vscode';
 
 import { Auth } from './auth';
+import { registerIdleCommands, registerProjectCommands } from './commands';
 import {
     DEBUG,
     ENV,
@@ -26,22 +25,13 @@ import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
 import { DecorationProvider } from './providers/decoration-provider';
-import {
-    addAttachment,
-    captureIssue,
-    closeSentry,
-    getLastSentryEventId,
-    setSentryCollaborators,
-    setSentryProject,
-    setSentryUser
-} from './sentry';
+import { closeSentry, setSentryCollaborators, setSentryProject, setSentryUser } from './sentry';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { fail } from './utils/error';
 import { EventEmitter } from './utils/event-emitter';
-import * as redact from './utils/redact';
-import { computed, effect } from './utils/signal';
-import { fmtLog, projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
+import { computed, effect, signal } from './utils/signal';
+import { projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
 const PING_SAMPLE_MS = 60 * 1000;
@@ -100,124 +90,81 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // auth
     const auth = new Auth(context);
-    context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.login`, async () => auth.getAccessToken(true)));
-    context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.logout`, () => auth.logout()));
     const folders = (vscode.workspace.workspaceFolders ?? []).filter((f) => uriStartsWith(f.uri, rootUri));
     const projectWindow = folders.length > 0;
-    const showError = (error: Error) => {
-        log.error(error);
-        void vscode.window.showErrorMessage(`PlayCanvas Error: ${error.message}`);
-    };
-    const openProject = async () => {
-        const [clientErr, client] = await tryCatch(auth.getClient(true));
-        if (clientErr) {
-            showError(clientErr);
-            return;
-        }
-        if (!client) {
-            return;
-        }
-        const [projectsErr, projects] = await tryCatch(client.rest.userProjects(client.userId, 'profile'));
-        client.rest.dispose();
-        if (projectsErr) {
-            showError(projectsErr);
+    const telemetry: { metrics?: Metrics } = {};
+
+    // error handler
+    const handleError = async (err?: Error, source?: string) => {
+        if (!err) {
             return;
         }
 
-        const list = projects.map((p) => projectToName(p, false)).reverse();
-        const chosen = await vscode.window.showQuickPick(list, {
-            placeHolder: 'Select a project'
+        // log to output channel (also reports to sentry)
+        log.error(err);
+
+        telemetry.metrics?.logError(err, source ? { source } : undefined);
+
+        // handle auth errors
+        if (/access token/.test(err.message)) {
+            await auth.reset(`Auth Error: ${err.message}`);
+        }
+
+        void vscode.window.showErrorMessage(`PlayCanvas Error: ${err.message}`, 'Report Issue').then((choice) => {
+            if (choice === 'Report Issue') {
+                void vscode.commands.executeCommand(`${NAME}.reportIssue`, err.message);
+            }
         });
-        const project = projects.find((p) => chosen === projectToName(p, false));
-        if (!project) {
-            return;
-        }
-
-        const folder = vscode.Uri.joinPath(rootUri, projectToName(project));
-        await vscode.workspace.fs.createDirectory(folder);
-        await vscode.commands.executeCommand('vscode.openFolder', folder, false);
-    };
-    const registerIdleCommands = () => {
-        context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.openProject`, openProject));
-        context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.reloadProject`, () => undefined));
-        context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.switchBranch`, () => undefined));
-        context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.showPathCollisions`, () => undefined));
-        context.subscriptions.push(
-            vscode.window.registerUriHandler({
-                handleUri: async (uri) => {
-                    const [clientErr, client] = await tryCatch(auth.getClient(true));
-                    if (clientErr) {
-                        showError(clientErr);
-                        return;
-                    }
-                    if (!client) {
-                        return;
-                    }
-                    const handler = new UriHandler({
-                        context,
-                        rootUri,
-                        userId: client.userId,
-                        rest: client.rest
-                    });
-                    const [handleErr] = await tryCatch(handler.handleUri(uri));
-                    client.rest.dispose();
-                    if (handleErr) {
-                        showError(handleErr);
-                    }
-                }
-            })
-        );
-        context.subscriptions.push(
-            vscode.commands.registerCommand(`${NAME}.reportIssue`, async (defaultDescription?: string) => {
-                const description =
-                    defaultDescription ??
-                    (await vscode.window.showInputBox({
-                        title: 'PlayCanvas: Report Issue',
-                        prompt: 'Describe the issue',
-                        placeHolder: 'e.g. scripts are not syncing with online IDE',
-                        ignoreFocusOut: true,
-                        validateInput: (v) => (v.trim() ? undefined : 'Description is required')
-                    }));
-                if (!description) {
-                    return;
-                }
-                const bundle = redact.text(Log.dump().map(fmtLog).join('\n'));
-                addAttachment({ filename: 'anonymous.log', data: bundle, contentType: 'text/plain' });
-                const eventId = captureIssue(description, {
-                    report: {
-                        extension: VERSION,
-                        vscode: vscode.version,
-                        platform: `${process.platform} ${os.release()}`,
-                        env: ENV,
-                        project: 'none',
-                        branch: 'none',
-                        desync: false,
-                        last_sentry_event: getLastSentryEventId() ?? 'none'
-                    }
-                });
-                const copy = 'Copy ID';
-                void vscode.window
-                    .showInformationMessage(`Report sent to PlayCanvas team. Reference: ${eventId}`, copy)
-                    .then((choice) => {
-                        if (choice === copy) {
-                            void vscode.env.clipboard.writeText(eventId);
-                        }
-                    });
-            })
-        );
     };
 
+    const failure = signal<{ err: Error; source?: string } | undefined>(undefined);
+    context.subscriptions.push(
+        new vscode.Disposable(
+            effect(() => {
+                const f = failure.get();
+                if (f) {
+                    void handleError(f.err, f.source).catch((e) => log.error(e.message));
+                }
+            })
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand(`${NAME}.login`, async () => {
+            const [err] = await tryCatch(auth.getAccessToken(true));
+            if (err) {
+                failure.set(() => ({ err, source: 'auth' }));
+            }
+        })
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand(`${NAME}.logout`, async () => {
+            const [err] = await tryCatch(auth.logout());
+            if (err) {
+                failure.set(() => ({ err, source: 'auth' }));
+            }
+        })
+    );
+
+    // idle commands
+    const registerIdle = () => {
+        registerIdleCommands({ context, auth, rootUri, failure });
+    };
     if (!projectWindow) {
-        registerIdleCommands();
+        registerIdle();
         return;
     }
-    const [clientErr, client] = await tryCatch(auth.getClient(false));
-    if (clientErr) {
-        throw clientErr;
+    const [err1, client] = await tryCatch(auth.getClient(false));
+    if (err1) {
+        registerIdle();
+        failure.set(() => ({ err: err1, source: 'auth' }));
+        return;
     }
     if (!client) {
-        registerIdleCommands();
-        await auth.promptProjectLogin();
+        registerIdle();
+        const [err2] = await tryCatch(auth.promptProjectLogin());
+        if (err2) {
+            failure.set(() => ({ err: err2, source: 'auth' }));
+        }
         return;
     }
     const { accessToken, rest, userId } = client;
@@ -225,33 +172,11 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // metrics
     const metrics = new Metrics(accessToken);
+    telemetry.metrics = metrics;
     context.subscriptions.push(metrics.disposable);
     metrics.increment('session.start', SESSION_DIMENSIONS);
     const heartbeat = setInterval(() => metrics.increment('session.heartbeat'), HEARTBEAT_MS);
     context.subscriptions.push(new vscode.Disposable(() => clearInterval(heartbeat)));
-
-    // error handler
-    const handleError = async (error?: Error, source?: string) => {
-        if (!error) {
-            return;
-        }
-
-        // log to output channel (also reports to sentry)
-        log.error(error);
-
-        metrics.logError(error, source ? { source } : undefined);
-
-        // handle auth errors
-        if (/access token/.test(error.message)) {
-            await auth.reset(`Auth Error: ${error.message}`);
-        }
-
-        void vscode.window.showErrorMessage(`PlayCanvas Error: ${error.message}`, 'Report Issue').then((choice) => {
-            if (choice === 'Report Issue') {
-                void vscode.commands.executeCommand(`${NAME}.reportIssue`, error.message);
-            }
-        });
-    };
 
     // create events
     const events = new EventEmitter<EventMap>();
@@ -269,7 +194,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = sharedb.error.get();
         if (err) {
-            void handleError(err, 'sharedb').catch((e) => log.error(e.message));
+            failure.set(() => ({ err, source: 'sharedb' }));
         }
     });
 
@@ -287,7 +212,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = relay.error.get();
         if (err) {
-            void handleError(err, 'relay').catch((e) => log.error(e.message));
+            failure.set(() => ({ err, source: 'relay' }));
         }
     });
 
@@ -317,7 +242,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = disk.error.get();
         if (err) {
-            void handleError(err, 'disk').catch((e) => log.error(e.message));
+            failure.set(() => ({ err, source: 'disk' }));
         }
     });
 
@@ -364,7 +289,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = uriHandler.error.get();
         if (err) {
-            void handleError(err, 'uri-handler').catch((e) => log.error(e.message));
+            failure.set(() => ({ err, source: 'uri-handler' }));
         }
     });
     context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
@@ -377,7 +302,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = collabProvider.error.get();
         if (err) {
-            void handleError(err, 'collab-provider').catch((e) => log.error(e.message));
+            failure.set(() => ({ err, source: 'collab-provider' }));
         }
     });
     context.subscriptions.push(vscode.window.registerTreeDataProvider('collab-view', collabProvider));
@@ -393,7 +318,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     effect(() => {
         const err = decorationProvider.error.get();
         if (err) {
-            void handleError(err, 'dirty-decoration-provider').catch((e) => log.error(e.message));
+            failure.set(() => ({ err, source: 'dirty-decoration-provider' }));
         }
     });
     context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
@@ -493,10 +418,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const branchSwitchDone = await simpleNotification(`Switching to branch ${name}...`);
 
             // reload project
-            const [reloadErr, reloaded] = await tryCatch(reload(projectManager, branch_id));
+            const [err1, reloaded] = await tryCatch(reload(projectManager, branch_id));
             branchSwitchDone();
-            if (reloadErr) {
-                throw reloadErr;
+            if (err1) {
+                throw err1;
             }
             if (!reloaded) {
                 return;
@@ -510,7 +435,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             branchStatusBarItem.show();
         });
         if (err) {
-            void handleError(err);
+            failure.set(() => ({ err, source: 'messenger' }));
         }
     });
     const branchClose = messenger.on('branch.close', async (e) => {
@@ -538,7 +463,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await rest.branchCheckout(main.id);
         });
         if (err) {
-            void handleError(err);
+            failure.set(() => ({ err, source: 'messenger' }));
         }
     });
     const checkpointRestore = async (data: {
@@ -567,17 +492,17 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const checkpointDone = await simpleNotification(`Restoring to checkpoint ${checkpoint_id}. Reloading...`);
 
             // reload project
-            const [reloadErr, reloaded] = await tryCatch(reload(projectManager));
+            const [err1, reloaded] = await tryCatch(reload(projectManager));
             checkpointDone();
-            if (reloadErr) {
-                throw reloadErr;
+            if (err1) {
+                throw err1;
             }
             if (!reloaded) {
                 return;
             }
         });
         if (err) {
-            void handleError(err);
+            failure.set(() => ({ err, source: 'messenger' }));
         }
     };
     const checkpointRevert = messenger.on('checkpoint.revertEnded', (e) => checkpointRestore(e.data));
@@ -591,202 +516,42 @@ export const activate = async (context: vscode.ExtensionContext) => {
         })
     );
 
-    // open project
+    // project commands
+    const commandReload = signal<{ projectManager: ProjectManager } | undefined>(undefined);
+    registerProjectCommands({
+        context,
+        rootUri,
+        userId,
+        rest,
+        metrics,
+        state,
+        cache,
+        reload: commandReload,
+        failure
+    });
     context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.openProject`, async () => {
-            metrics.increment('command', { name: 'openProject' });
-            // fetch all user projects
-            const projects = await rest.userProjects(userId, 'profile');
-
-            // show picker
-            const list = projects.map((p) => projectToName(p, false)).reverse();
-            const chosen = await vscode.window.showQuickPick(list, {
-                placeHolder: 'Select a project'
-            });
-            const project = projects.find((p) => chosen === projectToName(p, false));
-            if (!project) {
-                return;
-            }
-
-            // open project folder
-            const folder = vscode.Uri.joinPath(rootUri, projectToName(project));
-            await vscode.workspace.fs.createDirectory(folder);
-            await vscode.commands.executeCommand('vscode.openFolder', folder, false);
-        })
-    );
-
-    // reload project
-    context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.reloadProject`, async () => {
-            metrics.increment('command', { name: 'reloadProject' });
-            // check if we have an active editor
-            if (!state.projectId) {
-                return;
-            }
-
-            // fetch from cache
-            const { projectManager } = cache.get(state.projectId) ?? {};
-            if (!projectManager) {
-                return;
-            }
-
-            const reloadDone = await simpleNotification('Reloading project...');
-
-            // reload project
-            const [err, reloaded] = await tryCatch(reload(projectManager));
-            reloadDone();
-            if (err) {
-                void handleError(err).catch((e) => log.error(e.message));
-                return;
-            }
-            if (!reloaded) {
-                return;
-            }
-        })
-    );
-
-    // switch branch
-    context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.switchBranch`, async () => {
-            metrics.increment('command', { name: 'switchBranch' });
-            // check if we have an active project
-            if (!state.projectId) {
-                return;
-            }
-
-            // fetch from cache
-            const { branchId } = cache.get(state.projectId) ?? {};
-            if (!branchId) {
-                return;
-            }
-
-            // fetch project branches (excluding current branch)
-            const branches = await rest.projectBranches(state.projectId);
-            const branchNames = branches.reduce((acc: string[], b) => {
-                if (b.id === branchId) {
-                    return acc;
-                }
-                acc.push(b.name);
-                return acc;
-            }, []);
-
-            // show picker
-            const chosen = await vscode.window.showQuickPick(branchNames, {
-                placeHolder: 'Select a branch'
-            });
-            if (!chosen) {
-                return;
-            }
-
-            // find branch
-            const branch = branches.find((b) => b.name === chosen);
-            if (!branch) {
-                return;
-            }
-
-            // checkout branch
-            // NOTE: branch switch flow continues in messenger event above
-            await rest.branchCheckout(branch.id);
-        })
-    );
-
-    // view collisions
-    context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.showPathCollisions`, async () => {
-            if (!state.projectId) {
-                return;
-            }
-            const { projectManager } = cache.get(state.projectId) ?? {};
-            if (!projectManager) {
-                return;
-            }
-
-            const collisions = projectManager.collisions.snapshot();
-            if (collisions.size === 0) {
-                return;
-            }
-
-            // show warning message
-            const options = ['Show Path Collisions', 'Reload project'];
-            void vscode.window
-                .showWarningMessage(
-                    [
-                        `${collisions.size} asset path collision${collisions.size !== 1 ? 's' : ''} found.`,
-                        'Rename or move the colliding assets in the Editor to resolve.'
-                    ].join('\n'),
-                    ...options
-                )
-                .then((option) => {
-                    switch (option) {
-                        case options[0]: {
-                            const list = Array.from(collisions.entries()).map(([path, ids]) => ({
-                                label: path,
-                                description: `(${ids.join(', ')})`
-                            }));
-                            void vscode.window.showQuickPick(list, {
-                                title: 'Asset Path Collisions',
-                                placeHolder: 'Filter paths',
-                                canPickMany: false
-                            });
-                            break;
+        new vscode.Disposable(
+            effect(() => {
+                const req = commandReload.get();
+                if (req) {
+                    void simpleNotification('Reloading project...').then(async (reloadDone) => {
+                        const [err] = await tryCatch(reload(req.projectManager));
+                        reloadDone();
+                        if (err) {
+                            failure.set(() => ({ err, source: 'commands' }));
                         }
-                        case options[1]: {
-                            void vscode.commands.executeCommand(`${NAME}.reloadProject`);
-                            break;
-                        }
-                    }
-                });
-        })
-    );
-
-    // report issue — accepts an optional defaultDescription so callers with
-    // an inherent context (error toast, desync toast) submit instantly.
-    context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.reportIssue`, async (defaultDescription?: string) => {
-            const description =
-                defaultDescription ??
-                (await vscode.window.showInputBox({
-                    title: 'PlayCanvas: Report Issue',
-                    prompt: 'Describe the issue',
-                    placeHolder: 'e.g. scripts are not syncing with online IDE',
-                    ignoreFocusOut: true,
-                    validateInput: (v) => (v.trim() ? undefined : 'Description is required')
-                }));
-            if (!description) {
-                return;
-            }
-
-            const project = state.projectId ? cache.get(state.projectId) : undefined;
-
-            const bundle = redact.text(Log.dump().map(fmtLog).join('\n'));
-            addAttachment({ filename: `${userId}.log`, data: bundle, contentType: 'text/plain' });
-
-            const eventId = captureIssue(description, {
-                report: {
-                    extension: VERSION,
-                    vscode: vscode.version,
-                    platform: `${process.platform} ${os.release()}`,
-                    env: ENV,
-                    project: state.projectId ?? 'none',
-                    branch: project?.branchId ?? 'none',
-                    desync: project?.projectManager.desync.get() ?? false,
-                    last_sentry_event: getLastSentryEventId() ?? 'none'
+                    });
                 }
-            });
-
-            const copy = 'Copy ID';
-            void vscode.window
-                .showInformationMessage(`Report sent to PlayCanvas team. Reference: ${eventId}`, copy)
-                .then((choice) => {
-                    if (choice === copy) {
-                        void vscode.env.clipboard.writeText(eventId);
-                    }
-                });
-        })
+            })
+        )
     );
 
     // load project
-    const projects = await rest.userProjects(userId, 'profile');
+    const [projectsErr, projects] = await tryCatch(rest.userProjects(userId, 'profile'));
+    if (projectsErr) {
+        failure.set(() => ({ err: projectsErr, source: 'rest' }));
+        return;
+    }
     const valid: [vscode.WorkspaceFolder, Project][] = folders.reduce(
         (list, f) => {
             // ensure folder matches a user project
@@ -812,7 +577,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const [err] = await tryCatch(sharedb.connect(() => accessToken));
             if (err) {
                 sharedb.disconnect();
-                throw err;
+                failure.set(() => ({ err, source: 'sharedb' }));
+                return;
             }
             context.subscriptions.push(
                 new vscode.Disposable(() => {
@@ -824,7 +590,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const [err] = await tryCatch(messenger.connect(() => accessToken));
             if (err) {
                 messenger.disconnect();
-                throw err;
+                failure.set(() => ({ err, source: 'messenger' }));
+                return;
             }
             context.subscriptions.push(
                 new vscode.Disposable(() => {
@@ -836,7 +603,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const [err] = await tryCatch(relay.connect(() => accessToken));
             if (err) {
                 relay.disconnect();
-                throw err;
+                failure.set(() => ({ err, source: 'relay' }));
+                return;
             }
             context.subscriptions.push(
                 new vscode.Disposable(() => {
@@ -848,7 +616,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
         // load branch info
         const doc = await sharedb.subscribe('settings', `project_${project.id}_${userId}`);
         if (!doc) {
-            void handleError(fail`Failed to load project settings for project ${project.id}`);
+            failure.set(() => ({
+                err: fail`Failed to load project settings for project ${project.id}`,
+                source: 'sharedb'
+            }));
             return;
         }
         context.subscriptions.push(
@@ -886,7 +657,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         effect(() => {
             const err = projectManager.error.get();
             if (err) {
-                void handleError(err, 'project-manager').catch((e) => log.error(e.message));
+                failure.set(() => ({ err, source: 'project-manager' }));
             }
         });
         effect(() => {

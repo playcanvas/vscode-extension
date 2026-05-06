@@ -58,7 +58,7 @@ const warningMessageStub = sandbox.stub(vscode.window, 'showWarningMessage').res
 // stub info message for ignore update prompts
 const infoMessageStub = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
-// stub error message — handleError() in extension.ts:105 surfaces pm.error here
+// stub error message — handleError surfaces pm.error here
 const errorMessageStub = sandbox.stub(vscode.window, 'showErrorMessage').resolves(undefined);
 
 // spy vscode methods
@@ -263,6 +263,19 @@ suite('extension', () => {
 
         // check if open folder was called
         assert.ok(openFolderStub.called, 'open folder should have been called');
+    });
+
+    test(`command ${NAME}.openProject failure surfaces error`, async () => {
+        errorMessageStub.resetHistory();
+        rest.failNext('userProjects', new Error('mock 500: userProjects refused'));
+
+        await assertResolves(vscode.commands.executeCommand(`${NAME}.openProject`), `${NAME}.openProject`);
+        await wait(50);
+
+        const errorCall = errorMessageStub
+            .getCalls()
+            .find((c) => String(c.args[0]).includes('mock 500: userProjects refused'));
+        assert.ok(errorCall, 'openProject failure should be handled by handleError');
     });
 
     test(`command ${NAME}.switchBranch`, async () => {
@@ -2912,7 +2925,7 @@ suite('extension', () => {
 
     test('rest assetCreate failure surfaces error to user', async () => {
         // production: pm.create wraps rest.assetCreate in guard() (project-manager.ts:939)
-        // which sets pm.error on throw; the effect at extension.ts:706 calls handleError
+        // which sets pm.error on throw; the extension error effect calls handleError
         // which posts via vscode.window.showErrorMessage. without P2.4's failNext hook
         // this entire user-visible path was unreachable from tests.
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
