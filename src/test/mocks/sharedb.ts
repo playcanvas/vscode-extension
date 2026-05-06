@@ -6,6 +6,7 @@ import type { Snapshot, Callback, ShareDBSourceOptions, DocEventMap, Error } fro
 import type sinon from 'sinon';
 
 import { ShareDb } from '../../connections/sharedb';
+import type { Asset } from '../../typings/models';
 import type { ShareDbOp, ShareDbTextOp } from '../../typings/sharedb';
 
 import type { MockMessenger } from './messenger';
@@ -246,7 +247,8 @@ class MockDoc extends Doc {
             events.emit('load');
         };
         this.destroy = sandbox.spy(() => {
-            return;
+            this.subscribed = false;
+            events.emit('destroy');
         });
         this.pause = sandbox.spy(() => {
             return;
@@ -256,6 +258,13 @@ class MockDoc extends Doc {
         });
         this.hasPending = () => this._pending > 0;
         this.hasWritePending = () => this._pending > 0;
+        this.whenNothingPending = (callback: () => void) => {
+            if (this._pending === 0) {
+                callback();
+                return;
+            }
+            events.once('no write pending', callback);
+        };
         this.submitOp = sandbox.spy((op: unknown, options?: { source: string }, callback?: (err?: Error) => void) => {
             this._pending++;
             const apply = () => {
@@ -321,6 +330,12 @@ class MockShareDb extends ShareDb {
 
     resetAdversarial!: () => void;
 
+    fsCascadeDeletes = false;
+
+    fsProductionMoveOps = false;
+
+    closedDocuments = new Set<number>();
+
     // FIFO of save responses to inject per uniqueId. empty queue → emit 'success'
     // (today's default). drives ProjectManager._verifySave's retry path
     // (src/project-manager.ts:399-422), which re-sends doc:reconnect + doc:save.
@@ -332,6 +347,57 @@ class MockShareDb extends ShareDb {
             q.push('error');
         }
         this.saveResponses.set(uniqueId, q);
+    }
+
+    private _collectDeletes(ids: number[]) {
+        const deleted = new Set(ids);
+        if (!this.fsCascadeDeletes) {
+            return deleted;
+        }
+
+        const itemIds = new Set(
+            ids
+                .map((id) => assets.get(id)?.item_id)
+                .filter((id): id is string => id !== undefined)
+                .map((id) => parseInt(id, 10))
+        );
+        for (const asset of assets.values()) {
+            if (asset.path.some((id) => itemIds.has(id))) {
+                deleted.add(asset.uniqueId);
+            }
+        }
+        return deleted;
+    }
+
+    private _folderPath(to: number) {
+        if (to === 0) {
+            return [];
+        }
+        const parent = assets.get(to);
+        return parent ? parent.path.concat(parseInt(parent.item_id, 10)) : [];
+    }
+
+    private _moveOp(asset: Asset, from: number[], to: number[]) {
+        if (this.fsProductionMoveOps) {
+            return [{ p: ['path'], od: from, oi: to }];
+        }
+        if (from.length === 0 && to.length === 1) {
+            return [{ p: ['path'], li: to[0] }];
+        }
+        if (from.length === 1 && to.length === 0) {
+            return [{ p: ['path'], ld: from[0] }];
+        }
+        if (from.length === 1 && to.length === 1) {
+            return [{ p: ['path'], ld: from[0], li: to[0] }];
+        }
+        asset.path = to;
+        return [];
+    }
+
+    private _reconnectDocument(id: number) {
+        this.closedDocuments.delete(id);
+        const doc = this.subscriptions.get(`documents:${id}`);
+        doc?.reload(documents.get(id) ?? '');
     }
 
     constructor(sandbox: sinon.SinonSandbox, messenger: MockMessenger) {
@@ -352,6 +418,7 @@ class MockShareDb extends ShareDb {
             return Promise.all(subscriptions.map(([type, key]) => this.subscribe(type, key)));
         });
         this.unsubscribe = sandbox.spy(async (type: string, key: string) => {
+            this.subscriptions.get(`${type}:${key}`)?.destroy();
             this.subscriptions.delete(`${type}:${key}`);
         });
         this.bulkUnsubscribe = sandbox.spy(async (subscriptions: [string, string][]) => {
@@ -366,6 +433,9 @@ class MockShareDb extends ShareDb {
                 doc._rejectNext = null;
             }
             this.saveResponses.clear();
+            this.fsCascadeDeletes = false;
+            this.fsProductionMoveOps = false;
+            this.closedDocuments.clear();
         };
         this.sendRaw = sandbox.spy(async (data: Parameters<WebSocket['send']>[0]) => {
             // check for fs operations
@@ -377,13 +447,14 @@ class MockShareDb extends ShareDb {
 
                 // handle delete operation
                 if (json.op === 'delete') {
-                    for (const id of json.ids) {
+                    const ids = this._collectDeletes(json.ids);
+                    for (const id of ids) {
                         assets.delete(id);
                         documents.delete(id);
                     }
                     messenger.emit('assets.delete', {
                         data: {
-                            assets: json.ids.map((id) => id.toString())
+                            assets: Array.from(ids).map((id) => id.toString())
                         }
                     });
                     return;
@@ -395,21 +466,13 @@ class MockShareDb extends ShareDb {
                         const asset = assets.get(id);
                         if (asset) {
                             const path = asset.path.slice();
-                            asset.path = json.to === 0 ? [] : [json.to];
+                            const next = this._folderPath(json.to);
+                            const op = this._moveOp(asset, path, next);
                             const doc = this.subscriptions.get(`assets:${id}`);
-                            if (doc) {
-                                if (path.length === 0 && asset.path.length === 1) {
-                                    // moved into folder
-                                    doc.submitOp([{ p: ['path'], li: asset.path[0] }], { source: 'remote' });
-                                } else if (path.length === 1 && asset.path.length === 0) {
-                                    // moved out of folder
-                                    doc.submitOp([{ p: ['path'], ld: path[0] }], { source: 'remote' });
-                                } else if (path.length === 1 && asset.path.length === 1) {
-                                    // moved between folders
-                                    doc.submitOp([{ p: ['path'], ld: path[0], li: asset.path[0] }], {
-                                        source: 'remote'
-                                    });
-                                }
+                            if (doc && op.length) {
+                                doc.submitOp(op, { source: 'remote' });
+                            } else {
+                                asset.path = next;
                             }
                         }
                     }
@@ -425,6 +488,20 @@ class MockShareDb extends ShareDb {
                 const q = this.saveResponses.get(id);
                 const state = q?.shift() ?? 'success';
                 this.emit('doc:save', state, id);
+                return;
+            }
+            if (`${data}`.startsWith('doc:reconnect:')) {
+                const id = parseInt(data.toString().slice(14), 10);
+                if (!isNaN(id)) {
+                    this._reconnectDocument(id);
+                }
+                return;
+            }
+            if (`${data}`.startsWith('close:document:')) {
+                const id = parseInt(data.toString().slice(15), 10);
+                if (!isNaN(id)) {
+                    this.closedDocuments.add(id);
+                }
                 return;
             }
             return;
