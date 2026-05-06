@@ -56,19 +56,6 @@ class Auth {
         }
     }
 
-    async promptProjectLogin() {
-        const login = 'Login';
-        const dismiss = 'Dismiss';
-        const choice = await vscode.window.showInformationMessage(
-            'Sign in to PlayCanvas to sync this project.',
-            login,
-            dismiss
-        );
-        if (choice === login) {
-            await this.getAccessToken(true);
-        }
-    }
-
     private async _validateAccessToken(accessToken?: string) {
         if (!accessToken) {
             return;
