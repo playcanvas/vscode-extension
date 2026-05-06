@@ -2,6 +2,7 @@ import packageJson from '../package.json';
 
 export const NAME = packageJson.name;
 export const PUBLISHER = packageJson.publisher.toLowerCase();
+export const VERSION = packageJson.version;
 
 export const DEBUG = process.env.NODE_ENV === 'development';
 export const ENV = process.env.ENV || 'prod';
@@ -26,6 +27,7 @@ if (DEBUG) {
     console.table({
         NAME,
         PUBLISHER,
+        VERSION,
         DEBUG,
         ENV,
         WEB,
