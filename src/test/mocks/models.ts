@@ -75,3 +75,18 @@ export const uniqueId = (function* () {
         yield id++;
     }
 })();
+
+export const assetItemId = (function* () {
+    let id = 1000;
+    while (true) {
+        yield id++;
+    }
+})();
+
+export const nextAssetIds = (distinct = false) => {
+    const id = uniqueId.next().value;
+    return {
+        uniqueId: id,
+        itemId: distinct ? assetItemId.next().value : id
+    };
+};
