@@ -231,6 +231,10 @@ class UriHandler
     }
 
     async handleUri(uri: vscode.Uri) {
+        if (uri.authority !== `${PUBLISHER}.${NAME}` || !uri.path.startsWith('/project/')) {
+            return;
+        }
+
         if (this._auth) {
             const [err1, client] = await tryCatch(this._auth.getClient(true));
             if (err1) {

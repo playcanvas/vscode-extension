@@ -153,18 +153,29 @@ export const activate = async (context: vscode.ExtensionContext) => {
         registerIdle();
         return;
     }
+
+    // connection status bar item
+    const connectionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10001);
+    context.subscriptions.push(connectionStatusItem);
+    connectionStatusItem.color = COLORS.error;
+    connectionStatusItem.text = `$(primitive-dot) Disconnected`;
+    connectionStatusItem.tooltip = 'PlayCanvas Connection';
+
     const [err1, client] = await tryCatch(auth.getClient(false));
     if (err1) {
         registerIdle();
+        connectionStatusItem.show();
         failure.set(() => ({ err: err1, source: 'auth' }));
         return;
     }
     if (!client) {
         registerIdle();
-        const [err2] = await tryCatch(auth.promptProjectLogin());
-        if (err2) {
-            failure.set(() => ({ err: err2, source: 'auth' }));
-        }
+        connectionStatusItem.show();
+        void tryCatch(auth.getAccessToken(true)).then(([err2]) => {
+            if (err2) {
+                failure.set(() => ({ err: err2, source: 'auth' }));
+            }
+        });
         return;
     }
     const { accessToken, rest, userId } = client;
@@ -323,12 +334,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
     });
     context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
 
-    // connection status bar item
-    const connectionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, -10001);
-    context.subscriptions.push(connectionStatusItem);
-    connectionStatusItem.color = COLORS.error;
-    connectionStatusItem.text = `$(primitive-dot) Disconnected`;
-    connectionStatusItem.tooltip = 'PlayCanvas Connection';
     const connected = computed(() => {
         return sharedb.connected.get() && messenger.connected.get() && relay.connected.get();
     });
