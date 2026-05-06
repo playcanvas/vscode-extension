@@ -7,8 +7,21 @@ import { AUTH_TIMEOUT_MS } from './connections/constants';
 import { Rest } from './connections/rest';
 import { tryCatch } from './utils/utils';
 
+type Session = {
+    accessToken: string;
+    userId: number;
+};
+
 class Auth {
     private _context: vscode.ExtensionContext;
+
+    private _session?: Session;
+
+    private _validating = new Map<string, Promise<Session | undefined>>();
+
+    private _login?: Promise<string>;
+
+    private _reload?: Promise<void>;
 
     constructor(context: vscode.ExtensionContext) {
         this._context = context;
@@ -19,7 +32,15 @@ class Auth {
     }
 
     async clearAccessToken() {
+        this._clear();
         await this._context.secrets.delete(`${NAME}.accessToken`);
+    }
+
+    private _clear() {
+        this._session = undefined;
+        this._validating.clear();
+        this._login = undefined;
+        this._reload = undefined;
     }
 
     async getClient(manual = false) {
@@ -35,19 +56,19 @@ class Auth {
                 }
             }
 
-            const rest = new Rest({
-                url: API_URL,
-                origin: HOME_URL,
-                accessToken
-            });
-            const [error, userId] = await tryCatch(rest.id());
-            if (!error) {
-                return { accessToken, rest, userId };
+            const session = await this._validateAccessToken(accessToken, false);
+            if (session) {
+                return {
+                    accessToken: session.accessToken,
+                    userId: session.userId,
+                    rest: new Rest({
+                        url: API_URL,
+                        origin: HOME_URL,
+                        accessToken: session.accessToken
+                    })
+                };
             }
-            rest.dispose();
-            if (!/HTTP 4\d{2}/.test(error.message)) {
-                throw error;
-            }
+
             await this.clearAccessToken();
             if (!manual) {
                 return;
@@ -56,22 +77,50 @@ class Auth {
         }
     }
 
-    private async _validateAccessToken(accessToken?: string) {
-        if (!accessToken) {
-            return;
-        }
+    private async _validate(accessToken: string, notify = true) {
         const rest = new Rest({
             url: API_URL,
             origin: HOME_URL,
             accessToken
         });
-        const [error] = await tryCatch(rest.id());
+        const [err, userId] = await tryCatch(rest.id());
         rest.dispose();
-        if (error && /HTTP 4\d{2}/.test(error.message)) {
-            await vscode.window.showErrorMessage('Invalid PlayCanvas Access Token', { modal: true });
-            return undefined;
+        if (!err) {
+            const session = { accessToken, userId };
+            this._session = session;
+            return session;
         }
-        return accessToken;
+        if (/HTTP 4\d{2}/.test(err.message)) {
+            if (notify) {
+                await vscode.window.showErrorMessage('Invalid PlayCanvas Access Token', { modal: true });
+            }
+            return;
+        }
+        throw err;
+    }
+
+    private async _validateAccessToken(accessToken?: string, notify = true) {
+        if (!accessToken) {
+            return;
+        }
+
+        if (this._session?.accessToken === accessToken) {
+            return this._session;
+        }
+
+        const running = this._validating.get(accessToken);
+        if (running) {
+            return running;
+        }
+
+        const task = this._validate(accessToken, notify);
+        this._validating.set(accessToken, task);
+        const [err, session] = await tryCatch(task);
+        this._validating.delete(accessToken);
+        if (err) {
+            throw err;
+        }
+        return session;
     }
 
     private _requestToken() {
@@ -187,18 +236,25 @@ class Auth {
         });
     }
 
-    async getAccessToken(manual = false, reload = manual) {
-        let accessToken: string | undefined = undefined;
-        if (!manual) {
-            // retrieve stored token
-            accessToken = await this._context.secrets.get(`${NAME}.accessToken`);
-
-            // validate token
-            accessToken = await this._validateAccessToken(accessToken);
+    private async _loginAccessToken(manual: boolean) {
+        if (this._login) {
+            return this._login;
         }
-        while (!accessToken) {
+
+        const task = this._loginFlow(manual);
+        this._login = task;
+        const [err, accessToken] = await tryCatch(task);
+        this._login = undefined;
+        if (err) {
+            throw err;
+        }
+        return accessToken;
+    }
+
+    private async _loginFlow(manual: boolean) {
+        while (true) {
             // request token
-            accessToken = await this._requestToken();
+            const accessToken = await this._requestToken();
             if (!accessToken) {
                 if (manual) {
                     void vscode.window.showInformationMessage('Aborted updating PlayCanvas Access Token');
@@ -208,22 +264,56 @@ class Auth {
             }
 
             // validate token
-            accessToken = await this._validateAccessToken(accessToken);
-            if (!accessToken) {
+            const session = await this._validateAccessToken(accessToken);
+            if (!session) {
                 continue;
             }
 
             // store token
             await this._context.secrets.store(`${NAME}.accessToken`, accessToken);
             void vscode.window.showInformationMessage('PlayCanvas Access Token validated');
+            return accessToken;
+        }
+    }
 
-            if (reload) {
-                // reload window to ensure all components use the new token
-                await vscode.window.showInformationMessage('Token updated, the window will be reloaded.', {
-                    modal: true
-                });
-                void vscode.commands.executeCommand('workbench.action.reloadWindow');
-            }
+    private async _reloadWindow() {
+        if (this._reload) {
+            return this._reload;
+        }
+
+        // reload window to ensure all components use the new token
+        const task = Promise.resolve(
+            vscode.window.showInformationMessage('Token updated, the window will be reloaded.', {
+                modal: true
+            })
+        ).then(() => {
+            void vscode.commands.executeCommand('workbench.action.reloadWindow');
+        });
+        this._reload = task;
+        const [err] = await tryCatch(task);
+        this._reload = undefined;
+        if (err) {
+            throw err;
+        }
+    }
+
+    async getAccessToken(manual = false, reload = manual) {
+        let accessToken: string | undefined = undefined;
+        if (!manual) {
+            // retrieve stored token
+            accessToken = await this._context.secrets.get(`${NAME}.accessToken`);
+
+            // validate token
+            const session = await this._validateAccessToken(accessToken);
+            accessToken = session?.accessToken;
+        }
+
+        if (!accessToken) {
+            accessToken = await this._loginAccessToken(manual);
+        }
+
+        if (accessToken && reload) {
+            await this._reloadWindow();
         }
 
         return accessToken;
@@ -238,7 +328,7 @@ class Auth {
         if (confirmed !== 'Logout') {
             return;
         }
-        await this._context.secrets.delete(`${NAME}.accessToken`);
+        await this.clearAccessToken();
         void vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
 
@@ -249,7 +339,7 @@ class Auth {
                 modal: true
             }
         );
-        await this._context.secrets.delete(`${NAME}.accessToken`);
+        await this.clearAccessToken();
         void vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
 }

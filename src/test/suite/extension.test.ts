@@ -17,7 +17,7 @@ import * as buffer from '../../utils/buffer';
 import { hash, tryCatch, wait } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
-import { assets, documents, branches, projectSettings, project, user, uniqueId } from '../mocks/models';
+import { assets, documents, branches, projectSettings, project, user, accessToken, uniqueId } from '../mocks/models';
 import { MockRelay } from '../mocks/relay';
 import { MockRest } from '../mocks/rest';
 import { MockShareDb } from '../mocks/sharedb';
@@ -278,6 +278,61 @@ suite('extension', () => {
         assert.ok(errorCall, 'openProject failure should be handled by handleError');
     });
 
+    test('auth caches user id validation', async () => {
+        const RealAuth = (authModule.Auth as unknown as sinon.SinonStub)
+            .wrappedMethod as unknown as typeof authModule.Auth;
+        const secrets = new Map([[`${NAME}.accessToken`, accessToken]]);
+        const a = new RealAuth({
+            secrets: {
+                get: sandbox.spy(async (key: string) => secrets.get(key)),
+                store: sandbox.spy(async (key: string, value: string) => {
+                    secrets.set(key, value);
+                }),
+                delete: sandbox.spy(async (key: string) => {
+                    secrets.delete(key);
+                })
+            }
+        } as unknown as vscode.ExtensionContext);
+
+        rest.id.resetHistory();
+        const clients = await Promise.all([a.getClient(), a.getClient(), a.getClient()]);
+
+        assert.strictEqual(rest.id.callCount, 1, 'id should be validated once');
+        assert.deepStrictEqual(
+            clients.map((client) => client?.userId),
+            [user.id, user.id, user.id],
+            'clients should reuse cached user id'
+        );
+    });
+
+    test('auth dedupes concurrent login', async () => {
+        const RealAuth = (authModule.Auth as unknown as sinon.SinonStub)
+            .wrappedMethod as unknown as typeof authModule.Auth;
+        const secrets = new Map<string, string>();
+        const a = new RealAuth({
+            secrets: {
+                get: sandbox.spy(async (key: string) => secrets.get(key)),
+                store: sandbox.spy(async (key: string, value: string) => {
+                    secrets.set(key, value);
+                }),
+                delete: sandbox.spy(async (key: string) => {
+                    secrets.delete(key);
+                })
+            }
+        } as unknown as vscode.ExtensionContext);
+        const requestTokenStub = sandbox
+            .stub(a as unknown as Record<'_requestToken', () => Promise<string>>, '_requestToken')
+            .resolves(accessToken);
+
+        rest.id.resetHistory();
+        infoMessageStub.resetHistory();
+        const tokens = await Promise.all([a.getAccessToken(true, false), a.getAccessToken(true, false)]);
+
+        assert.deepStrictEqual(tokens, [accessToken, accessToken], 'login callers should share token');
+        assert.strictEqual(requestTokenStub.callCount, 1, 'external login should start once');
+        assert.strictEqual(rest.id.callCount, 1, 'login token should be validated once');
+    });
+
     test(`command ${NAME}.switchBranch`, async () => {
         // reset rest branchCheckout spy call history
         rest.branchCheckout.resetHistory();
@@ -462,6 +517,27 @@ suite('extension', () => {
         // check if uri handler was called
         const call = uriHandler.handleUri.getCall(0);
         assert.strictEqual(call.args[0].toString(), externalUri.toString(), 'uri handler args should match');
+    });
+
+    test('uri callback does not authenticate', async () => {
+        const RealUriHandler = (uriHandlerModule.UriHandler as unknown as sinon.SinonStub)
+            .wrappedMethod as unknown as typeof uriHandlerModule.UriHandler;
+        const subscriptions: vscode.Disposable[] = [];
+        const getClient = sandbox.spy(async () => undefined);
+        const h = new RealUriHandler({
+            context: { subscriptions } as unknown as vscode.ExtensionContext,
+            rootUri: vscode.Uri.parse('vscode-test://root'),
+            auth: { getClient } as unknown as InstanceType<typeof authModule.Auth>
+        });
+        const uri = vscode.Uri.from({
+            scheme: vscode.env.uriScheme,
+            authority: `${PUBLISHER}.${NAME}`
+        });
+
+        await h.handleUri(uri);
+
+        assert.ok(getClient.notCalled, 'oauth callback uri should not request auth');
+        subscriptions.forEach((d) => d.dispose());
     });
 
     test('uri open - collision warning', async () => {
