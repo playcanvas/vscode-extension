@@ -189,7 +189,7 @@ suite('extension', () => {
         // get consumed by the next test's first call.
         rest.resetFailures();
         // settle deferred queue / mutex between tests
-        await wait(process.env.CI ? 2000 : 50);
+        await wait(process.env.CI ? 500 : 50);
     });
 
     const assetCreate = async ({ name, content = '', parent }: { name: string; content?: string; parent?: number }) => {
