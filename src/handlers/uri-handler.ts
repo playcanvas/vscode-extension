@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 
+import type { Auth } from '../auth';
 import { NAME, PUBLISHER } from '../config';
 import type { Rest } from '../connections/rest';
 import type { ProjectManager } from '../project-manager';
 import { fail } from '../utils/error';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
-import { fileExists, projectToName, guard } from '../utils/utils';
+import { fileExists, projectToName, guard, tryCatch } from '../utils/utils';
 
 type OpenFile = {
     assetId: number;
@@ -27,9 +28,11 @@ class UriHandler
 
     private _rootUri: vscode.Uri;
 
-    private _userId: number;
+    private _userId?: number;
 
-    private _rest: Rest;
+    private _rest?: Rest;
+
+    private _auth?: Auth;
 
     private _folderUri?: vscode.Uri;
 
@@ -51,23 +54,30 @@ class UriHandler
         this._errorDisposable = undefined;
     }
 
-    constructor({
-        context,
-        rootUri,
-        userId,
-        rest
-    }: {
-        context: vscode.ExtensionContext;
-        rootUri: vscode.Uri;
-        userId: number;
-        rest: Rest;
-    }) {
+    constructor(
+        options:
+            | {
+                  context: vscode.ExtensionContext;
+                  rootUri: vscode.Uri;
+                  userId: number;
+                  rest: Rest;
+              }
+            | {
+                  context: vscode.ExtensionContext;
+                  rootUri: vscode.Uri;
+                  auth: Auth;
+              }
+    ) {
         super();
 
-        this._context = context;
-        this._rootUri = rootUri;
-        this._userId = userId;
-        this._rest = rest;
+        this._context = options.context;
+        this._rootUri = options.rootUri;
+        if ('auth' in options) {
+            this._auth = options.auth;
+        } else {
+            this._userId = options.userId;
+            this._rest = options.rest;
+        }
 
         this._context.subscriptions.push(this._errorDecoration);
     }
@@ -143,30 +153,7 @@ class UriHandler
         this._log.info(`opened asset ${assetId} at ${filePath}`);
     }
 
-    protected async _openFile(folderUri: vscode.Uri, projectManager: ProjectManager) {
-        // retrieve and clear stored open file (always consume)
-        const open = this._context.globalState.get<
-            OpenFile & {
-                folderUriStr: string;
-            }
-        >(UriHandler.OPEN_FILE_KEY);
-        await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, undefined);
-
-        // check if we need to open a file
-        if (!open || !open.assetId) {
-            return;
-        }
-
-        // check if file is for the current project
-        if (open.folderUriStr !== folderUri.toString()) {
-            return;
-        }
-
-        // open text document
-        await this._openDocument(folderUri, projectManager, open);
-    }
-
-    async handleUri(uri: vscode.Uri) {
+    private async _handleUri(uri: vscode.Uri, userId: number, rest: Rest) {
         if (uri.authority !== `${PUBLISHER}.${NAME}`) {
             return;
         }
@@ -208,7 +195,7 @@ class UriHandler
         );
 
         // fetch all user projects
-        const projects = await guard(this._rest.userProjects(this._userId, 'profile'), this.error);
+        const projects = await guard(rest.userProjects(userId, 'profile'), this.error);
 
         // find matching project
         const project = projects.find((p) => p.id === projectId);
@@ -243,6 +230,29 @@ class UriHandler
         await vscode.commands.executeCommand('vscode.openFolder', folderUri, false);
     }
 
+    async handleUri(uri: vscode.Uri) {
+        if (this._auth) {
+            const [err1, client] = await tryCatch(this._auth.getClient(true));
+            if (err1) {
+                this.error.set(() => err1);
+                return;
+            }
+            if (!client) {
+                return;
+            }
+            const [err2] = await tryCatch(this._handleUri(uri, client.userId, client.rest));
+            client.rest.dispose();
+            if (err2) {
+                this.error.set(() => err2);
+            }
+            return;
+        }
+        if (this._userId === undefined || !this._rest) {
+            return;
+        }
+        await this._handleUri(uri, this._userId, this._rest);
+    }
+
     async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
         if (this._folderUri !== undefined) {
             throw this.error.set(() => fail`manager already linked`);
@@ -253,7 +263,16 @@ class UriHandler
 
         this._cleanup.push(async () => this._clearErrorDecoration());
 
-        await this._openFile(folderUri, projectManager);
+        // retrieve and clear stored open file (always consume)
+        const open = this._context.globalState.get<
+            OpenFile & {
+                folderUriStr: string;
+            }
+        >(UriHandler.OPEN_FILE_KEY);
+        await this._context.globalState.update(UriHandler.OPEN_FILE_KEY, undefined);
+        if (open?.assetId && open.folderUriStr === folderUri.toString()) {
+            await this._openDocument(folderUri, projectManager, open);
+        }
 
         this._folderUri = folderUri;
         this._projectManager = projectManager;
@@ -275,4 +294,4 @@ class UriHandler
     }
 }
 
-export { type OpenFile, UriHandler };
+export { UriHandler };
