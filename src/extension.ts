@@ -2,10 +2,20 @@ import * as os from 'os';
 
 import * as vscode from 'vscode';
 
-import packageJson from '../package.json';
-
 import { Auth } from './auth';
-import { API_URL, ENV, NAME, HOME_URL, MESSENGER_URL, REALTIME_URL, RELAY_URL, ROOT_FOLDER, DEBUG } from './config';
+import {
+    API_URL,
+    DEBUG,
+    ENV,
+    HOME_URL,
+    MESSENGER_URL,
+    NAME,
+    REALTIME_URL,
+    RELAY_URL,
+    ROOT_FOLDER,
+    VERSION,
+    WEB
+} from './config';
 import { Messenger } from './connections/messenger';
 import { Relay } from './connections/relay';
 import { Rest } from './connections/rest';
@@ -37,6 +47,10 @@ import { fmtLog, projectToName, tryCatch, uriStartsWith, wait } from './utils/ut
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
 const PING_SAMPLE_MS = 60 * 1000;
+const SESSION_DIMENSIONS = {
+    version: `v${VERSION.replace(/[^a-z0-9]/gi, '_')}`,
+    os: WEB ? 'web' : process.platform
+};
 const COLORS = {
     success: '#2ecc71',
     warning: '#e67e22',
@@ -95,7 +109,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     // metrics
     const metrics = new Metrics(accessToken);
     context.subscriptions.push(metrics.disposable);
-    metrics.increment('session.start');
+    metrics.increment('session.start', SESSION_DIMENSIONS);
     const heartbeat = setInterval(() => metrics.increment('session.heartbeat'), HEARTBEAT_MS);
     context.subscriptions.push(new vscode.Disposable(() => clearInterval(heartbeat)));
 
@@ -643,7 +657,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
             const eventId = captureIssue(description, {
                 report: {
-                    extension: packageJson.version,
+                    extension: VERSION,
                     vscode: vscode.version,
                     platform: `${process.platform} ${os.release()}`,
                     env: ENV,
