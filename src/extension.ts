@@ -4,7 +4,6 @@ import * as vscode from 'vscode';
 
 import { Auth } from './auth';
 import {
-    API_URL,
     DEBUG,
     ENV,
     HOME_URL,
@@ -18,7 +17,6 @@ import {
 } from './config';
 import { Messenger } from './connections/messenger';
 import { Relay } from './connections/relay';
-import { Rest } from './connections/rest';
 import { ShareDb } from './connections/sharedb';
 import { Disk } from './disk';
 import { UriHandler } from './handlers/uri-handler';
@@ -104,7 +102,126 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const auth = new Auth(context);
     context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.login`, async () => auth.getAccessToken(true)));
     context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.logout`, () => auth.logout()));
-    const accessToken = await auth.getAccessToken();
+    const folders = (vscode.workspace.workspaceFolders ?? []).filter((f) => uriStartsWith(f.uri, rootUri));
+    const projectWindow = folders.length > 0;
+    const showError = (error: Error) => {
+        log.error(error);
+        void vscode.window.showErrorMessage(`PlayCanvas Error: ${error.message}`);
+    };
+    const openProject = async () => {
+        const [clientErr, client] = await tryCatch(auth.getClient(true));
+        if (clientErr) {
+            showError(clientErr);
+            return;
+        }
+        if (!client) {
+            return;
+        }
+        const [projectsErr, projects] = await tryCatch(client.rest.userProjects(client.userId, 'profile'));
+        client.rest.dispose();
+        if (projectsErr) {
+            showError(projectsErr);
+            return;
+        }
+
+        const list = projects.map((p) => projectToName(p, false)).reverse();
+        const chosen = await vscode.window.showQuickPick(list, {
+            placeHolder: 'Select a project'
+        });
+        const project = projects.find((p) => chosen === projectToName(p, false));
+        if (!project) {
+            return;
+        }
+
+        const folder = vscode.Uri.joinPath(rootUri, projectToName(project));
+        await vscode.workspace.fs.createDirectory(folder);
+        await vscode.commands.executeCommand('vscode.openFolder', folder, false);
+    };
+    const registerIdleCommands = () => {
+        context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.openProject`, openProject));
+        context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.reloadProject`, () => undefined));
+        context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.switchBranch`, () => undefined));
+        context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.showPathCollisions`, () => undefined));
+        context.subscriptions.push(
+            vscode.window.registerUriHandler({
+                handleUri: async (uri) => {
+                    const [clientErr, client] = await tryCatch(auth.getClient(true));
+                    if (clientErr) {
+                        showError(clientErr);
+                        return;
+                    }
+                    if (!client) {
+                        return;
+                    }
+                    const handler = new UriHandler({
+                        context,
+                        rootUri,
+                        userId: client.userId,
+                        rest: client.rest
+                    });
+                    const [handleErr] = await tryCatch(handler.handleUri(uri));
+                    client.rest.dispose();
+                    if (handleErr) {
+                        showError(handleErr);
+                    }
+                }
+            })
+        );
+        context.subscriptions.push(
+            vscode.commands.registerCommand(`${NAME}.reportIssue`, async (defaultDescription?: string) => {
+                const description =
+                    defaultDescription ??
+                    (await vscode.window.showInputBox({
+                        title: 'PlayCanvas: Report Issue',
+                        prompt: 'Describe the issue',
+                        placeHolder: 'e.g. scripts are not syncing with online IDE',
+                        ignoreFocusOut: true,
+                        validateInput: (v) => (v.trim() ? undefined : 'Description is required')
+                    }));
+                if (!description) {
+                    return;
+                }
+                const bundle = redact.text(Log.dump().map(fmtLog).join('\n'));
+                addAttachment({ filename: 'anonymous.log', data: bundle, contentType: 'text/plain' });
+                const eventId = captureIssue(description, {
+                    report: {
+                        extension: VERSION,
+                        vscode: vscode.version,
+                        platform: `${process.platform} ${os.release()}`,
+                        env: ENV,
+                        project: 'none',
+                        branch: 'none',
+                        desync: false,
+                        last_sentry_event: getLastSentryEventId() ?? 'none'
+                    }
+                });
+                const copy = 'Copy ID';
+                void vscode.window
+                    .showInformationMessage(`Report sent to PlayCanvas team. Reference: ${eventId}`, copy)
+                    .then((choice) => {
+                        if (choice === copy) {
+                            void vscode.env.clipboard.writeText(eventId);
+                        }
+                    });
+            })
+        );
+    };
+
+    if (!projectWindow) {
+        registerIdleCommands();
+        return;
+    }
+    const [clientErr, client] = await tryCatch(auth.getClient(false));
+    if (clientErr) {
+        throw clientErr;
+    }
+    if (!client) {
+        registerIdleCommands();
+        await auth.promptProjectLogin();
+        return;
+    }
+    const { accessToken, rest, userId } = client;
+    context.subscriptions.push(new vscode.Disposable(() => rest.dispose()));
 
     // metrics
     const metrics = new Metrics(accessToken);
@@ -144,14 +261,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
         })
     );
 
-    // rest client
-    const rest = new Rest({
-        url: API_URL,
-        origin: HOME_URL,
-        accessToken
-    });
-    context.subscriptions.push(new vscode.Disposable(() => rest.dispose()));
-
     // realtime connection
     const sharedb = new ShareDb({
         url: REALTIME_URL,
@@ -182,8 +291,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     });
 
-    // find user id
-    const userId = await rest.id();
     setSentryUser(userId);
 
     // state
@@ -297,7 +404,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
     connectionStatusItem.color = COLORS.error;
     connectionStatusItem.text = `$(primitive-dot) Disconnected`;
     connectionStatusItem.tooltip = 'PlayCanvas Connection';
-    connectionStatusItem.show();
     const connected = computed(() => {
         return sharedb.connected.get() && messenger.connected.get() && relay.connected.get();
     });
@@ -371,7 +477,6 @@ export const activate = async (context: vscode.ExtensionContext) => {
     branchStatusBarItem.command = `${NAME}.switchBranch`;
     branchStatusBarItem.text = `$(git-branch) no branch`;
     branchStatusBarItem.tooltip = 'Switch Branch';
-    branchStatusBarItem.show();
 
     // watch for version control changes
     const branchSwitch = messenger.on('branch.switch', async (e) => {
@@ -402,6 +507,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
             // update branch status bar item
             branchStatusBarItem.text = `$(git-branch) ${name}`;
+            branchStatusBarItem.show();
         });
         if (err) {
             void handleError(err);
@@ -681,13 +787,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
     // load project
     const projects = await rest.userProjects(userId, 'profile');
-    const valid: [vscode.WorkspaceFolder, Project][] = (vscode.workspace.workspaceFolders ?? []).reduce(
+    const valid: [vscode.WorkspaceFolder, Project][] = folders.reduce(
         (list, f) => {
-            // ensure folder is in home directory
-            if (!uriStartsWith(f.uri, rootUri)) {
-                return list;
-            }
-
             // ensure folder matches a user project
             const project = projects.find((p) => projectToName(p) === f.name);
             if (!project) {
@@ -701,6 +802,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
     );
 
     for (const [folder, project] of valid) {
+        connectionStatusItem.show();
+
         // ensure folder directory exists
         await vscode.workspace.fs.createDirectory(folder.uri);
 
@@ -761,6 +864,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
         if (branch) {
             // set branch name
             branchStatusBarItem.text = `$(git-branch) ${branch.name}`;
+            branchStatusBarItem.show();
         }
 
         // watch project
