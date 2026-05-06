@@ -6,7 +6,11 @@ import { Auth } from '../../auth';
 import { accessToken } from './models';
 
 class MockAuth extends Auth {
-    getAccessToken: sinon.SinonSpy<[], Promise<string>>;
+    getAccessToken: sinon.SinonSpy<[manual?: boolean, reload?: boolean], Promise<string>>;
+
+    getStoredAccessToken: sinon.SinonSpy<[], Promise<string>>;
+
+    clearAccessToken: sinon.SinonSpy<[], Promise<void>>;
 
     reset: sinon.SinonSpy<[reason?: string], Promise<void>>;
 
@@ -14,6 +18,8 @@ class MockAuth extends Auth {
         super({} as vscode.ExtensionContext);
 
         this.getAccessToken = sandbox.spy(async () => accessToken);
+        this.getStoredAccessToken = sandbox.spy(async () => accessToken);
+        this.clearAccessToken = sandbox.spy(async () => undefined);
         this.reset = sandbox.spy(async () => undefined);
     }
 }

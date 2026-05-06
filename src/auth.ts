@@ -14,6 +14,61 @@ class Auth {
         this._context = context;
     }
 
+    async getStoredAccessToken() {
+        return this._context.secrets.get(`${NAME}.accessToken`);
+    }
+
+    async clearAccessToken() {
+        await this._context.secrets.delete(`${NAME}.accessToken`);
+    }
+
+    async getClient(manual = false) {
+        let accessToken = await this.getStoredAccessToken();
+        while (true) {
+            if (!accessToken) {
+                if (!manual) {
+                    return;
+                }
+                accessToken = await this.getAccessToken(true, false);
+                if (!accessToken) {
+                    return;
+                }
+            }
+
+            const rest = new Rest({
+                url: API_URL,
+                origin: HOME_URL,
+                accessToken
+            });
+            const [error, userId] = await tryCatch(rest.id());
+            if (!error) {
+                return { accessToken, rest, userId };
+            }
+            rest.dispose();
+            if (!/HTTP 4\d{2}/.test(error.message)) {
+                throw error;
+            }
+            await this.clearAccessToken();
+            if (!manual) {
+                return;
+            }
+            accessToken = undefined;
+        }
+    }
+
+    async promptProjectLogin() {
+        const login = 'Login';
+        const dismiss = 'Dismiss';
+        const choice = await vscode.window.showInformationMessage(
+            'Sign in to PlayCanvas to sync this project.',
+            login,
+            dismiss
+        );
+        if (choice === login) {
+            await this.getAccessToken(true);
+        }
+    }
+
     private async _validateAccessToken(accessToken?: string) {
         if (!accessToken) {
             return;
@@ -24,6 +79,7 @@ class Auth {
             accessToken
         });
         const [error] = await tryCatch(rest.id());
+        rest.dispose();
         if (error && /HTTP 4\d{2}/.test(error.message)) {
             await vscode.window.showErrorMessage('Invalid PlayCanvas Access Token', { modal: true });
             return undefined;
@@ -144,7 +200,7 @@ class Auth {
         });
     }
 
-    async getAccessToken(manual = false) {
+    async getAccessToken(manual = false, reload = manual) {
         let accessToken: string | undefined = undefined;
         if (!manual) {
             // retrieve stored token
@@ -174,7 +230,7 @@ class Auth {
             await this._context.secrets.store(`${NAME}.accessToken`, accessToken);
             void vscode.window.showInformationMessage('PlayCanvas Access Token validated');
 
-            if (manual) {
+            if (reload) {
                 // reload window to ensure all components use the new token
                 await vscode.window.showInformationMessage('Token updated, the window will be reloaded.', {
                     modal: true
