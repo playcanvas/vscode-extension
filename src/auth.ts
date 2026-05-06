@@ -7,9 +7,6 @@ import { AUTH_TIMEOUT_MS } from './connections/constants';
 import { Rest } from './connections/rest';
 import { tryCatch } from './utils/utils';
 
-const LOGIN_OPTION = 'Login';
-const DISMISS_OPTION = 'Dismiss';
-
 class Auth {
     private _context: vscode.ExtensionContext;
 
@@ -60,12 +57,14 @@ class Auth {
     }
 
     async promptProjectLogin() {
+        const login = 'Login';
+        const dismiss = 'Dismiss';
         const choice = await vscode.window.showInformationMessage(
             'Sign in to PlayCanvas to sync this project.',
-            LOGIN_OPTION,
-            DISMISS_OPTION
+            login,
+            dismiss
         );
-        if (choice === LOGIN_OPTION) {
+        if (choice === login) {
             await this.getAccessToken(true);
         }
     }
