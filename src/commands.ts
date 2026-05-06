@@ -97,30 +97,30 @@ export const registerIdleCommands = ({
     context,
     auth,
     rootUri,
-    error
+    failure
 }: {
     context: vscode.ExtensionContext;
     auth: Auth;
     rootUri: vscode.Uri;
-    error: ReturnType<typeof signal<Error | undefined>>;
+    failure: ReturnType<typeof signal<{ err: Error; source?: string } | undefined>>;
 }) => {
     context.subscriptions.push(
         vscode.commands.registerCommand(`${NAME}.openProject`, async () => {
-            const [err1, client] = await tryCatch(auth.getClient(true));
-            if (err1) {
-                error.set(() => err1);
-                return;
+            const [err] = await tryCatch(async () => {
+                const client = await auth.getClient(true);
+                if (!client) {
+                    return;
+                }
+                const [err1, projects] = await tryCatch(client.rest.userProjects(client.userId, 'profile'));
+                client.rest.dispose();
+                if (err1) {
+                    throw err1;
+                }
+                await openFolder(rootUri, projects);
+            });
+            if (err) {
+                failure.set(() => ({ err, source: 'commands' }));
             }
-            if (!client) {
-                return;
-            }
-            const [err2, projects] = await tryCatch(client.rest.userProjects(client.userId, 'profile'));
-            client.rest.dispose();
-            if (err2) {
-                error.set(() => err2);
-                return;
-            }
-            await openFolder(rootUri, projects);
         })
     );
     context.subscriptions.push(vscode.commands.registerCommand(`${NAME}.reloadProject`, () => undefined));
@@ -134,15 +134,18 @@ export const registerIdleCommands = ({
     const disposeUriError = effect(() => {
         const err = uriHandler.error.get();
         if (err) {
-            error.set(() => err);
+            failure.set(() => ({ err, source: 'uri-handler' }));
         }
     });
     context.subscriptions.push(new vscode.Disposable(disposeUriError));
     context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
     context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.reportIssue`, (value?: string) =>
-            report({ value, userId: 'anonymous' })
-        )
+        vscode.commands.registerCommand(`${NAME}.reportIssue`, async (value?: string) => {
+            const [err] = await tryCatch(report({ value, userId: 'anonymous' }));
+            if (err) {
+                failure.set(() => ({ err, source: 'commands' }));
+            }
+        })
     );
 };
 
@@ -154,7 +157,8 @@ export const registerProjectCommands = ({
     metrics,
     state,
     cache,
-    reload
+    reload,
+    failure
 }: {
     context: vscode.ExtensionContext;
     rootUri: vscode.Uri;
@@ -164,112 +168,133 @@ export const registerProjectCommands = ({
     state: State;
     cache: Cache;
     reload: ReturnType<typeof signal<{ projectManager: ProjectManager } | undefined>>;
+    failure: ReturnType<typeof signal<{ err: Error; source?: string } | undefined>>;
 }) => {
     context.subscriptions.push(
         vscode.commands.registerCommand(`${NAME}.openProject`, async () => {
-            metrics.increment('command', { name: 'openProject' });
-            const projects = await rest.userProjects(userId, 'profile');
-            await openFolder(rootUri, projects);
+            const [err] = await tryCatch(async () => {
+                metrics.increment('command', { name: 'openProject' });
+                const projects = await rest.userProjects(userId, 'profile');
+                await openFolder(rootUri, projects);
+            });
+            if (err) {
+                failure.set(() => ({ err, source: 'commands' }));
+            }
         })
     );
     context.subscriptions.push(
         vscode.commands.registerCommand(`${NAME}.reloadProject`, async () => {
-            metrics.increment('command', { name: 'reloadProject' });
-            if (!state.projectId) {
-                return;
-            }
+            const [err] = await tryCatch(async () => {
+                metrics.increment('command', { name: 'reloadProject' });
+                if (!state.projectId) {
+                    return;
+                }
 
-            const { projectManager } = cache.get(state.projectId) ?? {};
-            if (!projectManager) {
-                return;
-            }
+                const { projectManager } = cache.get(state.projectId) ?? {};
+                if (!projectManager) {
+                    return;
+                }
 
-            reload.set(() => ({ projectManager }));
+                reload.set(() => ({ projectManager }));
+            });
+            if (err) {
+                failure.set(() => ({ err, source: 'commands' }));
+            }
         })
     );
     context.subscriptions.push(
         vscode.commands.registerCommand(`${NAME}.switchBranch`, async () => {
-            metrics.increment('command', { name: 'switchBranch' });
-            if (!state.projectId) {
-                return;
-            }
-
-            const { branchId } = cache.get(state.projectId) ?? {};
-            if (!branchId) {
-                return;
-            }
-
-            const branches = await rest.projectBranches(state.projectId);
-            const names = branches.reduce((acc: string[], b) => {
-                if (b.id !== branchId) {
-                    acc.push(b.name);
+            const [err] = await tryCatch(async () => {
+                metrics.increment('command', { name: 'switchBranch' });
+                if (!state.projectId) {
+                    return;
                 }
-                return acc;
-            }, []);
-            const chosen = await vscode.window.showQuickPick(names, {
-                placeHolder: 'Select a branch'
+
+                const { branchId } = cache.get(state.projectId) ?? {};
+                if (!branchId) {
+                    return;
+                }
+
+                const branches = await rest.projectBranches(state.projectId);
+                const names = branches.reduce((acc: string[], b) => {
+                    if (b.id !== branchId) {
+                        acc.push(b.name);
+                    }
+                    return acc;
+                }, []);
+                const chosen = await vscode.window.showQuickPick(names, {
+                    placeHolder: 'Select a branch'
+                });
+                if (!chosen) {
+                    return;
+                }
+
+                const branch = branches.find((b) => b.name === chosen);
+                if (!branch) {
+                    return;
+                }
+
+                await rest.branchCheckout(branch.id);
             });
-            if (!chosen) {
-                return;
+            if (err) {
+                failure.set(() => ({ err, source: 'commands' }));
             }
-
-            const branch = branches.find((b) => b.name === chosen);
-            if (!branch) {
-                return;
-            }
-
-            await rest.branchCheckout(branch.id);
         })
     );
     context.subscriptions.push(
         vscode.commands.registerCommand(`${NAME}.showPathCollisions`, async () => {
-            if (!state.projectId) {
-                return;
-            }
-            const { projectManager } = cache.get(state.projectId) ?? {};
-            if (!projectManager) {
-                return;
-            }
+            const [err] = await tryCatch(async () => {
+                if (!state.projectId) {
+                    return;
+                }
+                const { projectManager } = cache.get(state.projectId) ?? {};
+                if (!projectManager) {
+                    return;
+                }
 
-            const collisions = projectManager.collisions.snapshot();
-            if (collisions.size === 0) {
-                return;
-            }
+                const collisions = projectManager.collisions.snapshot();
+                if (collisions.size === 0) {
+                    return;
+                }
 
-            const options = ['Show Path Collisions', 'Reload project'];
-            void vscode.window
-                .showWarningMessage(
+                const options = ['Show Path Collisions', 'Reload project'];
+                const option = await vscode.window.showWarningMessage(
                     [
                         `${collisions.size} asset path collision${collisions.size !== 1 ? 's' : ''} found.`,
                         'Rename or move the colliding assets in the Editor to resolve.'
                     ].join('\n'),
                     ...options
-                )
-                .then((option) => {
-                    switch (option) {
-                        case options[0]: {
-                            const list = Array.from(collisions.entries()).map(([path, ids]) => ({
-                                label: path,
-                                description: `(${ids.join(', ')})`
-                            }));
-                            void vscode.window.showQuickPick(list, {
-                                title: 'Asset Path Collisions',
-                                placeHolder: 'Filter paths',
-                                canPickMany: false
-                            });
-                            break;
-                        }
-                        case options[1]: {
-                            void vscode.commands.executeCommand(`${NAME}.reloadProject`);
-                            break;
-                        }
+                );
+                switch (option) {
+                    case options[0]: {
+                        const list = Array.from(collisions.entries()).map(([path, ids]) => ({
+                            label: path,
+                            description: `(${ids.join(', ')})`
+                        }));
+                        await vscode.window.showQuickPick(list, {
+                            title: 'Asset Path Collisions',
+                            placeHolder: 'Filter paths',
+                            canPickMany: false
+                        });
+                        break;
                     }
-                });
+                    case options[1]: {
+                        await vscode.commands.executeCommand(`${NAME}.reloadProject`);
+                        break;
+                    }
+                }
+            });
+            if (err) {
+                failure.set(() => ({ err, source: 'commands' }));
+            }
         })
     );
     context.subscriptions.push(
-        vscode.commands.registerCommand(`${NAME}.reportIssue`, (value?: string) =>
-            report({ value, userId, state, cache })
-        )
+        vscode.commands.registerCommand(`${NAME}.reportIssue`, async (value?: string) => {
+            const [err] = await tryCatch(report({ value, userId, state, cache }));
+            if (err) {
+                failure.set(() => ({ err, source: 'commands' }));
+            }
+        })
     );
 };
