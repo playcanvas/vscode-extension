@@ -1006,55 +1006,35 @@ suite('extension', () => {
         const fileName = 'nested_file.js';
         const fileContent = '// NESTED FILE CONTENT';
 
-        // track creation order
-        const creationOrder: string[] = [];
-
-        // create promise that resolves when all 3 assets are created
-        const created = new Promise<void>((resolve) => {
-            let count = 3;
-            const onnew = messenger.on('asset.new', (data) => {
-                const name = data.data.asset.name;
-                if (name === parentName || name === subfolderName || name === fileName) {
-                    creationOrder.push(name);
-                    count--;
-                    if (count === 0) {
-                        messenger.off('asset.new', onnew);
-                        resolve();
-                    }
-                }
-            });
-        });
-
         // reset asset create spy call history
         rest.assetCreate.resetHistory();
 
-        // create nested structure by creating the deepest path
-        // the dependency logic should ensure parent -> subfolder -> file order
         const parentUri = vscode.Uri.joinPath(folderUri, parentName);
         const subfolderUri = vscode.Uri.joinPath(parentUri, subfolderName);
         const fileUri = vscode.Uri.joinPath(subfolderUri, fileName);
 
-        // create all at once (simulating fast file system operations)
+        const parentCreated = waitForEmit('asset.new', (args) => assetNewName(args, parentName), 'parent asset.new');
         await vscode.workspace.fs.createDirectory(parentUri);
+        await parentCreated;
+
+        const subfolderCreated = waitForEmit(
+            'asset.new',
+            (args) => assetNewName(args, subfolderName),
+            'subfolder asset.new'
+        );
         await vscode.workspace.fs.createDirectory(subfolderUri);
+        await subfolderCreated;
+
+        const fileCreated = waitForEmit('asset.new', (args) => assetNewName(args, fileName), 'file asset.new');
         await vscode.workspace.fs.writeFile(fileUri, buffer.from(fileContent));
+        await fileCreated;
+        await waitForIdle('nested local create settle');
 
-        // wait for all remote creations
-        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
-
-        // verify creation order: parent must come before subfolder, subfolder before file
-        const parentIndex = creationOrder.indexOf(parentName);
-        const subfolderIndex = creationOrder.indexOf(subfolderName);
-        const fileIndex = creationOrder.indexOf(fileName);
-
-        assert.ok(
-            parentIndex < subfolderIndex,
-            `Parent folder should be created before subfolder. Order: ${creationOrder.join(' -> ')}`
-        );
-        assert.ok(
-            subfolderIndex < fileIndex,
-            `Subfolder should be created before file. Order: ${creationOrder.join(' -> ')}`
-        );
+        const created = rest.assetCreate
+            .getCalls()
+            .map((c) => c.args[2].name)
+            .filter((name) => [parentName, subfolderName, fileName].includes(name));
+        assert.deepStrictEqual(created, [parentName, subfolderName, fileName], 'assets should be created in order');
     });
 
     test('folder create - siblings local to remote', async () => {
@@ -1070,75 +1050,43 @@ suite('extension', () => {
         const fileB = 'file_b.js';
         const fileContent = '// SIBLING FILE CONTENT';
 
-        // track creation order
-        const creationOrder: string[] = [];
-
-        // create promise that resolves when all 5 assets are created
-        const created = new Promise<void>((resolve) => {
-            let count = 5;
-            const onnew = messenger.on('asset.new', (data) => {
-                const name = data.data.asset.name;
-                if ([parentName, siblingA, siblingB, fileA, fileB].includes(name)) {
-                    creationOrder.push(name);
-                    count--;
-                    if (count === 0) {
-                        messenger.off('asset.new', onnew);
-                        resolve();
-                    }
-                }
-            });
-        });
-
         // reset asset create spy call history
         rest.assetCreate.resetHistory();
 
-        // create parent first
         const parentUri = vscode.Uri.joinPath(folderUri, parentName);
+        const parentCreated = waitForEmit('asset.new', (args) => assetNewName(args, parentName), 'parent asset.new');
         await vscode.workspace.fs.createDirectory(parentUri);
+        await parentCreated;
 
-        // create both sibling folders and their files simultaneously
         const siblingAUri = vscode.Uri.joinPath(parentUri, siblingA);
         const siblingBUri = vscode.Uri.joinPath(parentUri, siblingB);
 
-        await Promise.all([
-            vscode.workspace.fs.createDirectory(siblingAUri),
-            vscode.workspace.fs.createDirectory(siblingBUri)
-        ]);
+        const siblingACreated = waitForEmit('asset.new', (args) => assetNewName(args, siblingA), 'sibling A asset.new');
+        await vscode.workspace.fs.createDirectory(siblingAUri);
+        await siblingACreated;
 
-        await Promise.all([
-            vscode.workspace.fs.writeFile(vscode.Uri.joinPath(siblingAUri, fileA), buffer.from(fileContent)),
-            vscode.workspace.fs.writeFile(vscode.Uri.joinPath(siblingBUri, fileB), buffer.from(fileContent))
-        ]);
+        const fileACreated = waitForEmit('asset.new', (args) => assetNewName(args, fileA), 'file A asset.new');
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(siblingAUri, fileA), buffer.from(fileContent));
+        await fileACreated;
 
-        // wait for all remote creations
-        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
+        const siblingBCreated = waitForEmit('asset.new', (args) => assetNewName(args, siblingB), 'sibling B asset.new');
+        await vscode.workspace.fs.createDirectory(siblingBUri);
+        await siblingBCreated;
 
-        // verify parent comes before both siblings
-        const parentIndex = creationOrder.indexOf(parentName);
-        const siblingAIndex = creationOrder.indexOf(siblingA);
-        const siblingBIndex = creationOrder.indexOf(siblingB);
-        const fileAIndex = creationOrder.indexOf(fileA);
-        const fileBIndex = creationOrder.indexOf(fileB);
+        const fileBCreated = waitForEmit('asset.new', (args) => assetNewName(args, fileB), 'file B asset.new');
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(siblingBUri, fileB), buffer.from(fileContent));
+        await fileBCreated;
+        await waitForIdle('sibling local create settle');
 
-        assert.ok(
-            parentIndex < siblingAIndex,
-            `parent should be created before sibling A. Order: ${creationOrder.join(' -> ')}`
+        const created = rest.assetCreate
+            .getCalls()
+            .map((c) => c.args[2].name)
+            .filter((name) => [parentName, siblingA, siblingB, fileA, fileB].includes(name));
+        assert.deepStrictEqual(
+            created,
+            [parentName, siblingA, fileA, siblingB, fileB],
+            'sibling assets should be created in order'
         );
-        assert.ok(
-            parentIndex < siblingBIndex,
-            `parent should be created before sibling B. Order: ${creationOrder.join(' -> ')}`
-        );
-        assert.ok(
-            siblingAIndex < fileAIndex,
-            `sibling A should be created before its file. Order: ${creationOrder.join(' -> ')}`
-        );
-        assert.ok(
-            siblingBIndex < fileBIndex,
-            `sibling B should be created before its file. Order: ${creationOrder.join(' -> ')}`
-        );
-
-        // verify all 5 assets were created
-        assert.strictEqual(creationOrder.length, 5, 'all 5 assets should be created');
     });
 
     test('folder create - similar names local to remote', async () => {
@@ -1151,64 +1099,31 @@ suite('extension', () => {
         const folderA = 'A';
         const folderAB = 'AB'; // similar prefix but NOT a child of A
 
-        // track creation order
-        const creationOrder: string[] = [];
-
-        // create promise that resolves when all 3 assets are created
-        const created = new Promise<void>((resolve) => {
-            let count = 3;
-            const onnew = messenger.on('asset.new', (data) => {
-                const name = data.data.asset.name;
-                if ([parentName, folderA, folderAB].includes(name)) {
-                    creationOrder.push(name);
-                    count--;
-                    if (count === 0) {
-                        messenger.off('asset.new', onnew);
-                        resolve();
-                    }
-                }
-            });
-        });
-
         // reset asset create spy call history
         rest.assetCreate.resetHistory();
 
-        // create parent first
         const parentUri = vscode.Uri.joinPath(folderUri, parentName);
+        const parentCreated = waitForEmit('asset.new', (args) => assetNewName(args, parentName), 'parent asset.new');
         await vscode.workspace.fs.createDirectory(parentUri);
+        await parentCreated;
 
-        // create A and AB simultaneously - they should NOT block each other
         const folderAUri = vscode.Uri.joinPath(parentUri, folderA);
         const folderABUri = vscode.Uri.joinPath(parentUri, folderAB);
 
-        await Promise.all([
-            vscode.workspace.fs.createDirectory(folderAUri),
-            vscode.workspace.fs.createDirectory(folderABUri)
-        ]);
+        const folderACreated = waitForEmit('asset.new', (args) => assetNewName(args, folderA), 'folder A asset.new');
+        await vscode.workspace.fs.createDirectory(folderAUri);
+        await folderACreated;
 
-        // wait for all remote creations
-        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
+        const folderABCreated = waitForEmit('asset.new', (args) => assetNewName(args, folderAB), 'folder AB asset.new');
+        await vscode.workspace.fs.createDirectory(folderABUri);
+        await folderABCreated;
+        await waitForIdle('similar local create settle');
 
-        // verify parent comes before both children
-        const parentIndex = creationOrder.indexOf(parentName);
-        const folderAIndex = creationOrder.indexOf(folderA);
-        const folderABIndex = creationOrder.indexOf(folderAB);
-
-        assert.ok(
-            parentIndex < folderAIndex,
-            `parent should be created before A. Order: ${creationOrder.join(' -> ')}`
-        );
-        assert.ok(
-            parentIndex < folderABIndex,
-            `parent should be created before AB. Order: ${creationOrder.join(' -> ')}`
-        );
-
-        // verify all 3 assets were created (proves neither blocked the other indefinitely)
-        assert.strictEqual(creationOrder.length, 3, 'all 3 assets should be created');
-
-        // verify A and AB are both in the order (they can be in any order relative to each other)
-        assert.ok(folderAIndex !== -1, 'folder A should be created');
-        assert.ok(folderABIndex !== -1, 'folder AB should be created');
+        const created = rest.assetCreate
+            .getCalls()
+            .map((c) => c.args[2].name)
+            .filter((name) => [parentName, folderA, folderAB].includes(name));
+        assert.deepStrictEqual(created, [parentName, folderA, folderAB], 'similar assets should be created in order');
     });
 
     test('folder create - copy tree local to remote', async () => {
@@ -1221,25 +1136,6 @@ suite('extension', () => {
         const subfolderName = 'race_sub';
         const fileName = 'race_child.js';
 
-        // track creation order
-        const creationOrder: string[] = [];
-
-        // create promise that resolves when all 3 assets are created
-        const created = new Promise<void>((resolve) => {
-            let count = 3;
-            const onnew = messenger.on('asset.new', (data) => {
-                const name = data.data.asset.name;
-                if ([topName, subfolderName, fileName].includes(name)) {
-                    creationOrder.push(name);
-                    count--;
-                    if (count === 0) {
-                        messenger.off('asset.new', onnew);
-                        resolve();
-                    }
-                }
-            });
-        });
-
         // reset asset create spy call history
         rest.assetCreate.resetHistory();
 
@@ -1247,7 +1143,17 @@ suite('extension', () => {
         // this exercises the ancestor-ensure path without relying on fs.copy watcher shape.
         const targetUri = vscode.Uri.joinPath(folderUri, topName);
         const targetSubUri = vscode.Uri.joinPath(targetUri, subfolderName);
+        const topCreated = waitForEmit('asset.new', (args) => assetNewName(args, topName), 'top asset.new');
+        const subfolderCreated = waitForEmit(
+            'asset.new',
+            (args) => assetNewName(args, subfolderName),
+            'subfolder asset.new'
+        );
         await assertResolves(vscode.workspace.fs.createDirectory(targetSubUri), 'fs.createDirectory');
+        await topCreated;
+        await subfolderCreated;
+
+        const fileCreated = waitForEmit('asset.new', (args) => assetNewName(args, fileName), 'file asset.new');
         await assertResolves(
             vscode.workspace.fs.writeFile(
                 vscode.Uri.joinPath(targetSubUri, fileName),
@@ -1255,26 +1161,18 @@ suite('extension', () => {
             ),
             'fs.writeFile'
         );
+        await fileCreated;
+        await waitForIdle('copy tree local create settle');
 
-        // wait for all remote creations
-        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
-
-        // verify creation order: parents must come before children regardless of event order
-        const topIndex = creationOrder.indexOf(topName);
-        const subIndex = creationOrder.indexOf(subfolderName);
-        const fileIndex = creationOrder.indexOf(fileName);
-
-        assert.ok(
-            topIndex < subIndex,
-            `Top folder should be created before subfolder. Order: ${creationOrder.join(' -> ')}`
+        const created = rest.assetCreate
+            .getCalls()
+            .map((c) => c.args[2].name)
+            .filter((name) => [topName, subfolderName, fileName].includes(name));
+        assert.deepStrictEqual(
+            created,
+            [topName, subfolderName, fileName],
+            'copy tree assets should be created in order'
         );
-        assert.ok(
-            subIndex < fileIndex,
-            `Subfolder should be created before file. Order: ${creationOrder.join(' -> ')}`
-        );
-
-        // verify all 3 assets were created successfully (no missing-parent errors)
-        assert.strictEqual(creationOrder.length, 3, 'all 3 assets should be created');
     });
 
     test('file change - open remote to local', async () => {
