@@ -1,0 +1,14 @@
+services:
+    tests:
+        build:
+            context: .
+        platform: ${TEST_DOCKER_PLATFORM:-linux/amd64}
+        init: true
+        tmpfs:
+            - /work/.vscode-storage
+            - /work/out
+        volumes:
+            - vscode-test:/work/.vscode-test
+
+volumes:
+    vscode-test:

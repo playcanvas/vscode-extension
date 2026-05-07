@@ -1,0 +1,9 @@
+/.DS_Store
+/.git
+/.vscode-test
+/.vscode-storage
+/coverage
+/node_modules
+/out
+*.vsix
+**/node_modules
