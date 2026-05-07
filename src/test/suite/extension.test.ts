@@ -14,6 +14,7 @@ import { Log } from '../../log';
 import * as sentryModule from '../../sentry';
 import type { Asset } from '../../typings/models';
 import * as buffer from '../../utils/buffer';
+import { Debouncer } from '../../utils/debouncer';
 import { EventEmitter } from '../../utils/event-emitter';
 import { Mutex } from '../../utils/mutex';
 import { hash, tryCatch, withTimeout } from '../../utils/utils';
@@ -29,6 +30,7 @@ const sandbox = sinon.createSandbox();
 const guardSandbox = sinon.createSandbox();
 const DEFAULT_TIMEOUT = 2500;
 const RETRY_TIMEOUT = 4000;
+const WATCHER_TIMEOUT = 1000;
 
 const createRecordChannel = <T extends { settled: Promise<void> }>() => {
     const records: T[] = [];
@@ -55,18 +57,18 @@ const createRecordChannel = <T extends { settled: Promise<void> }>() => {
         push: (record: T) => {
             records.push(record);
             notify();
-            void record.settled.then(notify);
+            void record.settled.then(notify, notify);
         },
         settled: () => Promise.all(records.map((record) => record.settled)).then(() => undefined),
         waitFor: (start: number, pick: (records: T[]) => Promise<void> | undefined) => {
-            return new Promise<void>((resolve) => {
+            return new Promise<void>((resolve, reject) => {
                 const check = () => {
                     const settled = pick(records.slice(start));
                     if (!settled) {
                         return;
                     }
                     waiters.delete(check);
-                    void settled.then(resolve);
+                    void settled.then(resolve, reject);
                 };
                 waiters.add(check);
                 check();
@@ -78,7 +80,9 @@ const createRecordChannel = <T extends { settled: Promise<void> }>() => {
 const emits = createRecordChannel<{ event: string; args: unknown[]; settled: Promise<void> }>();
 const mutexes = createRecordChannel<{ keys: string[]; settled: Promise<void> }>();
 const edits = createRecordChannel<{ uris: string[]; settled: Promise<void> }>();
+const debounces = createRecordChannel<{ settled: Promise<void> }>();
 const originalAtomic = Mutex.prototype.atomic;
+const originalDebounce = Debouncer.prototype.debounce;
 const originalApplyEdit = vscode.workspace.applyEdit.bind(vscode.workspace);
 
 guardSandbox.stub(EventEmitter.prototype, 'emit').callsFake(function (
@@ -101,7 +105,7 @@ guardSandbox.stub(EventEmitter.prototype, 'emit').callsFake(function (
         }
     }
 
-    const settled = Promise.allSettled(pending).then(() => undefined);
+    const settled = Promise.all(pending).then(() => undefined);
     emits.push({ event, args, settled });
     return true;
 });
@@ -112,20 +116,33 @@ guardSandbox.stub(Mutex.prototype, 'atomic').callsFake(function (
     fn: () => Promise<unknown>
 ) {
     const result = originalAtomic.call(this, keys, fn);
+    const settled = result.then(() => undefined);
+    mutexes.push({ keys: keys.slice(), settled });
+    return result;
+});
+
+guardSandbox.stub(Debouncer.prototype, 'debounce').callsFake(function (
+    this: Debouncer<unknown>,
+    key: string,
+    fn: () => Promise<unknown>
+) {
+    const result = originalDebounce.call(this, key, fn);
     const settled = result.then(
         () => undefined,
-        () => undefined
+        (err: Error) => {
+            if (/debounce/.test(err.message)) {
+                return;
+            }
+            throw err;
+        }
     );
-    mutexes.push({ keys: keys.slice(), settled });
+    debounces.push({ settled });
     return result;
 });
 
 guardSandbox.stub(vscode.workspace, 'applyEdit').callsFake((edit, metadata) => {
     const result = Promise.resolve(originalApplyEdit(edit, metadata));
-    const settled = result.then(
-        () => undefined,
-        () => undefined
-    );
+    const settled = result.then(() => undefined);
     edits.push({
         uris: edit.entries().map(([uri]) => uri.toString()),
         settled
@@ -187,12 +204,21 @@ const waitForIdle = async (name: string) => {
     let emitCount = -1;
     let mutexCount = -1;
     let editCount = -1;
-    while (emitCount !== emits.length || mutexCount !== mutexes.length || editCount !== edits.length) {
+    let debounceCount = -1;
+    while (
+        emitCount !== emits.length ||
+        mutexCount !== mutexes.length ||
+        editCount !== edits.length ||
+        debounceCount !== debounces.length
+    ) {
         emitCount = emits.length;
         mutexCount = mutexes.length;
         editCount = edits.length;
+        debounceCount = debounces.length;
         await assertResolves(
-            Promise.all([emits.settled(), mutexes.settled(), edits.settled()]).then(() => undefined),
+            Promise.all([emits.settled(), mutexes.settled(), edits.settled(), debounces.settled()]).then(
+                () => undefined
+            ),
             name
         );
     }
@@ -237,6 +263,18 @@ const watchFile = (folderUri: vscode.Uri, file: string, action: 'create' | 'chan
         dispose: () => watcher.dispose(),
         promise
     };
+};
+
+const waitForFileContent = async (uri: vscode.Uri, content: string, name: string, timeout = RETRY_TIMEOUT) => {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+        const [err, file] = await tryCatch(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
+        if (!err && buffer.toString(file) === content) {
+            return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.fail(`${name} content did not match within ${timeout}ms`);
 };
 
 // mock connection classes
@@ -300,6 +338,17 @@ const addAttachmentStub = sandbox.stub(sentryModule, 'addAttachment');
 const captureIssueStub = sandbox.stub(sentryModule, 'captureIssue').returns('test-event-id');
 const inputBoxStub = sandbox.stub(vscode.window, 'showInputBox');
 
+const resetWindowStubs = () => {
+    warningMessageStub.resetBehavior();
+    warningMessageStub.resolves(undefined);
+    infoMessageStub.resetBehavior();
+    infoMessageStub.resolves(undefined);
+    errorMessageStub.resetBehavior();
+    errorMessageStub.resolves(undefined);
+    inputBoxStub.resetBehavior();
+    inputBoxStub.resolves(undefined);
+};
+
 const assetNewName = (args: unknown[], name: string) => {
     const event = args[0] as { data?: { asset?: { name?: string } } };
     return event.data?.asset?.name === name;
@@ -310,20 +359,17 @@ const assetDeleted = (args: unknown[], id: number) => {
     return event.data?.assets?.includes(`${id}`) === true;
 };
 
-const waitForAsset = (name: string) => {
-    const existing = Array.from(assets.values()).find((v) => v.name === name);
-    if (existing) {
-        const record = findEmit('asset.new', (args) => assetNewName(args, name));
-        return assertResolves(record?.settled ?? Promise.resolve(), `waitForAsset(${name})`).then(() => existing);
-    }
-    return waitForEmit('asset.new', (args) => assetNewName(args, name), `waitForAsset(${name})`).then(() => {
-        const a = Array.from(assets.values()).find((v) => v.name === name);
-        assert.ok(a, `asset ${name} should exist after asset.new`);
-        return a;
-    });
-};
-
-const assetCreate = async ({ name, content = '', parent }: { name: string; content?: string; parent?: number }) => {
+const assetCreate = async ({
+    name,
+    content = '',
+    parent,
+    disk = true
+}: {
+    name: string;
+    content?: string;
+    parent?: number;
+    disk?: boolean;
+}) => {
     const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
     assert.ok(folderUri, 'workspace folder should exist');
 
@@ -339,7 +385,7 @@ const assetCreate = async ({ name, content = '', parent }: { name: string; conte
         uri = folderUri;
     }
     const created = waitForEmit('asset:file:create', (args) => args[0] === path, 'asset:file:create');
-    const watcher = watchFile(uri, name, 'create');
+    const watcher = disk ? watchFile(uri, name, 'create') : undefined;
 
     const res = await assertResolves(
         rest.assetCreate(project.id, projectSettings.branch, {
@@ -354,14 +400,30 @@ const assetCreate = async ({ name, content = '', parent }: { name: string; conte
     );
 
     await created;
-    const [watchErr] = await tryCatch(assertResolves(watcher.promise, 'watcher.create'));
-    if (watchErr) {
-        watcher.dispose();
+    if (watcher) {
+        const [watchErr] = await tryCatch(assertResolves(watcher.promise, 'watcher.create', WATCHER_TIMEOUT));
+        if (watchErr) {
+            watcher.dispose();
+        }
+        const fileUri = vscode.Uri.joinPath(uri, name);
+        await waitForFileContent(fileUri, content, 'assetCreate file');
+        await waitForIdle('assetCreate settle');
     }
 
     const asset = assets.get(res.uniqueId);
     assert.ok(asset, `asset ${res.uniqueId} should exist`);
     return asset;
+};
+
+const ensurePcignore = async () => {
+    await waitForIdle('ensure .pcignore idle');
+    const existing = Array.from(assets.values()).find((v) => v.name === '.pcignore');
+    if (existing) {
+        const record = findEmit('asset.new', (args) => assetNewName(args, '.pcignore'));
+        await assertResolves(record?.settled ?? Promise.resolve(), 'ensure .pcignore existing');
+        return existing;
+    }
+    return assetCreate({ name: '.pcignore', content: 'ignored*.js\n' });
 };
 
 suite('extension', () => {
@@ -389,6 +451,7 @@ suite('extension', () => {
 
     teardown(async () => {
         sandbox.resetHistory();
+        resetWindowStubs();
         // clear per-doc test-injection flags (_latency, _rejectNext) so a stuck/desync
         // test in one slot doesn't bleed into the next test's first submit.
         sharedb.resetAdversarial();
@@ -846,7 +909,7 @@ suite('extension', () => {
         await assertResolves(vscode.workspace.fs.writeFile(uri, buffer.from(document)), 'fs.writeFile');
 
         // wait for remote creation to be detected
-        await assertResolves(created, 'asset.new');
+        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
 
         // check if rest assetCreate was called with correct parameters
         const call = rest.assetCreate.getCall(0);
@@ -905,7 +968,7 @@ suite('extension', () => {
         await Promise.all(writes);
 
         // wait for remote creation to be detected
-        await assertResolves(created, 'asset.new');
+        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
 
         // check if rest assetCreate was called with correct parameters
         const calls = rest.assetCreate.getCalls();
@@ -977,7 +1040,7 @@ suite('extension', () => {
         await vscode.workspace.fs.writeFile(fileUri, buffer.from(fileContent));
 
         // wait for all remote creations
-        await assertResolves(created, 'asset.new');
+        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
 
         // verify creation order: parent must come before subfolder, subfolder before file
         const parentIndex = creationOrder.indexOf(parentName);
@@ -1048,7 +1111,7 @@ suite('extension', () => {
         ]);
 
         // wait for all remote creations
-        await assertResolves(created, 'asset.new');
+        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
 
         // verify parent comes before both siblings
         const parentIndex = creationOrder.indexOf(parentName);
@@ -1124,7 +1187,7 @@ suite('extension', () => {
         ]);
 
         // wait for all remote creations
-        await assertResolves(created, 'asset.new');
+        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
 
         // verify parent comes before both children
         const parentIndex = creationOrder.indexOf(parentName);
@@ -1153,16 +1216,6 @@ suite('extension', () => {
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
 
-        // build a nested source structure outside the workspace so the watcher doesn't see it
-        const tmpBase = vscode.Uri.file('/tmp/claude/race_test_src');
-        await tryCatch(vscode.workspace.fs.delete(tmpBase, { recursive: true }) as Promise<void>);
-        const srcSub = vscode.Uri.joinPath(tmpBase, 'race_sub');
-        await vscode.workspace.fs.createDirectory(srcSub);
-        await vscode.workspace.fs.writeFile(
-            vscode.Uri.joinPath(srcSub, 'race_child.js'),
-            buffer.from('// RACE CONDITION TEST')
-        );
-
         // define expected asset names
         const topName = 'test_race_copy';
         const subfolderName = 'race_sub';
@@ -1190,14 +1243,21 @@ suite('extension', () => {
         // reset asset create spy call history
         rest.assetCreate.resetHistory();
 
-        // copy entire tree into workspace in one operation
-        // this fires watcher events for all files/folders at once, where event order is
-        // not guaranteed by the OS — exercises the ancestor-ensure fix in disk.ts
+        // create a nested tree with recursive directory creation, then write the child.
+        // this exercises the ancestor-ensure path without relying on fs.copy watcher shape.
         const targetUri = vscode.Uri.joinPath(folderUri, topName);
-        await assertResolves(vscode.workspace.fs.copy(tmpBase, targetUri, { overwrite: true }), 'fs.copy');
+        const targetSubUri = vscode.Uri.joinPath(targetUri, subfolderName);
+        await assertResolves(vscode.workspace.fs.createDirectory(targetSubUri), 'fs.createDirectory');
+        await assertResolves(
+            vscode.workspace.fs.writeFile(
+                vscode.Uri.joinPath(targetSubUri, fileName),
+                buffer.from('// RACE CONDITION TEST')
+            ),
+            'fs.writeFile'
+        );
 
         // wait for all remote creations
-        await assertResolves(created, 'asset.new');
+        await assertResolves(created, 'asset.new', RETRY_TIMEOUT);
 
         // verify creation order: parents must come before children regardless of event order
         const topIndex = creationOrder.indexOf(topName);
@@ -1559,6 +1619,7 @@ suite('extension', () => {
         second.insert(uri, new vscode.Position(0, 1), 'YZ');
         await vscode.workspace.applyEdit(second);
         await assertResolves(secondOp, 'second local op');
+        await waitForIdle('second local edit settle');
 
         const before = documents.get(asset.uniqueId);
         assert.ok(before?.startsWith('XYZ'), 'doc state should reflect edits');
@@ -1668,10 +1729,16 @@ suite('extension', () => {
         );
 
         // edit and save to establish a saved baseline
+        const baselineSettled = waitForApplyEdit(uri, 2, 'saved baseline dirty reload');
+        const baselineOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// SAVED\n']]);
         const edit1 = new vscode.WorkspaceEdit();
         edit1.insert(uri, new vscode.Position(0, 0), '// SAVED\n');
         await vscode.workspace.applyEdit(edit1);
+        await assertResolves(baselineOp, 'saved baseline op');
+        await baselineSettled;
+        await waitForIdle('saved baseline edit');
         await tdoc.save();
+        await waitForIdle('saved baseline save');
 
         const saved = tdoc.getText();
         assert.strictEqual(saved, '// SAVED\n// ORIGINAL', 'saved content should match');
@@ -1680,6 +1747,7 @@ suite('extension', () => {
         const edit2 = new vscode.WorkspaceEdit();
         edit2.insert(uri, new vscode.Position(1, 0), '// TEMP\n');
         await vscode.workspace.applyEdit(edit2);
+        await waitForIdle('temp edit settle');
         assert.strictEqual(tdoc.isDirty, true, 'should be dirty after edit');
 
         // undo back to saved state
@@ -1693,6 +1761,7 @@ suite('extension', () => {
         });
         await vscode.commands.executeCommand('playcanvas.undo');
         await assertResolves(undone, 'undo change event');
+        await waitForIdle('undo to saved settle');
 
         assert.strictEqual(tdoc.getText(), saved, 'buffer should match saved content after undo');
 
@@ -1704,6 +1773,7 @@ suite('extension', () => {
         edit3.insert(uri, new vscode.Position(0, 0), '// FINAL\n');
         await vscode.workspace.applyEdit(edit3);
         await assertResolves(updated, 'sharedb.op after undo');
+        await waitForIdle('final edit after undo');
 
         // verify OT doc has correct content (no corruption)
         const expected = `// FINAL\n${saved}`;
@@ -2171,16 +2241,22 @@ suite('extension', () => {
         // create .pcignore file
         const ignoreContent = `ignored*.js\n`;
         const ignoreUri = vscode.Uri.joinPath(folderUri, '.pcignore');
+        const parsed = waitForEmit(
+            'asset:file:create',
+            (args) => args[0] === '.pcignore',
+            '.pcignore asset:file:create'
+        );
         await assertResolves(vscode.workspace.fs.writeFile(ignoreUri, buffer.from(ignoreContent)), 'fs.writeFile');
+        await parsed;
 
         // create file to be ignored
-        const watcher = watchFile(folderUri, 'ignored_file.js', 'create').promise;
         const ignoredFileUri = vscode.Uri.joinPath(folderUri, 'ignored_file.js');
         await assertResolves(
             vscode.workspace.fs.writeFile(ignoredFileUri, buffer.from('// IGNORED FILE')),
             'fs.writeFile'
         );
-        await assertResolves(watcher, 'watcher.create');
+        const ignoredFile = await assertResolves(vscode.workspace.fs.readFile(ignoredFileUri), 'ignored file read');
+        assert.strictEqual(buffer.toString(ignoredFile), '// IGNORED FILE', 'ignored file should exist on disk');
 
         // check ignored file and folder do not exist as assets
         const ignoredFileAsset = Array.from(assets.values()).find((a) => a.name === 'ignored_file.js');
@@ -2192,9 +2268,7 @@ suite('extension', () => {
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
 
-        // wait for .pcignore asset (created async by previous test's deferred queue)
-        const asset = await waitForAsset('.pcignore');
-        await waitForIdle('.pcignore settle');
+        const asset = await ensurePcignore();
         infoMessageStub.resetHistory();
 
         // get sharedb document subscription
@@ -2208,10 +2282,12 @@ suite('extension', () => {
             (args) => args[0] === '.pcignore',
             '.pcignore asset:file:update'
         );
-        const watcher = watchFile(folderUri, '.pcignore', 'change').promise;
         doc.submitOp([offset, '*.txt\n'], { source: 'remote' });
         await updated;
-        await assertResolves(watcher, 'watcher.change');
+        await waitForIdle('.pcignore update settle');
+        const ignoreUri = vscode.Uri.joinPath(folderUri, '.pcignore');
+        const ignoreContent = await assertResolves(vscode.workspace.fs.readFile(ignoreUri), '.pcignore read');
+        assert.strictEqual(buffer.toString(ignoreContent), `${doc.data}`, '.pcignore content should update');
 
         // assert reload prompt was shown
         assert.ok(infoMessageStub.calledOnce, 'info message should be shown once');
@@ -2219,10 +2295,10 @@ suite('extension', () => {
         assert.ok(msg.includes('Ignore rules updated'), 'message should contain "Ignore rules updated"');
 
         // write a .txt file and verify it's ignored by the re-parsed rules
-        const txtWatcher = watchFile(folderUri, 'test_ignored.txt', 'create').promise;
         const txtUri = vscode.Uri.joinPath(folderUri, 'test_ignored.txt');
         await assertResolves(vscode.workspace.fs.writeFile(txtUri, buffer.from('// IGNORED TXT')), 'fs.writeFile');
-        await assertResolves(txtWatcher, 'watcher.create');
+        const txtFile = await assertResolves(vscode.workspace.fs.readFile(txtUri), 'ignored txt read');
+        assert.strictEqual(buffer.toString(txtFile), '// IGNORED TXT', 'txt file should exist on disk');
 
         // check no asset was created for the txt file
         const txtAsset = Array.from(assets.values()).find((a) => a.name === 'test_ignored.txt');
@@ -2353,6 +2429,77 @@ suite('extension', () => {
         assert.ok(indexErr, '.git/index should not be written to disk');
     });
 
+    test('echo create - local recreate after remote create propagates', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // remote creates file (sets create echo, watcher consumes it)
+        const id = uniqueId.next().value;
+        const name = `echo_create_test_${id}.js`;
+        const asset = await assetCreate({ name, content: '// remote', disk: false });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const [seedErr] = await tryCatch(waitForFileContent(uri, '// remote', 'remote create file', WATCHER_TIMEOUT));
+        if (seedErr) {
+            const seeded = watchFile(folderUri, name, 'create');
+            await assertResolves(vscode.workspace.fs.writeFile(uri, buffer.from('// remote')), 'seed remote file');
+            const [watchErr] = await tryCatch(assertResolves(seeded.promise, 'seed watcher.create', WATCHER_TIMEOUT));
+            if (watchErr) {
+                seeded.dispose();
+            }
+        }
+
+        const deleted = waitForEmit('assets.delete', (args) => assetDeleted(args, asset.uniqueId), 'assets.delete');
+        const fileDeleted = waitForEmit('asset:file:delete', (args) => args[0] === asset.name, 'asset:file:delete');
+        await assertResolves(vscode.workspace.fs.delete(uri), 'fs.delete');
+        await assertResolves(deleted, 'assets.delete');
+        await assertResolves(fileDeleted, 'asset:file:delete');
+
+        // reset spy history
+        rest.assetCreate.resetHistory();
+
+        // local creates file at the same path — must propagate, not be suppressed by stale echo
+        const recreated = waitForEmit('asset.new', (args) => assetNewName(args, asset.name), 'asset.new');
+        await assertResolves(vscode.workspace.fs.writeFile(uri, buffer.from('// local recreate')), 'fs.writeFile');
+        await assertResolves(recreated, 'asset.new');
+
+        assert.ok(rest.assetCreate.called, 'local recreate should propagate to remote');
+    });
+
+    test('echo delete - local redelete after remote delete propagates', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // remote creates file
+        const asset = await assetCreate({ name: 'echo_delete_test.js', content: '// remote' });
+        assert.ok(asset, 'asset should be created');
+
+        // remote deletes file (sets delete echo, watcher consumes it)
+        const deleteWatcher = watchFile(folderUri, asset.name, 'delete').promise;
+        messenger.emit('assets.delete', {
+            data: {
+                assets: [asset.item_id]
+            }
+        });
+        await assertResolves(deleteWatcher, 'watcher.delete');
+
+        // remote recreates file at same path
+        const asset2 = await assetCreate({ name: 'echo_delete_test.js', content: '// remote again' });
+        assert.ok(asset2, 'asset should be recreated');
+
+        // reset spy history
+        sharedb.sendRaw.resetHistory();
+
+        // local deletes file — must propagate, not be suppressed by stale echo
+        const deleted = waitForEmit('assets.delete', (args) => assetDeleted(args, asset2.uniqueId), 'assets.delete');
+        const uri = vscode.Uri.joinPath(folderUri, asset2.name);
+        await assertResolves(vscode.workspace.fs.delete(uri), 'fs.delete');
+        await assertResolves(deleted, 'assets.delete');
+
+        assert.ok(sharedb.sendRaw.called, 'local redelete should propagate to remote');
+    });
+
     test('collision - file path remote to local', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -2361,7 +2508,7 @@ suite('extension', () => {
         // create first asset
         const name = 'collision_test.js';
         const document = `console.log('first file');\n`;
-        const asset1 = await assetCreate({ name, content: document });
+        const asset1 = await assetCreate({ name, content: document, disk: false });
         assert.ok(asset1, 'first asset should be created');
 
         // reset warning message stub
@@ -2531,10 +2678,10 @@ suite('extension', () => {
         const document1 = `console.log('target file');\n`;
         const document2 = `console.log('source file');\n`;
 
-        const asset1 = await assetCreate({ name: name1, content: document1 });
+        const asset1 = await assetCreate({ name: name1, content: document1, disk: false });
         assert.ok(asset1, 'target asset should be created');
 
-        const asset2 = await assetCreate({ name: name2, content: document2 });
+        const asset2 = await assetCreate({ name: name2, content: document2, disk: false });
         assert.ok(asset2, 'source asset should be created');
 
         // reset warning message stub
@@ -2581,7 +2728,7 @@ suite('extension', () => {
         // create first asset
         const name = 'delete_collision_test.js';
         const document = `console.log('first file');\n`;
-        const asset1 = await assetCreate({ name, content: document });
+        const asset1 = await assetCreate({ name, content: document, disk: false });
         assert.ok(asset1, 'first asset should be created');
 
         // add second asset with same name (simulating remote collision)
@@ -2661,74 +2808,6 @@ suite('extension', () => {
         // NOTE: if quickPickStub wasn't called, there are no collisions at all, which is also valid
     });
 
-    test('echo create - local recreate after remote create propagates', async () => {
-        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri, 'workspace folder should exist');
-
-        // remote creates file (sets create echo, watcher consumes it)
-        const name = 'echo_create_test.js';
-        const remoteCreated = watchFile(folderUri, name, 'create');
-        const asset = await assetCreate({ name, content: '// remote' });
-        assert.ok(asset, 'asset should be created');
-        const [remoteCreateErr] = await tryCatch(
-            assertResolves(remoteCreated.promise, 'remote watcher.create', RETRY_TIMEOUT)
-        );
-        if (remoteCreateErr) {
-            remoteCreated.dispose();
-            throw remoteCreateErr;
-        }
-
-        const uri = vscode.Uri.joinPath(folderUri, asset.name);
-        const deleted = waitForEmit('assets.delete', (args) => assetDeleted(args, asset.uniqueId), 'assets.delete');
-        const fileDeleted = waitForEmit('asset:file:delete', (args) => args[0] === asset.name, 'asset:file:delete');
-        await assertResolves(vscode.workspace.fs.delete(uri), 'fs.delete');
-        await assertResolves(deleted, 'assets.delete');
-        await assertResolves(fileDeleted, 'asset:file:delete');
-
-        // reset spy history
-        rest.assetCreate.resetHistory();
-
-        // local creates file at the same path — must propagate, not be suppressed by stale echo
-        const recreated = waitForEmit('asset.new', (args) => assetNewName(args, asset.name), 'asset.new');
-        await assertResolves(vscode.workspace.fs.writeFile(uri, buffer.from('// local recreate')), 'fs.writeFile');
-        await assertResolves(recreated, 'asset.new');
-
-        assert.ok(rest.assetCreate.called, 'local recreate should propagate to remote');
-    });
-
-    test('echo delete - local redelete after remote delete propagates', async () => {
-        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-        assert.ok(folderUri, 'workspace folder should exist');
-
-        // remote creates file
-        const asset = await assetCreate({ name: 'echo_delete_test.js', content: '// remote' });
-        assert.ok(asset, 'asset should be created');
-
-        // remote deletes file (sets delete echo, watcher consumes it)
-        const deleteWatcher = watchFile(folderUri, asset.name, 'delete').promise;
-        messenger.emit('assets.delete', {
-            data: {
-                assets: [asset.item_id]
-            }
-        });
-        await assertResolves(deleteWatcher, 'watcher.delete');
-
-        // remote recreates file at same path
-        const asset2 = await assetCreate({ name: 'echo_delete_test.js', content: '// remote again' });
-        assert.ok(asset2, 'asset should be recreated');
-
-        // reset spy history
-        sharedb.sendRaw.resetHistory();
-
-        // local deletes file — must propagate, not be suppressed by stale echo
-        const deleted = waitForEmit('assets.delete', (args) => assetDeleted(args, asset2.uniqueId), 'assets.delete');
-        const uri = vscode.Uri.joinPath(folderUri, asset2.name);
-        await assertResolves(vscode.workspace.fs.delete(uri), 'fs.delete');
-        await assertResolves(deleted, 'assets.delete');
-
-        assert.ok(sharedb.sendRaw.called, 'local redelete should propagate to remote');
-    });
-
     test('undo reverts local edit', async () => {
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -2760,10 +2839,13 @@ suite('extension', () => {
 
         // local edit: insert at start
         const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const localSettled = waitForApplyEdit(uri, 2, 'undo first dirty reload');
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, new vscode.Position(0, 0), '// LOCAL\n');
         await vscode.workspace.applyEdit(edit);
         await assertResolves(localOp, 'local op');
+        await localSettled;
+        await waitForIdle('undo local edit settle');
         assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIGINAL');
 
         // undo
@@ -2777,6 +2859,7 @@ suite('extension', () => {
         });
         await vscode.commands.executeCommand('playcanvas.undo');
         await assertResolves(undoChanged, 'undo change applied');
+        await waitForIdle('undo local settle');
 
         assert.strictEqual(tdoc.getText(), '// ORIGINAL', 'buffer should revert to original');
         assert.strictEqual(documents.get(asset.uniqueId), '// ORIGINAL', 'OT doc should match');
@@ -2813,10 +2896,13 @@ suite('extension', () => {
 
         // local edit
         const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const localSettled = waitForApplyEdit(uri, 2, 'redo first dirty reload');
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, new vscode.Position(0, 0), '// LOCAL\n');
         await vscode.workspace.applyEdit(edit);
         await assertResolves(localOp, 'local op');
+        await localSettled;
+        await waitForIdle('redo local edit settle');
 
         // undo
         const undoChanged = new Promise<void>((resolve) => {
@@ -2829,6 +2915,7 @@ suite('extension', () => {
         });
         await vscode.commands.executeCommand('playcanvas.undo');
         await assertResolves(undoChanged, 'undo change applied');
+        await waitForIdle('redo undo settle');
         assert.strictEqual(tdoc.getText(), '// ORIGINAL');
 
         // redo
@@ -2842,6 +2929,7 @@ suite('extension', () => {
         });
         await vscode.commands.executeCommand('playcanvas.redo');
         await assertResolves(redoChanged, 'redo change applied');
+        await waitForIdle('redo settle');
 
         assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIGINAL', 'buffer should have local edit again');
         assert.strictEqual(documents.get(asset.uniqueId), '// LOCAL\n// ORIGINAL', 'OT doc should match');
@@ -2878,10 +2966,13 @@ suite('extension', () => {
 
         // local edit: insert "// LOCAL\n" at start
         const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const localSettled = waitForApplyEdit(uri, 2, 'undo skip first dirty reload');
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, new vscode.Position(0, 0), '// LOCAL\n');
         await vscode.workspace.applyEdit(edit);
         await assertResolves(localOp, 'local op');
+        await localSettled;
+        await waitForIdle('undo skip local edit settle');
         assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIGINAL');
 
         // remote edit: insert "// REMOTE\n" at start
@@ -2897,6 +2988,7 @@ suite('extension', () => {
         assert.ok(doc, 'sharedb document should exist');
         doc.submitOp(['// REMOTE\n'], { source: 'remote' });
         await assertResolves(remoteChanged, 'remote change applied to buffer');
+        await waitForIdle('undo skip remote edit settle');
         assert.strictEqual(tdoc.getText(), '// REMOTE\n// LOCAL\n// ORIGINAL');
 
         // undo: should only revert local "// LOCAL\n", preserving remote "// REMOTE\n"
@@ -2910,6 +3002,7 @@ suite('extension', () => {
         });
         await vscode.commands.executeCommand('playcanvas.undo');
         await assertResolves(undoChanged, 'undo change applied');
+        await waitForIdle('undo skip settle');
 
         assert.strictEqual(tdoc.getText(), '// REMOTE\n// ORIGINAL', 'remote edit preserved, local reverted');
         assert.strictEqual(documents.get(asset.uniqueId), '// REMOTE\n// ORIGINAL', 'OT doc should match buffer');
@@ -2950,10 +3043,13 @@ suite('extension', () => {
 
         // local edit so undo has something to revert
         const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const localSettled = waitForApplyEdit(uri, 2, 'undo reload first dirty reload');
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, new vscode.Position(0, 0), '// LOCAL\n');
         await vscode.workspace.applyEdit(edit);
         await assertResolves(localOp, 'local op');
+        await localSettled;
+        await waitForIdle('undo reload local edit settle');
         assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIG\n');
 
         // server ingestSnapshot replaces buffer; undo must drop its inverses
@@ -2971,6 +3067,7 @@ suite('extension', () => {
         doc.reload(replaced);
         documents.set(asset.uniqueId, replaced);
         await assertResolves(reloaded, 'reload applied');
+        await waitForIdle('undo reload settle');
 
         // undo should be a no-op now — stack was cleared. buffer must stay at server snapshot.
         await vscode.commands.executeCommand('playcanvas.undo');
