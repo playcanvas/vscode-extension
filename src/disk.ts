@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { NAME } from './config';
 import { progressNotification } from './notification';
 import type { ProjectManager } from './project-manager';
+import type { TypeFiles } from './type-installer';
 import type { EventMap } from './typings/event-map';
 import type { ShareDbTextOp } from './typings/sharedb';
 import { UndoManager } from './undo-manager';
@@ -73,7 +74,7 @@ const pathsRelated = (path1: string, path2: string): boolean => {
     return false;
 };
 
-class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManager }> {
+class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManager; types: TypeFiles }> {
     static IGNORE_FILE = '.pcignore';
 
     static TYPE_DIR = '.pc';
@@ -117,15 +118,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     error = signal<Error | undefined>(undefined);
 
-    private _extensionUri: vscode.Uri;
+    private _types?: TypeFiles;
 
-    private _dts?: { globals: Uint8Array; module: Uint8Array };
-
-    constructor({ events, extensionUri }: { events: EventEmitter<EventMap>; extensionUri: vscode.Uri }) {
+    constructor({ events }: { events: EventEmitter<EventMap> }) {
         super();
 
         this._events = events;
-        this._extensionUri = extensionUri;
     }
 
     private _checkIgnoreUpdated(uri: vscode.Uri, deleted = false) {
@@ -183,24 +181,18 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         }
     }
 
-    private async _writeTypeFiles(folderUri: vscode.Uri) {
-        if (!this._dts) {
-            const dtsUri = vscode.Uri.joinPath(
-                this._extensionUri,
-                'node_modules',
-                'playcanvas-plugin',
-                'out',
-                'playcanvas.d.ts'
-            );
-            const [err, content] = await tryCatch(vscode.workspace.fs.readFile(dtsUri) as Promise<Uint8Array>);
-            if (err) {
-                this._log.warn('failed to read playcanvas.d.ts', err);
-                return;
-            }
-            this._dts = {
-                globals: content,
-                module: buffer.from('declare module "playcanvas" { export = pc; }\n')
-            };
+    private async _sameFile(uri: vscode.Uri, content: Uint8Array) {
+        const [err, current] = await tryCatch(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
+        if (err) {
+            return false;
+        }
+        return hash(current) === hash(content);
+    }
+
+    private async _writeTypeFiles(folderUri: vscode.Uri, types = this._types) {
+        if (!types) {
+            this._log.warn('failed to write playcanvas types: no type files loaded');
+            return;
         }
 
         const dirUri = vscode.Uri.joinPath(folderUri, Disk.TYPE_DIR);
@@ -209,17 +201,27 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         // global pc namespace types
         const globalsUri = vscode.Uri.joinPath(dirUri, 'globals.d.ts');
-        this._echo.set(`${globalsUri}:create`, '');
-        this._echo.set(`${globalsUri}:change`, hash(this._dts.globals));
-        await vscode.workspace.fs.writeFile(globalsUri, this._dts.globals);
+        const globalsChanged = !(await this._sameFile(globalsUri, types.globals));
+        if (globalsChanged) {
+            this._echo.set(`${globalsUri}:create`, '');
+            this._echo.set(`${globalsUri}:change`, hash(types.globals));
+            await vscode.workspace.fs.writeFile(globalsUri, types.globals);
+        }
 
         // 'playcanvas' module declaration (must be separate — script file referencing global pc)
         const moduleUri = vscode.Uri.joinPath(dirUri, 'module.d.ts');
-        this._echo.set(`${moduleUri}:create`, '');
-        this._echo.set(`${moduleUri}:change`, hash(this._dts.module));
-        await vscode.workspace.fs.writeFile(moduleUri, this._dts.module);
+        const moduleChanged = !(await this._sameFile(moduleUri, types.module));
+        if (moduleChanged) {
+            this._echo.set(`${moduleUri}:create`, '');
+            this._echo.set(`${moduleUri}:change`, hash(types.module));
+            await vscode.workspace.fs.writeFile(moduleUri, types.module);
+        }
 
-        this._log.debug('wrote type files to .pc/');
+        if (globalsChanged || moduleChanged) {
+            void tryCatch(vscode.commands.executeCommand('typescript.restartTsServer') as Promise<unknown>);
+        }
+
+        this._log.debug(`wrote type files to .pc/ (${types.version}${types.fallback ? ', fallback' : ''})`);
     }
 
     private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
@@ -1422,7 +1424,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         };
     }
 
-    async link({ folderUri, projectManager }: { folderUri: vscode.Uri; projectManager: ProjectManager }) {
+    async link({
+        folderUri,
+        projectManager,
+        types
+    }: {
+        folderUri: vscode.Uri;
+        projectManager: ProjectManager;
+        types: TypeFiles;
+    }) {
         if (this._folderUri !== undefined) {
             throw this.error.set(() => fail`manager already linked`);
         }
@@ -1501,7 +1511,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         }
 
         // write type definition files to .pc/
-        await this._writeTypeFiles(folderUri);
+        await this._writeTypeFiles(folderUri, types);
 
         // remove old files deepest-first — siblings at each level parallelize
         const levels = new Map<number, vscode.Uri[]>();
@@ -1550,10 +1560,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._opened.clear();
             this._ignoring = (_uri: vscode.Uri) => false;
             this._ignoreHash = '';
+            this._types = undefined;
         });
 
         this._folderUri = folderUri;
         this._projectManager = projectManager;
+        this._types = types;
 
         this._log.info(`linked to ${folderUri.toString()}`);
     }
@@ -1561,19 +1573,21 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     async unlink() {
         const folderUri = this._folderUri;
         const projectManager = this._projectManager;
-        if (!folderUri || !projectManager) {
+        const types = this._types;
+        if (!folderUri || !projectManager || !types) {
             throw this.error.set(() => fail`unlink called before link`);
         }
         await super.unlink();
         this._folderUri = undefined;
         this._projectManager = undefined;
+        this._types = undefined;
         this._diskHash.clear();
         this._diskStat.clear();
         this._undos.forEach((m) => m.clear());
         this._undos.clear();
         void vscode.commands.executeCommand('setContext', 'playcanvas.active', false);
         this._log.info(`unlinked from ${folderUri.toString()}`);
-        return { folderUri, projectManager };
+        return { folderUri, projectManager, types };
     }
 }
 

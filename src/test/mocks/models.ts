@@ -2,6 +2,7 @@ import type { Asset, Branch, Project, User } from '../../typings/models';
 import { hash } from '../../utils/utils';
 
 export const accessToken = 'test-access-token';
+export const engineVersion = '2.18.0';
 
 export const user: User = {
     id: 1,

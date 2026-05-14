@@ -26,6 +26,7 @@ import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
 import { DecorationProvider } from './providers/decoration-provider';
 import { closeSentry, setSentryCollaborators, setSentryProject, setSentryUser } from './sentry';
+import { TypeInstaller } from './type-installer';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { fail } from './utils/error';
@@ -246,9 +247,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
     >();
 
     // disk
+    const typeInstaller = new TypeInstaller({ context });
+
     const disk = new Disk({
-        events,
-        extensionUri: context.extensionUri
+        events
     });
     effect(() => {
         const err = disk.error.get();
@@ -278,7 +280,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
             // relink everything
             await projectManager.link(projectState);
-            await disk.link(diskState);
+            const config = await auth.getEditorConfig();
+            const types = await typeInstaller.install({
+                projectId: projectState.projectId,
+                version: config.engineVersion
+            });
+            await disk.link({ ...diskState, types });
             await decorationProvider.link(dirtyState);
             await collabProvider.link(collabState);
             await uriHandler.link(uriState);
@@ -718,11 +725,17 @@ export const activate = async (context: vscode.ExtensionContext) => {
         );
 
         const folderUri = vscode.Uri.joinPath(rootUri, projectToName(project));
+        const editorConfig = await auth.getEditorConfig();
+        const types = await typeInstaller.install({
+            projectId: project.id,
+            version: editorConfig.engineVersion
+        });
 
         // mount disk
         await disk.link({
             folderUri,
-            projectManager
+            projectManager,
+            types
         });
         context.subscriptions.push(
             new vscode.Disposable(() => {

@@ -12,6 +12,7 @@ import * as sharedbModule from '../../connections/sharedb';
 import * as uriHandlerModule from '../../handlers/uri-handler';
 import { Log } from '../../log';
 import * as sentryModule from '../../sentry';
+import * as typesModule from '../../type-installer';
 import type { Asset } from '../../typings/models';
 import * as buffer from '../../utils/buffer';
 import { Debouncer } from '../../utils/debouncer';
@@ -20,7 +21,17 @@ import { Mutex } from '../../utils/mutex';
 import { hash, tryCatch, withTimeout } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
-import { assets, documents, branches, projectSettings, project, user, accessToken, uniqueId } from '../mocks/models';
+import {
+    assets,
+    documents,
+    branches,
+    projectSettings,
+    project,
+    user,
+    accessToken,
+    engineVersion,
+    uniqueId
+} from '../mocks/models';
 import { MockRelay } from '../mocks/relay';
 import { MockRest } from '../mocks/rest';
 import { MockShareDb } from '../mocks/sharedb';
@@ -284,6 +295,15 @@ const sharedb = new MockShareDb(sandbox, messenger);
 const relay = new MockRelay(sandbox);
 const rest = new MockRest(sandbox, messenger, sharedb);
 const uriHandler = new MockUriHandler(sandbox, rest);
+const typeFiles = {
+    globals: buffer.from('declare namespace pc { const VERSION: string; }\n'),
+    module: buffer.from('declare module "playcanvas" { export = pc; }\n'),
+    version: engineVersion,
+    fallback: false
+};
+const typeInstaller = {
+    install: sandbox.spy(async (_params: { projectId: number; version: string }) => typeFiles)
+};
 const assertOpsPromise = (key: string, expected: unknown[]) => {
     return new Promise<void>((resolve) => {
         const doc = sharedb.subscriptions.get(key);
@@ -309,6 +329,7 @@ sandbox.stub(sharedbModule, 'ShareDb').returns(sharedb);
 sandbox.stub(messengerModule, 'Messenger').returns(messenger);
 sandbox.stub(relayModule, 'Relay').returns(relay);
 sandbox.stub(uriHandlerModule, 'UriHandler').returns(uriHandler);
+sandbox.stub(typesModule, 'TypeInstaller').returns(typeInstaller as unknown as typesModule.TypeInstaller);
 
 // stub vscode methods
 const quickPickStub = sandbox
@@ -483,6 +504,23 @@ suite('extension', () => {
         const call2 = openTextDocumentSpy.getCall(0);
         assert.ok(call2, 'openTextDocument should have been called');
         assert.strictEqual(call2.args[0]?.toString(), uri.toString(), 'opened document uri should match');
+
+        assert.ok(typeInstaller.install.called, 'types installer should run');
+        const args = typeInstaller.install.getCall(0).args[0] as { version: string };
+        assert.strictEqual(args.version, engineVersion, 'version should match');
+    });
+
+    test('project load - playcanvas type files', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const globalsUri = vscode.Uri.joinPath(folderUri, '.pc', 'globals.d.ts');
+        const moduleUri = vscode.Uri.joinPath(folderUri, '.pc', 'module.d.ts');
+        const globals = await assertResolves(vscode.workspace.fs.readFile(globalsUri), 'globals read');
+        const module = await assertResolves(vscode.workspace.fs.readFile(moduleUri), 'module read');
+
+        assert.strictEqual(buffer.toString(globals), buffer.toString(typeFiles.globals), 'globals should match');
+        assert.strictEqual(buffer.toString(module), buffer.toString(typeFiles.module), 'module should match');
     });
 
     test(`command ${NAME}.openProject`, async () => {
@@ -561,6 +599,19 @@ suite('extension', () => {
         assert.deepStrictEqual(tokens, [accessToken, accessToken], 'login callers should share token');
         assert.strictEqual(requestTokenStub.callCount, 1, 'external login should start once');
         assert.strictEqual(rest.id.callCount, 1, 'login token should be validated once');
+    });
+
+    test('auth parses editor config engine version', () => {
+        const parsed = authModule.parseEditorConfig(`
+            <script>
+                const config = {
+                    "accessToken": "${accessToken}",
+                    engineVersions: { current: { version: "${engineVersion}" } }
+                };
+            </script>
+        `);
+
+        assert.deepStrictEqual(parsed, { accessToken, engineVersion }, 'editor config should parse');
     });
 
     test(`command ${NAME}.switchBranch`, async () => {
