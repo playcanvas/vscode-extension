@@ -1,15 +1,8 @@
-import fs from 'fs';
 import path from 'path';
 
 import type * as ts from 'typescript/lib/tsserverlibrary';
 
-const FILES = new Map([
-    // global pc namespace
-    ['.pc/globals.d.ts', fs.readFileSync(path.join(__dirname, 'playcanvas.d.ts'), 'utf8')],
-
-    // 'playcanvas' module declaration
-    ['.pc/module.d.ts', 'declare module "playcanvas" { export = pc; }\n']
-]);
+const FILES = ['.pc/globals.d.ts', '.pc/module.d.ts'];
 
 const PROJECT_REGEX = /playcanvas\.playcanvas\/\w+\/.+ \(\d+\)/;
 
@@ -36,15 +29,7 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
         }
         log(info.project, `Initializing plugin ${projectDir}`);
 
-        // add virtual file paths
-        const paths: string[] = [];
-        for (const [name] of FILES) {
-            paths.push(ts.server.toNormalizedPath(path.join(projectDir, name)));
-        }
-
         const proxy = info.languageServiceHost;
-        const getScriptSnapshot = proxy.getScriptSnapshot.bind(proxy);
-        const readFile = proxy.readFile.bind(proxy);
         const getCompilationSettings = proxy.getCompilationSettings.bind(proxy);
 
         // project tsconfig wins over plugin defaults; cache by settings
@@ -59,26 +44,6 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
             merged.lib = [...(compilerOptions.lib ?? []), ...(settings.lib ?? [])];
             cache = { settings, merged };
             return merged;
-        };
-
-        // intercept getScriptSnapshot to provide a snapshot for the virtual file
-        proxy.getScriptSnapshot = (fileName) => {
-            if (paths.includes(fileName)) {
-                log(info.project, `Providing snapshot for virtual file: ${fileName}`);
-                const rel = path.relative(projectDir, fileName).replace(/\\/g, '/');
-                return ts.ScriptSnapshot.fromString(FILES.get(rel)!);
-            }
-            return getScriptSnapshot(fileName);
-        };
-
-        // intercept readFile to provide content for the virtual file
-        proxy.readFile = (fileName, encoding) => {
-            if (paths.includes(fileName)) {
-                log(info.project, `Reading content for virtual file: ${fileName}`);
-                const rel = path.relative(projectDir, fileName).replace(/\\/g, '/');
-                return FILES.get(rel)!;
-            }
-            return readFile(fileName, encoding);
         };
 
         return info.languageService;
@@ -99,11 +64,12 @@ const init = (modules: { typescript: typeof ts }): ts.server.PluginModule => {
         // openClientFile registers ScriptInfo so ambient module declarations resolve.
         // the /.pc guard above prevents the re-entrant project creation this used to cause.
         const paths: string[] = [];
-        for (const [name, content] of FILES) {
+        for (const name of FILES) {
             const filePath = ts.server.toNormalizedPath(path.join(projectDir, name));
             if (!project.containsFile(filePath)) {
-                log(project, `registering virtual file: ${filePath}`);
-                project.projectService.openClientFile(filePath, content, ts.ScriptKind.TS);
+                // undefined content makes tsserver read the physical .pc file from disk
+                log(project, `registering type file: ${filePath}`);
+                project.projectService.openClientFile(filePath, undefined, ts.ScriptKind.TS);
             }
             paths.push(filePath);
         }

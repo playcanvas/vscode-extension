@@ -2,7 +2,7 @@ import http from 'http';
 
 import * as vscode from 'vscode';
 
-import { API_URL, COOKIE_NAME, NAME, PUBLISHER, HOME_URL, LOGIN_URL, PORT, WEB } from './config';
+import { API_URL, COOKIE_NAME, NAME, PUBLISHER, HOME_URL, LOGIN_URL, PLAYCANVAS_VERSION, PORT, WEB } from './config';
 import { AUTH_TIMEOUT_MS } from './connections/constants';
 import { Rest } from './connections/rest';
 import { tryCatch } from './utils/utils';
@@ -10,6 +10,23 @@ import { tryCatch } from './utils/utils';
 type Session = {
     accessToken: string;
     userId: number;
+};
+
+type EditorConfig = {
+    engineVersion: string;
+};
+
+const SESSION_ID_KEY = `${NAME}.sessionId`;
+const ENGINE_VERSION_KEY = `${NAME}.engineVersion`;
+const EDITOR_CONFIG_TTL_MS = 5 * 60 * 1000;
+
+export const parseEditorConfig = (text: string) => {
+    const accessToken = /["']accessToken["']\s*:\s*["']([^"']+)["']/.exec(text)?.[1];
+    const engineVersion =
+        /["']?engineVersions["']?\s*:\s*\{[\s\S]*?["']?current["']?\s*:\s*\{[\s\S]*?["']?version["']?\s*:\s*["']([^"']+)["']/.exec(
+            text
+        )?.[1];
+    return { accessToken, engineVersion };
 };
 
 class Auth {
@@ -23,6 +40,10 @@ class Auth {
 
     private _reload?: Promise<void>;
 
+    private _config?: { engineVersion: string; ts: number };
+
+    private _configReq?: Promise<EditorConfig>;
+
     constructor(context: vscode.ExtensionContext) {
         this._context = context;
     }
@@ -34,6 +55,7 @@ class Auth {
     async clearAccessToken() {
         this._clear();
         await this._context.secrets.delete(`${NAME}.accessToken`);
+        await this._context.secrets.delete(SESSION_ID_KEY);
     }
 
     private _clear() {
@@ -41,6 +63,75 @@ class Auth {
         this._validating.clear();
         this._login = undefined;
         this._reload = undefined;
+        this._configReq = undefined;
+    }
+
+    private async _cachedEngineVersion() {
+        if (this._config) {
+            return this._config.engineVersion;
+        }
+        const version = this._context.globalState?.get<string>(ENGINE_VERSION_KEY);
+        return version || PLAYCANVAS_VERSION;
+    }
+
+    private async _storeEngineVersion(engineVersion?: string) {
+        if (!engineVersion) {
+            return;
+        }
+        this._config = { engineVersion, ts: Date.now() };
+        await this._context.globalState?.update(ENGINE_VERSION_KEY, engineVersion);
+    }
+
+    private async _fetchEditorConfig(sessionId: string) {
+        const current = await this._cachedEngineVersion();
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), AUTH_TIMEOUT_MS);
+        const [fetchErr, res] = await tryCatch(
+            fetch(`${HOME_URL}/editor`, {
+                headers: {
+                    Cookie: `${COOKIE_NAME}=${sessionId}`
+                },
+                signal: ctrl.signal
+            }) as Promise<Response>
+        );
+        clearTimeout(timer);
+        if (fetchErr || !res.ok) {
+            return { engineVersion: current };
+        }
+
+        const [textErr, text] = await tryCatch(res.text() as Promise<string>);
+        if (textErr) {
+            return { engineVersion: current };
+        }
+
+        const { engineVersion } = parseEditorConfig(text);
+        await this._storeEngineVersion(engineVersion);
+        return { engineVersion: engineVersion || current };
+    }
+
+    async getEditorConfig() {
+        const cached = this._config;
+        if (cached && Date.now() - cached.ts < EDITOR_CONFIG_TTL_MS) {
+            return { engineVersion: cached.engineVersion };
+        }
+
+        const sessionId = await this._context.secrets.get(SESSION_ID_KEY);
+        if (!sessionId || WEB) {
+            return { engineVersion: await this._cachedEngineVersion() };
+        }
+
+        if (this._configReq) {
+            return this._configReq;
+        }
+
+        const task = this._fetchEditorConfig(sessionId);
+        this._configReq = task;
+        const [err, config] = await tryCatch(task);
+        this._configReq = undefined;
+        if (err) {
+            return { engineVersion: await this._cachedEngineVersion() };
+        }
+        return config;
     }
 
     async getClient(manual = false) {
@@ -194,8 +285,7 @@ class Auth {
                         return;
                     }
                     const text = await res3.text();
-                    const matches = /"accessToken":\s*"(\w+)"/.exec(text);
-                    const accessToken = matches?.[1];
+                    const { accessToken, engineVersion } = parseEditorConfig(text);
                     if (!accessToken) {
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
                         res.end('Failed to parse access token.');
@@ -205,6 +295,8 @@ class Auth {
                         reject(new Error('Failed to parse access token.'));
                         return;
                     }
+                    await this._context.secrets.store(SESSION_ID_KEY, sessionId);
+                    await this._storeEngineVersion(engineVersion);
 
                     // resolve access token
                     clearTimeout(timeout);

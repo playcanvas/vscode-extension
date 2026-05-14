@@ -3,12 +3,14 @@ import type * as vscode from 'vscode';
 
 import { Auth } from '../../auth';
 
-import { accessToken } from './models';
+import { accessToken, engineVersion } from './models';
 
 class MockAuth extends Auth {
     getAccessToken: sinon.SinonSpy<[manual?: boolean, reload?: boolean], Promise<string>>;
 
     getStoredAccessToken: sinon.SinonSpy<[], Promise<string>>;
+
+    getEditorConfig: sinon.SinonSpy<[], Promise<{ engineVersion: string }>>;
 
     clearAccessToken: sinon.SinonSpy<[], Promise<void>>;
 
@@ -19,6 +21,7 @@ class MockAuth extends Auth {
 
         this.getAccessToken = sandbox.spy(async () => accessToken);
         this.getStoredAccessToken = sandbox.spy(async () => accessToken);
+        this.getEditorConfig = sandbox.spy(async () => ({ engineVersion }));
         this.clearAccessToken = sandbox.spy(async () => undefined);
         this.reset = sandbox.spy(async () => undefined);
     }

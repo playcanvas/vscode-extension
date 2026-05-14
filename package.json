@@ -21,8 +21,8 @@
     "browser": "./out/browser.js",
     "scripts": {
         "build": "node ./scripts/build.mjs",
-        "compile": "tsc -p .",
-        "compile:plugin": "tsc -p ./plugin && node ./scripts/playcanvas-dts.mjs",
+        "compile": "tsc -p . && node ./scripts/playcanvas-dts.mjs",
+        "compile:plugin": "tsc -p ./plugin",
         "compile:web": "rollup -c",
         "lint": "prettier --check . && eslint .",
         "lint:fix": "prettier --write . && eslint --fix .",
@@ -30,7 +30,7 @@
         "test": "vscode-test",
         "test:web": "vscode-test-web --extensionDevelopmentPath=.",
         "watch": "tsc -watch -p ./",
-        "watch:plugin": "tsc -watch -p ./plugin && node ./scripts/playcanvas-dts.mjs",
+        "watch:plugin": "tsc -watch -p ./plugin",
         "watch:web": "rollup -c -w"
     },
     "contributes": {
