@@ -11,7 +11,6 @@ import * as restModule from '../../connections/rest';
 import * as sharedbModule from '../../connections/sharedb';
 import * as uriHandlerModule from '../../handlers/uri-handler';
 import { Log } from '../../log';
-import { ProjectManager } from '../../project-manager';
 import * as sentryModule from '../../sentry';
 import * as typesModule from '../../type-installer';
 import type { Asset } from '../../typings/models';
@@ -42,15 +41,9 @@ const sandbox = sinon.createSandbox();
 const guardSandbox = sinon.createSandbox();
 const DEFAULT_TIMEOUT = 2500;
 const RETRY_TIMEOUT = 4000;
+const SAVE_RETRY_TIMEOUT = 8000;
+const SAVE_FAILURE_TIMEOUT = 15000;
 const WATCHER_TIMEOUT = 1000;
-const saveTuning = ProjectManager as unknown as {
-    SAVE_MAX_RETRIES: number;
-    SAVE_RETRY_DELAY_MS: number;
-    SAVE_ACK_TIMEOUT_MS: number;
-};
-saveTuning.SAVE_MAX_RETRIES = 2;
-saveTuning.SAVE_RETRY_DELAY_MS = 50;
-saveTuning.SAVE_ACK_TIMEOUT_MS = 50;
 
 const createRecordChannel = <T extends { settled: Promise<void> }>() => {
     const records: T[] = [];
@@ -2007,7 +2000,9 @@ suite('extension', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send redundant doc:save to server');
     });
 
-    test('file save - matching asset hash clears failed save state', async () => {
+    test('file save - matching asset hash clears failed save state', async function () {
+        this.timeout(SAVE_FAILURE_TIMEOUT);
+
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
 
@@ -2023,13 +2018,13 @@ suite('extension', () => {
         await vscode.workspace.applyEdit(edit);
         await waitForIdle('failed save edit');
 
-        sharedb.failNextSave(asset.uniqueId, 3);
+        sharedb.failNextSave(asset.uniqueId, 6);
         warningMessageStub.resetHistory();
         const failed = waitForEmit(
             'asset:file:dirty',
             (args) => args[0] === asset.name,
             'save failure dirty',
-            RETRY_TIMEOUT
+            SAVE_FAILURE_TIMEOUT
         );
         await tdoc.save();
         await failed;
@@ -3212,7 +3207,9 @@ suite('extension', () => {
         );
     });
 
-    test('save retry runs when doc:save ack is missing', async () => {
+    test('save retry runs when doc:save ack is missing', async function () {
+        this.timeout(SAVE_RETRY_TIMEOUT);
+
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
 
@@ -3231,7 +3228,7 @@ suite('extension', () => {
             'doc:save',
             (args) => args[0] === 'success' && args[1] === asset.uniqueId,
             'doc save timeout retry',
-            RETRY_TIMEOUT
+            SAVE_RETRY_TIMEOUT
         );
         await tdoc.save();
         await saved;
