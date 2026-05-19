@@ -266,6 +266,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
             void vscode.window.showWarningMessage('Dropping reload request to avoid overlapping reloads');
             return false;
         }
+        if (projectManager.unsafeFiles().length) {
+            void vscode.window.showWarningMessage('PlayCanvas changes are not saved. Try again when saving finishes.');
+            return false;
+        }
         reloading = true;
         const [err] = await tryCatch(async () => {
             // unlink everything
@@ -759,8 +763,29 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 desyncStatusItem.show();
             } else {
                 desyncStatusItem.hide();
+                desyncStatusItem.command = `${NAME}.reloadProject`;
+                desyncStatusItem.tooltip = 'PlayCanvas project is out of sync — click to reload';
                 return;
             }
+
+            if (projectManager.saveFailed()) {
+                desyncStatusItem.command = `${NAME}.reportIssue`;
+                desyncStatusItem.tooltip = 'PlayCanvas could not save changes — click to report';
+                void vscode.window
+                    .showWarningMessage('PlayCanvas could not save changes.', 'Report Issue')
+                    .then((choice) => {
+                        if (choice === 'Report Issue') {
+                            void vscode.commands.executeCommand(
+                                `${NAME}.reportIssue`,
+                                'PlayCanvas could not save changes'
+                            );
+                        }
+                    });
+                return;
+            }
+
+            desyncStatusItem.command = `${NAME}.reloadProject`;
+            desyncStatusItem.tooltip = 'PlayCanvas project is out of sync — click to reload';
             void vscode.window
                 .showWarningMessage(
                     'PlayCanvas project is out of sync. Reload to recover.',

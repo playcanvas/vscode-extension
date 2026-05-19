@@ -195,6 +195,13 @@ export const registerProjectCommands = ({
                     return;
                 }
 
+                if (projectManager.unsafeFiles().length) {
+                    void vscode.window.showWarningMessage(
+                        'PlayCanvas changes are not saved. Try again when saving finishes.'
+                    );
+                    return;
+                }
+
                 reload.set(() => ({ projectManager }));
             });
             if (err) {
@@ -210,8 +217,15 @@ export const registerProjectCommands = ({
                     return;
                 }
 
-                const { branchId } = cache.get(state.projectId) ?? {};
-                if (!branchId) {
+                const { branchId, projectManager } = cache.get(state.projectId) ?? {};
+                if (!branchId || !projectManager) {
+                    return;
+                }
+
+                if (projectManager.unsafeFiles().length) {
+                    void vscode.window.showWarningMessage(
+                        'PlayCanvas changes are not saved. Try again when saving finishes.'
+                    );
                     return;
                 }
 

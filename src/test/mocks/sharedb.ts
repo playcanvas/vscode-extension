@@ -8,6 +8,7 @@ import type sinon from 'sinon';
 import { ShareDb } from '../../connections/sharedb';
 import type { Asset } from '../../typings/models';
 import type { ShareDbOp, ShareDbTextOp } from '../../typings/sharedb';
+import { hash } from '../../utils/utils';
 
 import type { MockMessenger } from './messenger';
 import { projectSettings, assets, documents } from './models';
@@ -336,10 +337,12 @@ class MockShareDb extends ShareDb {
 
     closedDocuments = new Set<number>();
 
+    documentSubscribeDelay = 0;
+
     // FIFO of save responses to inject per uniqueId. empty queue → emit 'success'
     // (today's default). drives ProjectManager._verifySave's retry path
     // (src/project-manager.ts:399-422), which re-sends doc:reconnect + doc:save.
-    saveResponses = new Map<number, ('success' | 'error')[]>();
+    saveResponses = new Map<number, ('success' | 'error' | 'timeout')[]>();
 
     failNextSave(uniqueId: number, count = 1) {
         const q = this.saveResponses.get(uniqueId) ?? [];
@@ -410,6 +413,9 @@ class MockShareDb extends ShareDb {
             this.connected.set(() => false);
         });
         this.subscribe = sandbox.spy(async (type: string, key: string) => {
+            if (type === 'documents' && this.documentSubscribeDelay > 0) {
+                await new Promise((resolve) => setTimeout(resolve, this.documentSubscribeDelay));
+            }
             const doc = new MockDoc(sandbox, type, key);
             this.subscriptions.set(`${type}:${key}`, doc);
             return doc;
@@ -436,6 +442,7 @@ class MockShareDb extends ShareDb {
             this.fsCascadeDeletes = false;
             this.fsProductionMoveOps = false;
             this.closedDocuments.clear();
+            this.documentSubscribeDelay = 0;
         };
         this.sendRaw = sandbox.spy(async (data: Parameters<WebSocket['send']>[0]) => {
             // check for fs operations
@@ -487,7 +494,30 @@ class MockShareDb extends ShareDb {
                 const id = parseInt(raw, 10);
                 const q = this.saveResponses.get(id);
                 const state = q?.shift() ?? 'success';
+                if (state === 'timeout') {
+                    return;
+                }
                 this.emit('doc:save', state, id);
+                if (state === 'success') {
+                    const asset = assets.get(id);
+                    if (!asset?.file) {
+                        return;
+                    }
+                    const next = hash(documents.get(id) ?? '');
+                    if (asset.file.hash === next) {
+                        return;
+                    }
+                    const doc = this.subscriptions.get(`assets:${id}`);
+                    const file = {
+                        filename: asset.file.filename,
+                        hash: next
+                    };
+                    if (doc) {
+                        doc.submitOp([{ p: ['file'], od: asset.file, oi: file }], { source: 'remote' });
+                    } else {
+                        asset.file = file;
+                    }
+                }
                 return;
             }
             if (`${data}`.startsWith('doc:reconnect:')) {
