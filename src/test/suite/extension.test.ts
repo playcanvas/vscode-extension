@@ -11,6 +11,7 @@ import * as restModule from '../../connections/rest';
 import * as sharedbModule from '../../connections/sharedb';
 import * as uriHandlerModule from '../../handlers/uri-handler';
 import { Log } from '../../log';
+import { UNSAFE_CHANGES_MESSAGE } from '../../messages';
 import * as sentryModule from '../../sentry';
 import * as typesModule from '../../type-installer';
 import type { Asset } from '../../typings/models';
@@ -445,6 +446,21 @@ const ensurePcignore = async () => {
         return existing;
     }
     return assetCreate({ name: '.pcignore', content: 'ignored*.js\n' });
+};
+
+const markAllSaved = async () => {
+    for (const asset of assets.values()) {
+        const text = documents.get(asset.uniqueId);
+        if (!asset.file || text === undefined) {
+            continue;
+        }
+
+        const file = { ...asset.file, hash: hash(text) };
+        const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
+        doc?.submitOp([{ p: ['file'], od: asset.file, oi: file }], { source: 'remote' });
+        sharedb.emit('doc:save', 'success', asset.uniqueId);
+    }
+    await waitForIdle('mark all saved');
 };
 
 suite('extension', () => {
@@ -2295,6 +2311,7 @@ suite('extension', () => {
     test('vcs exclusion - .git survives re-link cleanup', async () => {
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
+        await markAllSaved();
 
         // ensure .git/ and a child file exist on disk before reload
         const gitDir = vscode.Uri.joinPath(folderUri, '.git');
@@ -2990,7 +3007,7 @@ suite('extension', () => {
         const tdoc = await vscode.workspace.openTextDocument(uri);
         await vscode.window.showTextDocument(tdoc);
 
-        // local edit so undo has something to revert
+        // local edit so undo has something to revert, then save so reload is safe
         const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
         const localSettled = waitForApplyEdit(uri, 2, 'undo reload first dirty reload');
         const edit = new vscode.WorkspaceEdit();
@@ -3000,6 +3017,15 @@ suite('extension', () => {
         await localSettled;
         await waitForIdle('undo reload local edit settle');
         assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIG\n');
+
+        const saved = waitForEmit(
+            'doc:save',
+            (args) => args[0] === 'success' && args[1] === asset.uniqueId,
+            'undo reload save'
+        );
+        await tdoc.save();
+        await saved;
+        await waitForIdle('undo reload save settle');
 
         // server ingestSnapshot replaces buffer; undo must drop its inverses
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
@@ -3191,6 +3217,120 @@ suite('extension', () => {
         const reconnects = calls.filter((c) => c === `doc:reconnect:${asset.uniqueId}`);
         assert.strictEqual(docSaves.length, 2, 'expected initial doc:save + retry doc:save');
         assert.strictEqual(reconnects.length, 1, 'expected one doc:reconnect during retry');
+    });
+
+    test('lifecycle commands blocked while changes are unsafe', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+        await markAllSaved();
+
+        const asset = await assetCreate({ name: 'unsafe_lifecycle.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        await vscode.workspace.openTextDocument(uri);
+
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// DIRTY\n');
+        await vscode.workspace.applyEdit(edit);
+        await waitForIdle('unsafe lifecycle dirty settle');
+
+        warningMessageStub.resetHistory();
+        await assertResolves(vscode.commands.executeCommand(`${NAME}.reloadProject`), `${NAME}.reloadProject`);
+        assert.ok(
+            warningMessageStub.calledWith(UNSAFE_CHANGES_MESSAGE),
+            'reloadProject should warn and refuse unsafe files'
+        );
+
+        warningMessageStub.resetHistory();
+        rest.branchCheckout.resetHistory();
+        await assertResolves(vscode.commands.executeCommand(`${NAME}.switchBranch`), `${NAME}.switchBranch`);
+        assert.ok(
+            warningMessageStub.calledWith(UNSAFE_CHANGES_MESSAGE),
+            'switchBranch should warn and refuse unsafe files'
+        );
+        assert.strictEqual(rest.branchCheckout.callCount, 0, 'switchBranch should not checkout while unsafe');
+    });
+
+    test('dirty sharedb reload preserves buffer and blocks follow-up sync', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'dirty_reload_blocked.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+
+        const localOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['// LOCAL\n']]);
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// LOCAL\n');
+        await vscode.workspace.applyEdit(edit);
+        await assertResolves(localOp, 'dirty reload local op');
+        await waitForIdle('dirty reload local settle');
+
+        const local = tdoc.getText();
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb doc should exist');
+
+        warningMessageStub.resetHistory();
+        const blocked = waitForEmit('asset:file:dirty', (args) => args[0] === asset.name, 'dirty reload blocked');
+        const server = '// SERVER SNAPSHOT\n';
+        doc.reload(server);
+        documents.set(asset.uniqueId, server);
+        await blocked;
+        await waitForIdle('dirty reload blocked settle');
+
+        assert.strictEqual(tdoc.getText(), local, 'dirty buffer should not be replaced by server snapshot');
+
+        warningMessageStub.resetHistory();
+        doc.submitOp.resetHistory();
+        sharedb.sendRaw.resetHistory();
+
+        const followup = new vscode.WorkspaceEdit();
+        followup.insert(uri, new vscode.Position(0, 0), '// FOLLOWUP\n');
+        await vscode.workspace.applyEdit(followup);
+        await waitForIdle('blocked followup edit');
+
+        assert.strictEqual(doc.submitOp.callCount, 0, 'blocked file should not submit follow-up ops');
+
+        await tdoc.save();
+        await waitForIdle('blocked followup save');
+        const saves = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
+        assert.strictEqual(saves.length, 0, 'blocked file should not send doc:save');
+        assert.ok(
+            warningMessageStub.calledWith(sinon.match(/file is out of sync/i)),
+            'blocked follow-up edit or save should warn'
+        );
+    });
+
+    test('pending sharedb reload preserves buffer', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'pending_reload_blocked.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb doc should exist');
+        doc._latency = 1000;
+
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// PENDING\n');
+        await vscode.workspace.applyEdit(edit);
+        await waitForIdle('pending reload local settle');
+        assert.strictEqual(doc.hasPending(), true, 'local op should still be pending');
+
+        const local = tdoc.getText();
+        const blocked = waitForEmit('asset:file:dirty', (args) => args[0] === asset.name, 'pending reload blocked');
+        const server = '// SERVER SNAPSHOT\n';
+        doc.reload(server);
+        documents.set(asset.uniqueId, server);
+        await blocked;
+        await waitForIdle('pending reload blocked settle');
+
+        assert.strictEqual(tdoc.getText(), local, 'pending buffer should not be replaced by server snapshot');
+
+        await new Promise((resolve) => setTimeout(resolve, 1050));
+        await waitForIdle('pending reload latency settle');
+        assert.strictEqual(tdoc.getText(), local, 'pending buffer should stay preserved after op callback');
     });
 
     test('rest assetCreate failure surfaces error to user', async () => {

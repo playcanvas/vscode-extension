@@ -7,6 +7,7 @@ import { NAME, VERSION, ENV } from './config';
 import type { Rest } from './connections/rest';
 import { UriHandler } from './handlers/uri-handler';
 import { Log } from './log';
+import { UNSAFE_CHANGES_MESSAGE } from './messages';
 import type { Metrics } from './metrics';
 import type { ProjectManager } from './project-manager';
 import { addAttachment, captureIssue, getLastSentryEventId } from './sentry';
@@ -170,6 +171,14 @@ export const registerProjectCommands = ({
     reload: ReturnType<typeof signal<{ projectManager: ProjectManager } | undefined>>;
     failure: ReturnType<typeof signal<{ err: Error; source?: string } | undefined>>;
 }) => {
+    const unsafe = (projectManager?: ProjectManager) => {
+        if (!projectManager?.unsafeFiles().length) {
+            return false;
+        }
+        void vscode.window.showWarningMessage(UNSAFE_CHANGES_MESSAGE);
+        return true;
+    };
+
     context.subscriptions.push(
         vscode.commands.registerCommand(`${NAME}.openProject`, async () => {
             const [err] = await tryCatch(async () => {
@@ -194,6 +203,9 @@ export const registerProjectCommands = ({
                 if (!projectManager) {
                     return;
                 }
+                if (unsafe(projectManager)) {
+                    return;
+                }
 
                 reload.set(() => ({ projectManager }));
             });
@@ -210,8 +222,11 @@ export const registerProjectCommands = ({
                     return;
                 }
 
-                const { branchId } = cache.get(state.projectId) ?? {};
-                if (!branchId) {
+                const { branchId, projectManager } = cache.get(state.projectId) ?? {};
+                if (!branchId || !projectManager) {
+                    return;
+                }
+                if (unsafe(projectManager)) {
                     return;
                 }
 

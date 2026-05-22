@@ -20,6 +20,7 @@ import { ShareDb } from './connections/sharedb';
 import { Disk } from './disk';
 import { UriHandler } from './handlers/uri-handler';
 import { Log } from './log';
+import { UNSAFE_CHANGES_MESSAGE } from './messages';
 import { Metrics } from './metrics';
 import { simpleNotification } from './notification';
 import { ProjectManager } from './project-manager';
@@ -266,6 +267,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
             void vscode.window.showWarningMessage('Dropping reload request to avoid overlapping reloads');
             return false;
         }
+        if (projectManager.unsafeFiles().length) {
+            void vscode.window.showWarningMessage(UNSAFE_CHANGES_MESSAGE);
+            return false;
+        }
         reloading = true;
         const [err] = await tryCatch(async () => {
             // unlink everything
@@ -460,6 +465,10 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 return;
             }
             if (branchId !== branch_id) {
+                return;
+            }
+            if (projectManager.unsafeFiles().length) {
+                void vscode.window.showWarningMessage(UNSAFE_CHANGES_MESSAGE);
                 return;
             }
 

@@ -87,6 +87,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _queued = new Set<string>();
 
+    private _syncBlocked = new Set<string>();
+
     collisions: CollisionManager;
 
     error = signal<Error | undefined>(undefined);
@@ -126,11 +128,56 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return this._files;
     }
 
+    blockSync(path: string) {
+        this._syncBlocked.add(path);
+
+        const file = this._files.get(path);
+        if (file && file.type !== 'folder') {
+            file.dirty = true;
+            this._events.emit('asset:file:dirty', path, true);
+
+            this._savePending.delete(file.uniqueId);
+            this._saveInflight.delete(file.uniqueId);
+
+            const retry = this._saveRetries.get(file.uniqueId);
+            clearTimeout(retry?.timeout);
+            this._saveRetries.delete(file.uniqueId);
+        }
+
+        this.desync.set(() => true);
+    }
+
+    unblockSync(path: string) {
+        if (!this._syncBlocked.delete(path)) {
+            return;
+        }
+        this._heal();
+    }
+
+    syncBlocked(path: string) {
+        return this._syncBlocked.has(path);
+    }
+
+    unsafeFiles() {
+        const paths = new Set(this._syncBlocked);
+        for (const [path, file] of this._files) {
+            if (file.type === 'file' && (file.dirty || file.doc.pending)) {
+                paths.add(path);
+            } else if (file.type === 'stub' && file.dirty) {
+                paths.add(path);
+            }
+        }
+        return [...paths];
+    }
+
     // called when any doc's pending queue drains. clears desync once the connection
     // is healthy and no other doc has outstanding ops — so the toast/status-bar
     // recovers automatically after a transient stall instead of staying stuck.
     private _heal() {
         if (!this.desync.get() || !this._sharedb.connected.get()) {
+            return;
+        }
+        if (this._syncBlocked.size) {
             return;
         }
         for (const file of this._files.values()) {
@@ -276,15 +323,20 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // shareDB -> vscode (source filtering is internal to OTDocument)
         otdoc.on('op', (op, prev) => {
             const path = this._assetPath(uniqueId);
+            const blocked = this.syncBlocked(path);
 
             // compute dirty: does doc content still differ from last S3 save?
             // if asset metadata is missing, defaults to dirty (undefined !== hash)
             const asset = this._assets.get(uniqueId);
-            const dirty = asset?.file?.hash !== hash(otdoc.text);
+            const dirty = blocked || asset?.file?.hash !== hash(otdoc.text);
             file.dirty = dirty;
 
             // update must run before save so buffer is written before indicator clears
             this._events.emit('asset:file:update', path, op as ShareDbTextOp, otdoc.text, prev);
+            if (blocked) {
+                this._events.emit('asset:file:dirty', path, true);
+                return;
+            }
             if (!dirty) {
                 this._events.emit('asset:file:save', path);
             }
@@ -443,11 +495,26 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             // arrive with an empty _saveInflight — harmless
             this._saveInflight.delete(uniqueId);
 
+            const path = this._assetPath(uniqueId);
+            if (this.syncBlocked(path)) {
+                this._savePending.delete(uniqueId);
+
+                const retry = this._saveRetries.get(uniqueId);
+                clearTimeout(retry?.timeout);
+                this._saveRetries.delete(uniqueId);
+
+                const file = this._files.get(path);
+                if (file && file.type !== 'folder') {
+                    file.dirty = true;
+                    this._events.emit('asset:file:dirty', path, true);
+                }
+                return;
+            }
+
             if (!this._verifySave(state, uniqueId)) {
                 return;
             }
 
-            const path = this._assetPath(uniqueId);
             const file = this._files.get(path);
             if (!file || file.type !== 'file') {
                 return;
@@ -772,6 +839,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     if (!file || file.type === 'folder') {
                         return;
                     }
+                    if (this.syncBlocked(path)) {
+                        file.dirty = true;
+                        this._events.emit('asset:file:dirty', path, true);
+                        break;
+                    }
 
                     if (file.type === 'file') {
                         // NOTE: only mark clean if local content matches the saved hash,
@@ -860,6 +932,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
         if (!this._projectId || !this._branchId) {
             throw this.error.set(() => fail`project not loaded`);
+        }
+        if (this.syncBlocked(path)) {
+            return;
         }
 
         const [parentPath, name] = parsePath(path);
@@ -959,6 +1034,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     async delete(path: string, type: 'file' | 'folder') {
+        if (this.syncBlocked(path)) {
+            return;
+        }
+
         // check if file exists
         const file = this._files.get(path);
         if (!file || (file.type === 'stub' ? 'file' : file.type) !== type) {
@@ -1002,6 +1081,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     async rename(oldPath: string, newPath: string) {
         if (!this._projectId || !this._branchId) {
             throw this.error.set(() => fail`project not loaded`);
+        }
+        if (this.syncBlocked(oldPath) || this.syncBlocked(newPath)) {
+            return;
         }
 
         // skip if paths are identical
@@ -1115,6 +1197,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     async write(path: string, content: Uint8Array) {
+        if (this.syncBlocked(path)) {
+            return;
+        }
+
         let file = this._files.get(path);
         if (!file || file.type === 'folder') {
             return;
@@ -1155,6 +1241,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     save(path: string) {
+        if (this.syncBlocked(path)) {
+            return;
+        }
+
         // check if file is in memory
         const file = this._files.get(path);
         if (!file || file.type !== 'file') {
@@ -1283,10 +1373,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // wire op handler (same as _addFile)
         otdoc.on('op', (op, prev) => {
             const p = this._assetPath(uniqueId);
+            const blocked = this.syncBlocked(p);
             const a = this._assets.get(uniqueId);
-            const d = a?.file?.hash !== hash(otdoc.text);
+            const d = blocked || a?.file?.hash !== hash(otdoc.text);
             promoted.dirty = d;
             this._events.emit('asset:file:update', p, op as ShareDbTextOp, otdoc.text, prev);
+            if (blocked) {
+                this._events.emit('asset:file:dirty', p, true);
+                return;
+            }
             if (!d) {
                 this._events.emit('asset:file:save', p);
             }
@@ -1520,6 +1615,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._idUniqueId.clear();
             this._subscribing.clear();
             this._queued.clear();
+            this._syncBlocked.clear();
 
             this.collisions.clear();
         });

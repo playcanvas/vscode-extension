@@ -3,6 +3,7 @@ import { type as ottext } from 'ot-text';
 import * as vscode from 'vscode';
 
 import { NAME } from './config';
+import { OUT_OF_SYNC_FILE_MESSAGE } from './messages';
 import { progressNotification } from './notification';
 import type { ProjectManager } from './project-manager';
 import type { TypeFiles } from './type-installer';
@@ -156,6 +157,19 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             });
     }
 
+    private _syncBlocked(uri: vscode.Uri) {
+        const folderUri = this._folderUri;
+        const pm = this._projectManager;
+        if (!folderUri || !pm) {
+            return false;
+        }
+        return pm.syncBlocked(relativePath(uri, folderUri));
+    }
+
+    private _warnSyncBlocked() {
+        void vscode.window.showWarningMessage(OUT_OF_SYNC_FILE_MESSAGE);
+    }
+
     private _parseIgnoreText(text: string, folderUri: vscode.Uri, h = hash(text)) {
         this._ignoreHash = h;
 
@@ -227,6 +241,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
+                return;
+            }
+            if (this._syncBlocked(uri)) {
                 return;
             }
 
@@ -311,6 +328,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const snapshot = norm(content);
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
+                return;
+            }
+            if (this._syncBlocked(uri)) {
+                this._log.warn(`sync.remote.blocked ${uri}`);
                 return;
             }
 
@@ -446,6 +467,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (this._ignoring(uri)) {
                 return;
             }
+            if (this._syncBlocked(uri)) {
+                return;
+            }
 
             // check local echo by seeing if file exists
             const exists = await fileExists(uri);
@@ -473,6 +497,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (this._ignoring(oldUri)) {
                 return;
             }
+            if (this._syncBlocked(oldUri) || this._syncBlocked(newUri)) {
+                return;
+            }
 
             // check local echo by seeing if old file exists
             const oldExists = await fileExists(oldUri);
@@ -498,6 +525,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     private _save(uri: vscode.Uri) {
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
+                return;
+            }
+            if (this._syncBlocked(uri)) {
                 return;
             }
 
@@ -531,9 +561,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private async _subscribed(uri: vscode.Uri, path: string, content: string, dirty: boolean) {
-        // undo inverses reference pre-reload OT history — clear so undo can't resurrect missing content
-        this._undos.get(uri.path)?.clear();
-
         if (this._opened.has(uri.path)) {
             // reconcile buffer with live ShareDB doc after subscribe
             await this._writeMutex.atomic([`${uri}`], async () => {
@@ -551,25 +578,43 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     const doc = await vscode.workspace.openTextDocument(uri);
                     const bufferText = norm(doc.getText());
 
-                    // server is authoritative — apply live ShareDB doc to buffer on any divergence
-                    if (file.doc.text !== bufferText) {
-                        const { prefix, suffix } = diff(bufferText, file.doc.text);
-                        const edit = new vscode.WorkspaceEdit();
-                        edit.replace(
-                            uri,
-                            new vscode.Range(doc.positionAt(prefix), doc.positionAt(bufferText.length - suffix)),
-                            file.doc.text.substring(prefix, file.doc.text.length - suffix)
-                        );
-                        const applied = await vscode.workspace.applyEdit(edit);
-                        if (!applied) {
-                            this._log.warn(`subscribe.resync applyEdit failed for ${uri}`);
-                        }
-                        this._log.info(`subscribe.resync ${uri}`);
+                    if (file.doc.text === bufferText) {
+                        pm.unblockSync(path);
+                        this._undos.get(uri.path)?.clear();
+                        return;
                     }
+
+                    if (doc.isDirty || file.dirty || file.doc.pending || pm.syncBlocked(path)) {
+                        pm.blockSync(path);
+                        this._log.warn(`subscribe.resync.blocked ${uri}`);
+                        return;
+                    }
+
+                    // undo inverses reference pre-reload OT history — clear before applying server snapshot
+                    this._undos.get(uri.path)?.clear();
+
+                    // server is authoritative — apply live ShareDB doc to clean buffers only
+                    const { prefix, suffix } = diff(bufferText, file.doc.text);
+                    const edit = new vscode.WorkspaceEdit();
+                    edit.replace(
+                        uri,
+                        new vscode.Range(doc.positionAt(prefix), doc.positionAt(bufferText.length - suffix)),
+                        file.doc.text.substring(prefix, file.doc.text.length - suffix)
+                    );
+                    const applied = await vscode.workspace.applyEdit(edit);
+                    if (!applied) {
+                        this._log.warn(`subscribe.resync applyEdit failed for ${uri}`);
+                    }
+                    this._log.info(`subscribe.resync ${uri}`);
                 });
                 this._locks.delete(`${uri}`);
             });
         } else {
+            if (this._syncBlocked(uri)) {
+                this._log.warn(`subscribe.resync.blocked ${uri}`);
+                return;
+            }
+
             // sync server snapshot to disk for closed files — server is authoritative
             const buf = buffer.from(norm(content));
             const key = `${uri}`;
@@ -635,6 +680,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(doc.uri, folderUri);
             const file = pm.files.get(path);
             if (!file || file.type !== 'file') {
+                return;
+            }
+            if (pm.syncBlocked(path)) {
                 return;
             }
 
@@ -840,6 +888,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(uri, folderUri);
             const mgr = this._undos.get(uri.path);
             const file = projectManager.files.get(path);
+            if (projectManager.syncBlocked(path)) {
+                this._warnSyncBlocked();
+                return;
+            }
             if (!mgr?.canUndo || !file || file.type !== 'file') {
                 return;
             }
@@ -863,6 +915,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(uri, folderUri);
             const mgr = this._undos.get(uri.path);
             const file = projectManager.files.get(path);
+            if (projectManager.syncBlocked(path)) {
+                this._warnSyncBlocked();
+                return;
+            }
             if (!mgr?.canRedo || !file || file.type !== 'file') {
                 return;
             }
@@ -938,6 +994,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // check if file is in memory
             const path = relativePath(document.uri, folderUri);
+            if (projectManager.syncBlocked(path)) {
+                this._warnSyncBlocked();
+                return;
+            }
             const file = projectManager.files.get(path);
             if (!file || file.type !== 'file') {
                 return;
@@ -1017,6 +1077,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // check if file is in memory
             const path = relativePath(document.uri, folderUri);
+            if (projectManager.syncBlocked(path)) {
+                this._saving.delete(document.uri.path);
+                this._warnSyncBlocked();
+                return;
+            }
             const file = projectManager.files.get(path);
             if (!file || file.type !== 'file') {
                 return;
@@ -1053,6 +1118,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._saving.delete(document.uri.path);
 
             const path = relativePath(document.uri, folderUri);
+            if (projectManager.syncBlocked(path)) {
+                this._warnSyncBlocked();
+                return;
+            }
             const file = projectManager.files.get(path);
             if (!file || file.type !== 'file') {
                 return;
@@ -1130,6 +1199,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                 // batch create/delete of same file into rename
                                 const path1 = relativePath(op1.uri, folderUri);
                                 const path2 = relativePath(op2.uri, folderUri);
+                                if (projectManager.syncBlocked(path1) || projectManager.syncBlocked(path2)) {
+                                    this._warnSyncBlocked();
+                                    i++;
+                                    continue;
+                                }
                                 const [folder1, name1] = parsePath(path1);
                                 const [folder2, name2] = parsePath(path2);
                                 if (name1 === name2 || folder1 === folder2) {
@@ -1157,6 +1231,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         switch (op.action) {
                             case 'create': {
                                 const path = relativePath(op.uri, folderUri);
+                                if (projectManager.syncBlocked(path)) {
+                                    this._warnSyncBlocked();
+                                    break;
+                                }
                                 this._readMutex.atomic([path], async () => {
                                     const type = await op.type;
                                     const content = await op.content;
@@ -1213,6 +1291,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             }
                             case 'change': {
                                 const path = relativePath(op.uri, folderUri);
+                                if (projectManager.syncBlocked(path)) {
+                                    this._warnSyncBlocked();
+                                    break;
+                                }
                                 this._readMutex.atomic([path], async () => {
                                     const content = await op.content;
                                     if (!content) {
@@ -1272,6 +1354,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             }
                             case 'delete': {
                                 const path = relativePath(op.uri, folderUri);
+                                if (projectManager.syncBlocked(path)) {
+                                    this._warnSyncBlocked();
+                                    break;
+                                }
                                 this._readMutex.atomic([path], async () => {
                                     const type = await op.type;
                                     if (!type) {
