@@ -55,7 +55,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private static readonly SAVE_RETRY_DELAY_MS = 2 * 1000;
 
-    private static readonly SAVE_ACK_TIMEOUT_MS = 2 * 1000;
+    private static readonly SAVE_ACK_TIMEOUT_MS = 5 * 1000;
 
     private static readonly FLUSH_TIMEOUT_MS = 5 * 1000;
 

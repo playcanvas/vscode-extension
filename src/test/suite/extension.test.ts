@@ -41,7 +41,7 @@ const sandbox = sinon.createSandbox();
 const guardSandbox = sinon.createSandbox();
 const DEFAULT_TIMEOUT = 2500;
 const RETRY_TIMEOUT = 4000;
-const SAVE_RETRY_TIMEOUT = 8000;
+const SAVE_RETRY_TIMEOUT = 12000;
 const SAVE_FAILURE_TIMEOUT = 15000;
 const WATCHER_TIMEOUT = 1000;
 
