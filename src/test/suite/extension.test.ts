@@ -41,6 +41,8 @@ const sandbox = sinon.createSandbox();
 const guardSandbox = sinon.createSandbox();
 const DEFAULT_TIMEOUT = 2500;
 const RETRY_TIMEOUT = 4000;
+const SAVE_RETRY_TIMEOUT = 12000;
+const SAVE_FAILURE_TIMEOUT = 15000;
 const WATCHER_TIMEOUT = 1000;
 
 const createRecordChannel = <T extends { settled: Promise<void> }>() => {
@@ -434,6 +436,33 @@ const assetCreate = async ({
     const asset = assets.get(res.uniqueId);
     assert.ok(asset, `asset ${res.uniqueId} should exist`);
     return asset;
+};
+
+const markSaved = (asset: Asset, text = documents.get(asset.uniqueId) ?? '') => {
+    if (!asset.file) {
+        return;
+    }
+    const next = hash(text);
+    if (asset.file.hash === next) {
+        return;
+    }
+    const file = {
+        filename: asset.file.filename,
+        hash: next
+    };
+    const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
+    if (doc) {
+        doc.submitOp([{ p: ['file'], od: asset.file, oi: file }], { source: 'remote' });
+    } else {
+        asset.file = file;
+    }
+};
+
+const markAllSaved = async () => {
+    for (const asset of assets.values()) {
+        markSaved(asset);
+    }
+    await waitForIdle('mark all saved');
 };
 
 const ensurePcignore = async () => {
@@ -1534,6 +1563,66 @@ suite('extension', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send doc:save for external closed file change');
     });
 
+    test('file open - typing before subscribe reverts without OT submit', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'blocked_subscribe_edit.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const original = '// ORIG\n';
+
+        await markAllSaved();
+        const reloaded = waitForEmit('asset:file:create', (args) => args[0] === asset.name, 'blocked subscribe reload');
+        await assertResolves(vscode.commands.executeCommand(`${NAME}.reloadProject`) as Promise<unknown>, 'reload');
+        await reloaded;
+        await waitForIdle('blocked subscribe reload settle');
+        await waitForFileContent(uri, original, 'blocked subscribe file');
+
+        sharedb.documentSubscribeDelay = 1000;
+        warningMessageStub.resetHistory();
+        const subscribed = waitForEmit(
+            'asset:file:subscribed',
+            (args) => args[0] === asset.name,
+            'delayed subscribe',
+            RETRY_TIMEOUT
+        );
+        const opened = waitForEmit('asset:doc:open', (args) => args[0] === asset.name, 'document open');
+
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await opened;
+
+        let changed = false;
+        const reverted = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() !== uri.toString()) {
+                    return;
+                }
+                if (e.document.getText().startsWith('X')) {
+                    changed = true;
+                    return;
+                }
+                if (changed && e.document.getText() === original) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), 'X');
+        assert.strictEqual(await vscode.workspace.applyEdit(edit), true, 'blocked edit should apply before revert');
+        await assertResolves(reverted, 'blocked edit revert');
+        await vscode.window.showTextDocument(tdoc);
+        await subscribed;
+        await waitForIdle('blocked edit settle');
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'document should be subscribed after delay');
+        assert.strictEqual(tdoc.getText(), original, 'blocked edit should be reverted to disk content');
+        assert.strictEqual(doc.submitOp.callCount, 0, 'blocked edit should not submit OT');
+        assert.ok(warningMessageStub.calledWith(sinon.match(/still loading/i)), 'loading warning should be shown');
+    });
+
     test('file close - discard after first-keystroke does not roll back doc', async () => {
         // regression #278: first onChange after open fires with isDirty=false
         // (transient), so external=true was a false positive. _dirtyReload then
@@ -1911,6 +2000,66 @@ suite('extension', () => {
         assert.strictEqual(saveCalls.length, 0, 'should not send redundant doc:save to server');
     });
 
+    test('file save - matching asset hash clears failed save state', async function () {
+        this.timeout(SAVE_FAILURE_TIMEOUT);
+
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        await markAllSaved();
+
+        const asset = await assetCreate({ name: 'save_failed_then_hash.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// EDIT\n');
+        await vscode.workspace.applyEdit(edit);
+        await waitForIdle('failed save edit');
+
+        sharedb.failNextSave(asset.uniqueId, 6);
+        warningMessageStub.resetHistory();
+        const failed = waitForEmit(
+            'asset:file:dirty',
+            (args) => args[0] === asset.name,
+            'save failure dirty',
+            SAVE_FAILURE_TIMEOUT
+        );
+        await tdoc.save();
+        await failed;
+        await waitForIdle('failed save settle');
+
+        assert.strictEqual(tdoc.isDirty, true, 'failed save should re-dirty the open document');
+        assert.ok(
+            warningMessageStub.calledWith(sinon.match(/could not save/i)),
+            'save failure warning should be shown'
+        );
+
+        warningMessageStub.resetHistory();
+        await assertResolves(
+            vscode.commands.executeCommand(`${NAME}.reloadProject`) as Promise<unknown>,
+            'reload block'
+        );
+        assert.ok(
+            warningMessageStub.calledWith(sinon.match(/changes are not saved/i)),
+            'reload should be blocked while save failed'
+        );
+
+        const saved = waitForEmit('asset:file:save', (args) => args[0] === asset.name, 'matching hash save');
+        markSaved(asset, tdoc.getText());
+        await saved;
+        await waitForIdle('matching hash settle');
+
+        warningMessageStub.resetHistory();
+        rest.branchCheckout.resetHistory();
+        await assertResolves(
+            vscode.commands.executeCommand(`${NAME}.switchBranch`) as Promise<unknown>,
+            'switch branch'
+        );
+        assert.strictEqual(rest.branchCheckout.callCount, 1, 'switch branch should be unblocked after matching hash');
+    });
+
     test('file save - remote op reverts to s3 hash', async () => {
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -2272,8 +2421,9 @@ suite('extension', () => {
         const gitDir = vscode.Uri.joinPath(folderUri, '.git');
         await assertResolves(vscode.workspace.fs.createDirectory(gitDir), 'fs.createDirectory');
 
-        const watcher = watchFile(folderUri, '.git/HEAD', 'create').promise;
-        const headUri = vscode.Uri.joinPath(gitDir, 'HEAD');
+        const head = `HEAD_${Date.now()}`;
+        const watcher = watchFile(folderUri, `.git/${head}`, 'create').promise;
+        const headUri = vscode.Uri.joinPath(gitDir, head);
         await assertResolves(
             vscode.workspace.fs.writeFile(headUri, buffer.from('ref: refs/heads/main\n')),
             'fs.writeFile'
@@ -2281,9 +2431,9 @@ suite('extension', () => {
         await assertResolves(watcher, 'watcher.create');
 
         assert.strictEqual(
-            Array.from(assets.values()).find((a) => a.name === 'HEAD'),
+            Array.from(assets.values()).find((a) => a.name === head),
             undefined,
-            '.git/HEAD should not exist as asset'
+            `.git/${head} should not exist as asset`
         );
         assert.strictEqual(
             Array.from(assets.values()).find((a) => a.name === '.git'),
@@ -2295,6 +2445,8 @@ suite('extension', () => {
     test('vcs exclusion - .git survives re-link cleanup', async () => {
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
+
+        await markAllSaved();
 
         // ensure .git/ and a child file exist on disk before reload
         const gitDir = vscode.Uri.joinPath(folderUri, '.git');
@@ -3053,6 +3205,39 @@ suite('extension', () => {
             warningMessageStub.calledWith(sinon.match(/out of sync/i)),
             'desync toast must fire after submit rejection'
         );
+    });
+
+    test('save retry runs when doc:save ack is missing', async function () {
+        this.timeout(SAVE_RETRY_TIMEOUT);
+
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'save_missing_ack.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// EDIT\n');
+        await vscode.workspace.applyEdit(edit);
+
+        sharedb.saveResponses.set(asset.uniqueId, ['timeout', 'success']);
+        sharedb.sendRaw.resetHistory();
+        const saved = waitForEmit(
+            'doc:save',
+            (args) => args[0] === 'success' && args[1] === asset.uniqueId,
+            'doc save timeout retry',
+            SAVE_RETRY_TIMEOUT
+        );
+        await tdoc.save();
+        await saved;
+
+        const calls = sharedb.sendRaw.getCalls().map((c) => `${c.args[0]}`);
+        const docSaves = calls.filter((c) => c === `doc:save:${asset.uniqueId}`);
+        const reconnects = calls.filter((c) => c === `doc:reconnect:${asset.uniqueId}`);
+        assert.strictEqual(docSaves.length, 2, 'expected timed-out doc:save + retry doc:save');
+        assert.strictEqual(reconnects.length, 1, 'expected one doc:reconnect after missing ack');
     });
 
     test('multi-edit batch offsets cumulate correctly', async () => {

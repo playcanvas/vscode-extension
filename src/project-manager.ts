@@ -55,13 +55,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private static readonly SAVE_RETRY_DELAY_MS = 2 * 1000;
 
+    private static readonly SAVE_ACK_TIMEOUT_MS = 5 * 1000;
+
     private static readonly FLUSH_TIMEOUT_MS = 5 * 1000;
 
-    private _saveRetries = new Map<number, { timeout?: NodeJS.Timeout; attempt: number }>();
+    private _saveAttempts = new Map<number, { ack?: NodeJS.Timeout; retry?: NodeJS.Timeout; attempt: number }>();
 
     private _saveInflight = new Set<number>();
 
     private _savePending = new Set<number>();
+
+    private _saveFailed = new Set<number>();
 
     private _events: EventEmitter<EventMap>;
 
@@ -84,6 +88,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     private _idUniqueId: Bimap<number, number> = new Bimap<number, number>();
 
     private _subscribing = new Map<number, Promise<(VirtualFile & { type: 'file' }) | undefined>>();
+
+    private _subscribeFailed = new Set<number>();
 
     private _queued = new Set<string>();
 
@@ -131,6 +137,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     // recovers automatically after a transient stall instead of staying stuck.
     private _heal() {
         if (!this.desync.get() || !this._sharedb.connected.get()) {
+            return;
+        }
+        if (this._saveFailed.size > 0) {
             return;
         }
         for (const file of this._files.values()) {
@@ -372,19 +381,84 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return { skip: false, changed: false };
     }
 
+    private _savePath(uniqueId: number) {
+        if (!this._assets.has(uniqueId)) {
+            return undefined;
+        }
+        return this._assetPath(uniqueId);
+    }
+
+    private _clearSaveAttempt(uniqueId: number) {
+        const entry = this._saveAttempts.get(uniqueId);
+        clearTimeout(entry?.ack);
+        clearTimeout(entry?.retry);
+        this._saveAttempts.delete(uniqueId);
+    }
+
+    private _clearSaveFailure(uniqueId: number) {
+        if (!this._saveFailed.delete(uniqueId)) {
+            return;
+        }
+        this._heal();
+    }
+
+    private _failSave(uniqueId: number) {
+        const path = this._savePath(uniqueId);
+        if (path) {
+            const file = this._files.get(path);
+            if (file && file.type !== 'folder') {
+                file.dirty = true;
+                this._events.emit('asset:file:dirty', path, true);
+                this._events.emit('asset:file:failed', path);
+            }
+        }
+        this._saveFailed.add(uniqueId);
+        this.desync.set(() => true);
+    }
+
+    private _sendSave(uniqueId: number) {
+        const entry = this._saveAttempts.get(uniqueId) ?? { attempt: 0 };
+        clearTimeout(entry.ack);
+        const ack = setTimeout(() => {
+            const current = this._saveAttempts.get(uniqueId);
+            if (current?.ack !== ack) {
+                return;
+            }
+            current.ack = undefined;
+            this._saveInflight.delete(uniqueId);
+            this._verifySave('error', uniqueId);
+        }, ProjectManager.SAVE_ACK_TIMEOUT_MS);
+        entry.ack = ack;
+        this._saveAttempts.set(uniqueId, entry);
+
+        void tryCatch(this._sharedb.sendRaw(`doc:save:${uniqueId}`)).then(([err]) => {
+            if (!err) {
+                return;
+            }
+            const current = this._saveAttempts.get(uniqueId);
+            clearTimeout(current?.ack);
+            if (current) {
+                current.ack = undefined;
+            }
+            this._saveInflight.delete(uniqueId);
+            this._log.warn(`failed to send save for document ${uniqueId}: ${err.message}`);
+            this._verifySave('error', uniqueId);
+        });
+    }
+
     private _verifySave(state: 'success' | 'error', uniqueId: number) {
         if (state === 'success') {
-            const entry = this._saveRetries.get(uniqueId);
-            clearTimeout(entry?.timeout);
-            this._saveRetries.delete(uniqueId);
+            this._clearSaveAttempt(uniqueId);
             return true;
         }
 
         this._log.warn(`failed to save document ${uniqueId}: ${state}`);
 
         // skip if already retrying this doc
-        const entry = this._saveRetries.get(uniqueId);
-        if (entry?.timeout) {
+        const entry = this._saveAttempts.get(uniqueId) ?? { attempt: 0 };
+        clearTimeout(entry.ack);
+        entry.ack = undefined;
+        if (entry.retry) {
             return false;
         }
 
@@ -392,15 +466,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const attempt = (entry?.attempt ?? 0) + 1;
         if (attempt > ProjectManager.SAVE_MAX_RETRIES) {
             this._log.error(`giving up saving document ${uniqueId} after ${ProjectManager.SAVE_MAX_RETRIES} retries`);
-            this._saveRetries.delete(uniqueId);
+            this._clearSaveAttempt(uniqueId);
+            this._savePending.delete(uniqueId);
+            this._failSave(uniqueId);
             return false;
         }
 
         // schedule retry
-        const timeout = setTimeout(async () => {
-            const e = this._saveRetries.get(uniqueId);
+        const retry = setTimeout(async () => {
+            const e = this._saveAttempts.get(uniqueId);
             if (e) {
-                e.timeout = undefined;
+                e.retry = undefined;
             }
 
             // bail out if project was unlinked while waiting
@@ -409,18 +485,26 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
 
             // re-open the document on the server via doc:reconnect
-            await this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`);
+            const [err] = await tryCatch(this._sharedb.sendRaw(`doc:reconnect:${uniqueId}`));
+            if (err) {
+                this._log.warn(`failed to reconnect document ${uniqueId}: ${err.message}`);
+                this._verifySave('error', uniqueId);
+                return;
+            }
 
             // re-check after await — unlink may have happened during sendRaw
             if (this._projectId === undefined) {
                 return;
             }
 
-            this._sharedb.sendRaw(`doc:save:${uniqueId}`);
+            this._saveInflight.add(uniqueId);
+            this._sendSave(uniqueId);
             this._log.debug(`retried save for document ${uniqueId} (attempt ${attempt})`);
         }, ProjectManager.SAVE_RETRY_DELAY_MS);
 
-        this._saveRetries.set(uniqueId, { timeout, attempt });
+        entry.retry = retry;
+        entry.attempt = attempt;
+        this._saveAttempts.set(uniqueId, entry);
         return false;
     }
 
@@ -430,6 +514,18 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
         this._savePending.delete(uniqueId);
         this.save(path);
+    }
+
+    private _finishSave(uniqueId: number, path: string) {
+        this._saveInflight.delete(uniqueId);
+        this._clearSaveAttempt(uniqueId);
+        this._drainSaves(uniqueId, path);
+    }
+
+    private _failSubscribe(uniqueId: number, path: string, msg: string) {
+        this._subscribeFailed.add(uniqueId);
+        this.desync.set(() => true);
+        this._log.warn(`${msg} for ${path}`);
     }
 
     private _watchSharedb() {
@@ -448,14 +544,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
 
             const path = this._assetPath(uniqueId);
-            const file = this._files.get(path);
-            if (!file || file.type !== 'file') {
-                return;
-            }
-
-            // mark as clean (sharedb content now synced with S3)
-            file.dirty = false;
-            this._events.emit('asset:file:save', path);
             this._drainSaves(uniqueId, path);
         });
         return () => {
@@ -777,16 +865,23 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                         // NOTE: only mark clean if local content matches the saved hash,
                         // NOTE: otherwise local unsaved changes would be silently discarded
                         const localHash = hash(file.doc.text);
-                        if (fileTo?.hash === localHash) {
-                            file.dirty = false;
+                        const dirty = fileTo?.hash !== localHash;
+                        const wasDirty = file.dirty;
+                        file.dirty = dirty;
+                        this._finishSave(uniqueId, path);
+                        if (!dirty) {
+                            this._clearSaveFailure(uniqueId);
+                            this._events.emit('asset:file:save', path);
+                        } else if (!wasDirty) {
+                            this._events.emit('asset:file:dirty', path, true);
                         }
                     } else {
                         // stub: no doc to compare, mark clean on remote save
                         file.dirty = false;
+                        this._finishSave(uniqueId, path);
+                        this._clearSaveFailure(uniqueId);
+                        this._events.emit('asset:file:save', path);
                     }
-
-                    // add events for VS Code to clear dirty indicator
-                    this._events.emit('asset:file:save', this._assetPath(uniqueId));
                     break;
                 }
             }
@@ -1168,7 +1263,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         // coalesce: if a save is already in-flight, mark pending and let the
         // ack drive the follow-up (Code Editor save.ts:159-162)
-        if (this._saveInflight.has(file.uniqueId)) {
+        if (this._saveInflight.has(file.uniqueId) || this._saveAttempts.has(file.uniqueId)) {
             this._savePending.add(file.uniqueId);
             return;
         }
@@ -1187,7 +1282,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 this._drainSaves(file.uniqueId, path);
                 return;
             }
-            this._sharedb.sendRaw(`doc:save:${file.uniqueId}`);
+            this._sendSave(file.uniqueId);
             this._log.debug(`saved file ${path}`);
         });
     }
@@ -1208,6 +1303,34 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const path = this._assetPath(uniqueId);
         const file = this._files.get(path);
         return file?.uniqueId === uniqueId;
+    }
+
+    loading(path: string) {
+        const file = this._files.get(path);
+        return file?.type === 'stub';
+    }
+
+    saveFailed() {
+        return this._saveFailed.size > 0;
+    }
+
+    unsafeFiles() {
+        const paths: string[] = [];
+        for (const [path, file] of this._files) {
+            if (file.type === 'folder') {
+                continue;
+            }
+            if (
+                file.dirty ||
+                this._saveInflight.has(file.uniqueId) ||
+                this._savePending.has(file.uniqueId) ||
+                this._saveAttempts.has(file.uniqueId) ||
+                this._saveFailed.has(file.uniqueId)
+            ) {
+                paths.push(path);
+            }
+        }
+        return paths;
     }
 
     async subscribe(path: string) {
@@ -1233,15 +1356,19 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
         const pending = this._doSubscribe(path, file.uniqueId);
         this._subscribing.set(file.uniqueId, pending);
-        const result = await pending;
+        const [err, result] = await tryCatch(pending);
         this._subscribing.delete(file.uniqueId);
+        if (err) {
+            this._failSubscribe(file.uniqueId, path, err.message);
+            return undefined;
+        }
         return result;
     }
 
     private async _doSubscribe(path: string, uniqueId: number) {
         const doc = await this._sharedb.subscribe('documents', `${uniqueId}`);
         if (!doc) {
-            this._log.error(fail`failed to subscribe to document ${uniqueId}`);
+            this._failSubscribe(uniqueId, path, `failed to subscribe to document ${uniqueId}`);
             return undefined;
         }
 
@@ -1255,7 +1382,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // null data after hard reset — clean up and skip until reload
         if (doc.data === null) {
             await this._sharedb.unsubscribe('documents', `${uniqueId}`);
-            this._log.debug(`subscribe skipped ${path} (null data, pending reload)`);
+            this._failSubscribe(uniqueId, path, 'subscribe skipped (null data, pending reload)');
             return undefined;
         }
 
@@ -1279,6 +1406,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // resolve current path after await (may have changed due to rename)
         const current = this._assetPath(uniqueId);
         this._files.set(current, promoted);
+        this._subscribeFailed.delete(uniqueId);
 
         // wire op handler (same as _addFile)
         otdoc.on('op', (op, prev) => {
@@ -1510,15 +1638,20 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             unwatchMessenger();
             unwatchReconnect();
 
-            this._saveRetries.forEach(({ timeout }) => clearTimeout(timeout));
-            this._saveRetries.clear();
+            this._saveAttempts.forEach(({ ack, retry }) => {
+                clearTimeout(ack);
+                clearTimeout(retry);
+            });
+            this._saveAttempts.clear();
             this._saveInflight.clear();
             this._savePending.clear();
+            this._saveFailed.clear();
 
             this._files.clear();
             this._assets.clear();
             this._idUniqueId.clear();
             this._subscribing.clear();
+            this._subscribeFailed.clear();
             this._queued.clear();
 
             this.collisions.clear();

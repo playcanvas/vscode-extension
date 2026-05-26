@@ -104,6 +104,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _saving = new Set<string>();
 
+    private _blocked = new Set<string>();
+
     private _undos = new Map<string, UndoManager>();
 
     private _readMutex = new Mutex<void>(pathsRelated, (err) => this._log.warn('readMutex error', err));
@@ -659,10 +661,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         this._log.warn(`dirty applyEdit failed for ${doc.uri}`);
                     }
                 } else {
-                    // content matches -- replace first char with itself to mark dirty without visible change
-                    const edit = new vscode.WorkspaceEdit();
-                    edit.replace(doc.uri, new vscode.Range(0, 0, 0, 1), current.charAt(0));
-                    await vscode.workspace.applyEdit(edit);
+                    // content matches -- make a reversible edit to mark dirty without final text change
+                    const pos = doc.positionAt(0);
+                    const add = new vscode.WorkspaceEdit();
+                    add.insert(doc.uri, pos, ' ');
+                    if (await vscode.workspace.applyEdit(add)) {
+                        const remove = new vscode.WorkspaceEdit();
+                        remove.delete(doc.uri, new vscode.Range(pos, doc.positionAt(1)));
+                        await vscode.workspace.applyEdit(remove);
+                    }
                 }
             });
             this._locks.delete(`${doc.uri}`);
@@ -708,6 +715,41 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             });
     }
 
+    private _revertBlockedEdit(document: vscode.TextDocument) {
+        const key = `${document.uri}`;
+        return this._writeMutex.atomic([key], async () => {
+            if (this._locks.has(key)) {
+                return;
+            }
+
+            const [, bytes] = await tryCatch(
+                Promise.resolve(vscode.workspace.fs.readFile(document.uri) as Promise<Uint8Array>)
+            );
+            const expected = bytes ? norm(buffer.toString(bytes)) : '';
+            const current = document.getText();
+            if (current === expected) {
+                return;
+            }
+
+            const { prefix, suffix } = diff(current, expected);
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                document.uri,
+                new vscode.Range(document.positionAt(prefix), document.positionAt(current.length - suffix)),
+                expected.substring(prefix, expected.length - suffix)
+            );
+
+            this._locks.add(key);
+            this._blocked.add(key);
+            const [err, applied] = await tryCatch(Promise.resolve(vscode.workspace.applyEdit(edit)));
+            this._blocked.delete(key);
+            this._locks.delete(key);
+            if (err || !applied) {
+                this._log.warn(`blocked edit revert failed for ${document.uri}`);
+            }
+        });
+    }
+
     private _watchEvents(folderUri: vscode.Uri) {
         const assetFileCreate = this._events.on('asset:file:create', async (path, type, content) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
@@ -737,6 +779,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._checkIgnoreUpdated(uri);
             await this._save(uri);
         });
+        const assetFileFailed = this._events.on('asset:file:failed', async (path) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+            if (!doc || !this._opened.has(uri.path) || doc.isDirty) {
+                return;
+            }
+            await this._dirty(doc);
+        });
         const assetFileSubscribed = this._events.on('asset:file:subscribed', async (path, content, dirty) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             await this._subscribed(uri, path, content, dirty);
@@ -747,6 +797,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._events.off('asset:file:rename', assetFileRename);
             this._events.off('asset:file:delete', assetFileDelete);
             this._events.off('asset:file:save', assetFileSave);
+            this._events.off('asset:file:failed', assetFileFailed);
             this._events.off('asset:file:subscribed', assetFileSubscribed);
         };
     }
@@ -921,6 +972,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._diskHash.delete(document.uri.path);
             this._diskStat.delete(document.uri.path);
             this._saving.delete(document.uri.path);
+            this._blocked.delete(`${document.uri}`);
             this._events.emit('asset:doc:close', path);
         });
 
@@ -939,12 +991,22 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // check if file is in memory
             const path = relativePath(document.uri, folderUri);
             const file = projectManager.files.get(path);
-            if (!file || file.type !== 'file') {
+            if ((!file || file.type !== 'file') && projectManager.loading(path)) {
+                if (!this._blocked.has(`${document.uri}`)) {
+                    if (!this._locks.has(`${document.uri}`)) {
+                        void this._revertBlockedEdit(document);
+                    }
+                    void vscode.window.showWarningMessage('PlayCanvas file is still loading. Try again in a moment.');
+                }
                 return;
             }
 
             // check if locked (from remote update)
             if (this._locks.has(`${document.uri}`)) {
+                return;
+            }
+
+            if (!file || file.type !== 'file') {
                 return;
             }
 
