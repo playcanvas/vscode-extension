@@ -96,6 +96,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _locks = new Set<string>();
 
+    // per-uri counter held while a remote op is being processed. incremented
+    // synchronously in the 'asset:file:update' listener so the keystroke
+    // handler bails before OTDocument._text (already advanced to post-op) and
+    // the vscode buffer (still pre-op until _update's applyEdit runs) can
+    // diverge. _locks alone isn't enough — it's only added inside _update's
+    // async mutex callback, so contentChange offsets misalign in the
+    // sync-to-microtask gap.
+    private _opLocks = new Map<string, number>();
+
     private _syncing = new Set<string>();
 
     private _diskHash = new Map<string, string>();
@@ -759,8 +768,16 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
         const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content, prev) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
+            const key = `${uri}`;
+            this._opLocks.set(key, (this._opLocks.get(key) ?? 0) + 1);
             this._checkIgnoreUpdated(uri);
-            await this._update(uri, op, content, prev);
+            await tryCatch(this._update(uri, op, content, prev));
+            const remaining = (this._opLocks.get(key) ?? 1) - 1;
+            if (remaining > 0) {
+                this._opLocks.set(key, remaining);
+            } else {
+                this._opLocks.delete(key);
+            }
         });
         const assetFileDelete = this._events.on('asset:file:delete', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
@@ -973,6 +990,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._diskStat.delete(document.uri.path);
             this._saving.delete(document.uri.path);
             this._blocked.delete(`${document.uri}`);
+            this._opLocks.delete(`${document.uri}`);
             this._events.emit('asset:doc:close', path);
         });
 
@@ -1001,8 +1019,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // check if locked (from remote update)
-            if (this._locks.has(`${document.uri}`)) {
+            // check if locked (from remote update) or remote op pending in
+            // the sync-to-microtask gap before _update's mutex body runs
+            const lockKey = `${document.uri}`;
+            if (this._locks.has(lockKey) || this._opLocks.has(lockKey)) {
                 return;
             }
 
@@ -1645,6 +1665,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._types = undefined;
         this._diskHash.clear();
         this._diskStat.clear();
+        this._opLocks.clear();
         this._undos.forEach((m) => m.clear());
         this._undos.clear();
         void vscode.commands.executeCommand('setContext', 'playcanvas.active', false);
