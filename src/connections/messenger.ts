@@ -1,4 +1,5 @@
-import WebSocket, { type Data } from 'isomorphic-ws';
+import WebSocket from 'isomorphic-ws';
+import type { Data } from 'isomorphic-ws';
 
 import { WEB } from '../config';
 import { Log } from '../log';

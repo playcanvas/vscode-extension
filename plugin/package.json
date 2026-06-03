@@ -6,8 +6,8 @@
         "type": "git",
         "url": "https://github.com/playcanvas/vscode-extension.git"
     },
-    "author": "PlayCanvas",
     "license": "MIT",
+    "author": "PlayCanvas",
     "type": "commonjs",
     "main": "out/index.js",
     "files": [

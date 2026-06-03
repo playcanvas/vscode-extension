@@ -1,4 +1,5 @@
-import WebSocket, { type Data } from 'isomorphic-ws';
+import WebSocket from 'isomorphic-ws';
+import type { Data } from 'isomorphic-ws';
 import { type } from 'ot-text';
 import * as sharedb from 'sharedb/lib/client/index.js';
 import type { Error as ShareDbError, Socket } from 'sharedb/lib/sharedb.js';
