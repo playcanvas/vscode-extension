@@ -7,7 +7,6 @@ export const PLAYCANVAS_VERSION = packageJson.devDependencies.playcanvas;
 
 export const DEBUG = process.env.NODE_ENV === 'development';
 export const ENV = process.env.ENV || 'prod';
-export const PORT = parseInt(process.env.PORT || '61000', 10);
 export const WEB = process.env.PLATFORM === 'web';
 export const ROOT_FOLDER = process.env.ROOT_FOLDER || '';
 
