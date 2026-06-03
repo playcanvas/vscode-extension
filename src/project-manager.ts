@@ -962,7 +962,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             return inflight;
         }
 
-        const pending = this._doCreate(path, type, content);
+        const pending = this._createOnce(path, type, content);
         this._creating.set(path, pending);
         const [err] = await tryCatch(pending);
         this._creating.delete(path);
@@ -971,7 +971,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
     }
 
-    private async _doCreate(path: string, type: 'folder' | 'file', content?: Uint8Array) {
+    private async _createOnce(path: string, type: 'folder' | 'file', content?: Uint8Array) {
         if (!this._projectId || !this._branchId) {
             throw this.error.set(() => fail`project not loaded`);
         }
