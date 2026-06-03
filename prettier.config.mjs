@@ -1,11 +1,2 @@
-/** @import { Config } from 'prettier' */
-
-/**
- * @type {Config}
- */
-export default {
-    printWidth: 120,
-    singleQuote: true,
-    tabWidth: 4,
-    trailingComma: 'none'
-};
+// re-export the shared PlayCanvas Prettier config (single source of the house style)
+export { default } from '@playcanvas/eslint-config/prettier';

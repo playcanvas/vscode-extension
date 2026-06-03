@@ -1,8 +1,8 @@
 import eslint from '@eslint/js';
 import { defineConfig } from 'eslint/config';
+import eslintConfigPrettier from 'eslint-config-prettier/flat';
 import pluginImport from 'eslint-plugin-import';
 import * as pluginPackageJson from 'eslint-plugin-package-json';
-import pluginPrettierRecommended from 'eslint-plugin-prettier/recommended';
 import globals from 'globals';
 import jsoncEslintParser from 'jsonc-eslint-parser';
 import tseslint from 'typescript-eslint';
@@ -87,11 +87,12 @@ export default defineConfig(
     tseslint.configs.recommended,
     tseslint.configs.strict,
     tseslint.configs.stylistic,
-    pluginPrettierRecommended,
     pluginImport.flatConfigs.recommended,
     ignoreConfig,
     baseConfig,
     tsFilesConfig,
     packageJsonConfig,
-    rootPackageJsonConfig
+    rootPackageJsonConfig,
+    // last: disable ESLint formatting rules that conflict with Prettier (Prettier runs separately)
+    eslintConfigPrettier
 );
