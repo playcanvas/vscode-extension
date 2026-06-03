@@ -167,6 +167,7 @@
     },
     "devDependencies": {
         "@eslint/js": "9.39.4",
+        "@playcanvas/eslint-config": "3.0.0-beta.3",
         "@rollup/plugin-commonjs": "29.0.2",
         "@rollup/plugin-json": "6.1.0",
         "@rollup/plugin-node-resolve": "16.0.3",
@@ -188,7 +189,6 @@
         "eslint-import-resolver-typescript": "4.4.4",
         "eslint-plugin-import": "2.32.0",
         "eslint-plugin-package-json": "0.91.1",
-        "eslint-plugin-prettier": "5.5.5",
         "globals": "17.5.0",
         "jsonc-eslint-parser": "2.4.2",
         "playcanvas": "2.18.1",
