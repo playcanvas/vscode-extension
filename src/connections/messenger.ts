@@ -5,7 +5,7 @@ import { Log } from '../log';
 import { Deferred } from '../utils/deferred';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
-import { withTimeout } from '../utils/utils';
+import { tryCatch, withTimeout } from '../utils/utils';
 
 import {
     CONNECT_TIMEOUT_MS,
@@ -91,7 +91,7 @@ class Messenger extends EventEmitter<EventMap> {
 
     private _disconnecting = false;
 
-    private _getToken: (() => string) | null = null;
+    private _getToken: (() => Promise<string | undefined>) | null = null;
 
     private _lastPong = 0;
 
@@ -114,10 +114,10 @@ class Messenger extends EventEmitter<EventMap> {
         this.origin = origin;
     }
 
-    private _connect() {
+    private async _connect() {
         this._disconnecting = false;
 
-        const accessToken = this._getToken!();
+        const accessToken = await this._getToken!();
         const options = WEB
             ? undefined
             : {
@@ -311,11 +311,16 @@ class Messenger extends EventEmitter<EventMap> {
         const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, this._reconnectAttempt), RECONNECT_MAX_MS);
         this._log.info(`reconnecting in ${delay}ms (attempt ${this._reconnectAttempt + 1})`);
         this._reconnectAttempt++;
-        this._reconnectTimer = setTimeout(() => {
+        this._reconnectTimer = setTimeout(async () => {
             if (this._disconnecting) {
                 return;
             }
-            this._socket = this._connect();
+            const [err, socket] = await tryCatch(this._connect());
+            if (err) {
+                this._log.warn('failed to reconnect', err.message);
+                return;
+            }
+            this._socket = socket;
         }, delay);
     }
 
@@ -327,9 +332,9 @@ class Messenger extends EventEmitter<EventMap> {
         }
     }
 
-    async connect(getToken: () => string) {
+    async connect(getToken: () => Promise<string | undefined>) {
         this._getToken = getToken;
-        this._socket = this._connect();
+        this._socket = await this._connect();
         await withTimeout(this._active.promise, CONNECT_TIMEOUT_MS, 'Messenger connection timed out');
     }
 
