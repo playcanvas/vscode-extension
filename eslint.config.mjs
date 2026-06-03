@@ -93,6 +93,7 @@ export default defineConfig(
     tsFilesConfig,
     packageJsonConfig,
     rootPackageJsonConfig,
+
     // last: disable ESLint formatting rules that conflict with Prettier (Prettier runs separately)
     eslintConfigPrettier
 );
