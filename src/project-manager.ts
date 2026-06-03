@@ -89,6 +89,8 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     private _subscribing = new Map<number, Promise<(VirtualFile & { type: 'file' }) | undefined>>();
 
+    private _creating = new Map<string, Promise<void>>();
+
     private _subscribeFailed = new Set<number>();
 
     private _queued = new Set<string>();
@@ -953,6 +955,23 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
     }
 
     async create(path: string, type: 'folder' | 'file', content?: Uint8Array) {
+        // coalesce concurrent creates for the same path so siblings under a not-yet-acked
+        // folder don't each fire a duplicate REST and produce "parent folder is not found"
+        const inflight = this._creating.get(path);
+        if (inflight) {
+            return inflight;
+        }
+
+        const pending = this._createOnce(path, type, content);
+        this._creating.set(path, pending);
+        const [err] = await tryCatch(pending);
+        this._creating.delete(path);
+        if (err) {
+            throw err;
+        }
+    }
+
+    private async _createOnce(path: string, type: 'folder' | 'file', content?: Uint8Array) {
         if (!this._projectId || !this._branchId) {
             throw this.error.set(() => fail`project not loaded`);
         }
