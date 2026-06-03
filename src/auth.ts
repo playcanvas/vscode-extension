@@ -2,7 +2,7 @@ import http from 'http';
 
 import * as vscode from 'vscode';
 
-import { API_URL, COOKIE_NAME, NAME, PUBLISHER, HOME_URL, LOGIN_URL, PLAYCANVAS_VERSION, PORT, WEB } from './config';
+import { API_URL, COOKIE_NAME, NAME, PUBLISHER, HOME_URL, LOGIN_URL, PLAYCANVAS_VERSION, WEB } from './config';
 import { AUTH_TIMEOUT_MS } from './connections/constants';
 import { Rest } from './connections/rest';
 import { tryCatch } from './utils/utils';
@@ -234,7 +234,7 @@ class Auth {
             }, AUTH_TIMEOUT_MS);
             const server = http.createServer(async (req, res) => {
                 if (req.url?.startsWith('/auth/callback')) {
-                    const url = new URL(req.url, `http://localhost:${PORT}`);
+                    const url = new URL(req.url, 'http://localhost');
                     const query = url.searchParams;
                     const code = query.get('code');
 
@@ -315,11 +315,17 @@ class Auth {
                 }
             });
             server
-                .listen(PORT, () => {
+                .listen(0, () => {
+                    const { port } = server.address() as { port: number };
                     const oauthUri = vscode.Uri.parse(LOGIN_URL).with({
-                        query: `came_from=http://localhost:${PORT}/auth/callback`
+                        query: `came_from=http://localhost:${port}/auth/callback`
                     });
-                    void vscode.env.openExternal(oauthUri);
+                    void vscode.env.openExternal(oauthUri).then((opened) => {
+                        if (opened) return;
+                        clearTimeout(timeout);
+                        server.close();
+                        reject(new Error('Authentication cancelled.'));
+                    });
                 })
                 .on('error', (err) => {
                     clearTimeout(timeout);

@@ -101,6 +101,17 @@ export const activate = async (context: vscode.ExtensionContext) => {
             return;
         }
 
+        // user-initiated cancel — surface as warning + retry, not an error
+        if (err.message === 'Authentication cancelled.') {
+            const login = 'Log in';
+            void vscode.window.showWarningMessage(err.message, login).then((choice) => {
+                if (choice === login) {
+                    void vscode.commands.executeCommand(`${NAME}.login`);
+                }
+            });
+            return;
+        }
+
         // log to output channel (also reports to sentry)
         log.error(err);
 
