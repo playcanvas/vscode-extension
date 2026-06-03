@@ -636,7 +636,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             );
         }
         if (!messenger.connected.get()) {
-            const [err] = await tryCatch(messenger.connect(() => accessToken));
+            const [err] = await tryCatch(messenger.connect(() => auth.getAccessToken()));
             if (err) {
                 messenger.disconnect();
                 failure.set(() => ({ err, source: 'messenger' }));
