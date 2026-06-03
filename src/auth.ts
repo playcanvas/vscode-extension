@@ -13,6 +13,7 @@ type Session = {
 };
 
 type EditorConfig = {
+    accessToken?: string;
     engineVersion: string;
 };
 
@@ -82,7 +83,7 @@ class Auth {
         await this._context.globalState?.update(ENGINE_VERSION_KEY, engineVersion);
     }
 
-    private async _fetchEditorConfig(sessionId: string) {
+    private async _fetchEditorConfig(sessionId: string): Promise<EditorConfig> {
         const current = await this._cachedEngineVersion();
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), AUTH_TIMEOUT_MS);
@@ -104,9 +105,12 @@ class Auth {
             return { engineVersion: current };
         }
 
-        const { engineVersion } = parseEditorConfig(text);
+        const { accessToken, engineVersion } = parseEditorConfig(text);
+        if (accessToken) {
+            await this._context.secrets.store(`${NAME}.accessToken`, accessToken);
+        }
         await this._storeEngineVersion(engineVersion);
-        return { engineVersion: engineVersion || current };
+        return { accessToken, engineVersion: engineVersion || current };
     }
 
     async getEditorConfig() {
@@ -404,6 +408,17 @@ class Auth {
             // validate token
             const session = await this._validateAccessToken(accessToken);
             accessToken = session?.accessToken;
+        }
+
+        // silent refresh via session cookie — editor-server returns the session's
+        // current accessToken, skipping OAuth when the session is still alive
+        if (!accessToken && !manual && !WEB) {
+            const sessionId = await this._context.secrets.get(SESSION_ID_KEY);
+            if (sessionId) {
+                const refreshed = await this._fetchEditorConfig(sessionId);
+                const session = await this._validateAccessToken(refreshed.accessToken);
+                accessToken = session?.accessToken;
+            }
         }
 
         if (!accessToken) {
