@@ -623,7 +623,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // connect sharedb, messenger, relay if not connected
         if (!sharedb.connected.get()) {
-            const [err] = await tryCatch(sharedb.connect(() => accessToken));
+            const [err] = await tryCatch(sharedb.connect(() => auth.getAccessToken()));
             if (err) {
                 sharedb.disconnect();
                 failure.set(() => ({ err, source: 'sharedb' }));
@@ -649,7 +649,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             );
         }
         if (!relay.connected.get()) {
-            const [err] = await tryCatch(relay.connect(() => accessToken));
+            const [err] = await tryCatch(relay.connect(() => auth.getAccessToken()));
             if (err) {
                 relay.disconnect();
                 failure.set(() => ({ err, source: 'relay' }));

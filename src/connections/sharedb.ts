@@ -54,7 +54,9 @@ class ShareDb extends EventEmitter<EventMap> {
 
     private _disconnecting = false;
 
-    private _getToken: (() => string) | null = null;
+    private _authRetried = false;
+
+    private _getToken: (() => Promise<string | undefined>) | null = null;
 
     private _lastPong = 0;
 
@@ -75,10 +77,10 @@ class ShareDb extends EventEmitter<EventMap> {
         this.origin = origin;
     }
 
-    private _connect() {
+    private async _connect() {
         this._disconnecting = false;
 
-        const accessToken = this._getToken!();
+        const accessToken = await this._getToken!();
         const options = WEB
             ? undefined
             : {
@@ -103,8 +105,8 @@ class ShareDb extends EventEmitter<EventMap> {
                 const json = JSON.parse(data.toString().slice(4));
                 if (!json.id) {
                     const reason = `[${this.constructor.name}] invalid access token`;
+                    // error is set in the close handler so we can retry once with a fresh token first
                     socket.close(3000, reason);
-                    this.error.set(() => fail`${reason}`);
                     return;
                 }
                 this._log.debug('socket.auth', json);
@@ -147,8 +149,14 @@ class ShareDb extends EventEmitter<EventMap> {
                 return;
             }
 
-            // skip reconnect on auth failure — retrying with same token won't help
+            // auth failure — retry once with a fresh token before giving up
             if (code === AUTH_CLOSE_CODE) {
+                if (this._authRetried) {
+                    this.error.set(() => fail`[${this.constructor.name}] invalid access token`);
+                    return;
+                }
+                this._authRetried = true;
+                this._scheduleReconnect();
                 return;
             }
 
@@ -162,6 +170,7 @@ class ShareDb extends EventEmitter<EventMap> {
     private async _onauth(socket: WebSocket) {
         // reset backoff on successful auth
         this._reconnectAttempt = 0;
+        this._authRetried = false;
         this._lastPong = Date.now();
 
         if (this._connection) {
@@ -367,11 +376,16 @@ class ShareDb extends EventEmitter<EventMap> {
         const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, this._reconnectAttempt), RECONNECT_MAX_MS);
         this._log.info(`reconnecting in ${delay}ms (attempt ${this._reconnectAttempt + 1})`);
         this._reconnectAttempt++;
-        this._reconnectTimer = setTimeout(() => {
+        this._reconnectTimer = setTimeout(async () => {
             if (this._disconnecting) {
                 return;
             }
-            this._socket = this._connect();
+            const [err, socket] = await tryCatch(this._connect());
+            if (err) {
+                this.error.set(() => err);
+                return;
+            }
+            this._socket = socket;
         }, delay);
     }
 
@@ -383,9 +397,10 @@ class ShareDb extends EventEmitter<EventMap> {
         }
     }
 
-    async connect(getToken: () => string) {
+    async connect(getToken: () => Promise<string | undefined>) {
         this._getToken = getToken;
-        this._socket = this._connect();
+        this._authRetried = false;
+        this._socket = await this._connect();
         await withTimeout(this._active.promise, CONNECT_TIMEOUT_MS, 'ShareDB connection timed out');
     }
 

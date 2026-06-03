@@ -6,7 +6,7 @@ import { Deferred } from '../utils/deferred';
 import { fail } from '../utils/error';
 import { EventEmitter } from '../utils/event-emitter';
 import { signal } from '../utils/signal';
-import { withTimeout } from '../utils/utils';
+import { tryCatch, withTimeout } from '../utils/utils';
 
 import {
     AUTH_CLOSE_CODE,
@@ -40,7 +40,9 @@ class Relay extends EventEmitter<EventMap> {
 
     private _disconnecting = false;
 
-    private _getToken: (() => string) | null = null;
+    private _authRetried = false;
+
+    private _getToken: (() => Promise<string | undefined>) | null = null;
 
     private _lastPong = 0;
 
@@ -65,10 +67,10 @@ class Relay extends EventEmitter<EventMap> {
         this.origin = origin;
     }
 
-    private _connect() {
+    private async _connect() {
         this._disconnecting = false;
 
-        const accessToken = this._getToken!();
+        const accessToken = await this._getToken!();
         const options = WEB
             ? undefined
             : {
@@ -86,8 +88,8 @@ class Relay extends EventEmitter<EventMap> {
             this._authTimeout = null;
             const reason = `[${this.constructor.name}] invalid access token`;
             // TODO: figure out why this triggers 1006 not 3000
+            // error is set in the close handler so we can retry once with a fresh token first
             socket.close(3000, reason);
-            this.error.set(() => fail`${reason}`);
         }, 5000);
         socket.addEventListener('open', () => {
             this._log.debug('socket.open');
@@ -130,8 +132,14 @@ class Relay extends EventEmitter<EventMap> {
                 return;
             }
 
-            // skip reconnect on auth failure — retrying with same token won't help
+            // auth failure — retry once with a fresh token before giving up
             if (code === AUTH_CLOSE_CODE) {
+                if (this._authRetried) {
+                    this.error.set(() => fail`[${this.constructor.name}] invalid access token`);
+                    return;
+                }
+                this._authRetried = true;
+                this._scheduleReconnect();
                 return;
             }
 
@@ -145,6 +153,7 @@ class Relay extends EventEmitter<EventMap> {
     private _onauth(socket: WebSocket) {
         // reset backoff on successful auth
         this._reconnectAttempt = 0;
+        this._authRetried = false;
         this._lastPong = Date.now();
         this._pings.length = 0;
 
@@ -292,11 +301,16 @@ class Relay extends EventEmitter<EventMap> {
         const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, this._reconnectAttempt), RECONNECT_MAX_MS);
         this._log.info(`reconnecting in ${delay}ms (attempt ${this._reconnectAttempt + 1})`);
         this._reconnectAttempt++;
-        this._reconnectTimer = setTimeout(() => {
+        this._reconnectTimer = setTimeout(async () => {
             if (this._disconnecting) {
                 return;
             }
-            this._socket = this._connect();
+            const [err, socket] = await tryCatch(this._connect());
+            if (err) {
+                this.error.set(() => err);
+                return;
+            }
+            this._socket = socket;
         }, delay);
     }
 
@@ -308,9 +322,10 @@ class Relay extends EventEmitter<EventMap> {
         }
     }
 
-    async connect(getToken: () => string) {
+    async connect(getToken: () => Promise<string | undefined>) {
         this._getToken = getToken;
-        this._socket = this._connect();
+        this._authRetried = false;
+        this._socket = await this._connect();
         await withTimeout(this._active.promise, CONNECT_TIMEOUT_MS, 'Relay connection timed out');
     }
 
