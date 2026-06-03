@@ -6,15 +6,15 @@
     "categories": [
         "Other"
     ],
+    "bugs": {
+        "url": "https://github.com/playcanvas/vscode-extension/issues"
+    },
     "repository": {
         "type": "git",
         "url": "https://github.com/playcanvas/vscode-extension.git"
     },
-    "bugs": {
-        "url": "https://github.com/playcanvas/vscode-extension/issues"
-    },
-    "author": "PlayCanvas",
     "license": "MIT",
+    "author": "PlayCanvas",
     "publisher": "PlayCanvas",
     "type": "commonjs",
     "main": "./out/extension.js",
