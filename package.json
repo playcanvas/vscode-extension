@@ -166,8 +166,7 @@
         "ws": "^8.18.3"
     },
     "devDependencies": {
-        "@eslint/js": "9.39.4",
-        "@playcanvas/eslint-config": "3.0.0-beta.3",
+        "@playcanvas/eslint-config": "3.0.0-beta.5",
         "@rollup/plugin-commonjs": "29.0.2",
         "@rollup/plugin-json": "6.1.0",
         "@rollup/plugin-node-resolve": "16.0.3",
@@ -185,19 +184,12 @@
         "@vscode/test-web": "0.0.80",
         "dotenv": "17.4.2",
         "eslint": "9.39.4",
-        "eslint-config-prettier": "10.1.8",
-        "eslint-import-resolver-typescript": "4.4.4",
-        "eslint-plugin-import": "2.32.0",
-        "eslint-plugin-package-json": "0.91.1",
-        "globals": "17.5.0",
-        "jsonc-eslint-parser": "2.4.2",
         "playcanvas": "2.18.1",
         "prettier": "3.8.3",
         "rollup": "4.60.2",
         "rollup-plugin-polyfill-node": "0.13.0",
         "sinon": "21.1.2",
-        "typescript": "6.0.3",
-        "typescript-eslint": "8.59.0"
+        "typescript": "6.0.3"
     },
     "engines": {
         "vscode": "^1.98.0"
