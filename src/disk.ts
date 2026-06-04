@@ -1275,17 +1275,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         return;
                                     }
 
-                                    // ensure ancestor folders exist before creating
-                                    // handles race condition where child events arrive before parent events
+                                    // ensure ancestor folders top-down — always delegate to create() so siblings
+                                    // serialise via the _creating coalescer across the messenger ack; echo each
+                                    // ancestor so a late watcher event for the folder is dropped, not re-queued.
                                     const segments = path.split('/');
                                     for (let j = 1; j < segments.length; j++) {
                                         const ancestorPath = segments.slice(0, j).join('/');
-                                        if (!projectManager.files.has(ancestorPath)) {
-                                            this._log.debug(
-                                                `create.local folder ${ancestorPath} (ensuring ancestor of ${path})`
-                                            );
-                                            await projectManager.create(ancestorPath, 'folder');
-                                        }
+                                        const ancestorUri = vscode.Uri.joinPath(folderUri, ancestorPath);
+                                        this._echo.set(`${ancestorUri}:create`, '');
+                                        await projectManager.create(ancestorPath, 'folder');
                                     }
 
                                     this._log.debug(`create.local ${type} ${op.uri}`);
