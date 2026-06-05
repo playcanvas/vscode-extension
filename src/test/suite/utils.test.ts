@@ -460,4 +460,16 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.remoteText('a.js'), 'hello\nremote\n');
         assert.strictEqual(e.remoteText('missing.js'), undefined);
     });
+
+    test('discard reverts the working file to base', async () => {
+        await writeFile('a.js', 'x\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\nlocal\n');
+        await e.refresh();
+        assert.strictEqual(e.status('a.js'), 'modified');
+        await e.discard(vscode.Uri.joinPath(work, 'a.js'));
+        assert.strictEqual(await readFile('a.js'), 'x\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
 });

@@ -8,7 +8,7 @@ import type { EventEmitter } from '../utils/event-emitter';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
 import { norm } from '../utils/text';
-import { hash, tryCatch } from '../utils/utils';
+import { hash, relativePath, tryCatch } from '../utils/utils';
 
 import { BaseStore } from './base-store';
 import { merge } from './merge';
@@ -73,7 +73,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
         return norm(file.doc.text);
     }
-
 
     private async _read(folderUri: vscode.Uri, path: string) {
         const uri = vscode.Uri.joinPath(folderUri, path);
@@ -226,6 +225,21 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
 
         await this._base.flush();
+        await this._refreshAll();
+    }
+
+    // revert a file's working copy to the base (git restore). destructive.
+    async discard(uri: vscode.Uri) {
+        const folderUri = this._folderUri;
+        if (!folderUri) {
+            return;
+        }
+        const path = relativePath(uri, folderUri);
+        const base = this.baseText(path);
+        if (base === undefined) {
+            return;
+        }
+        await this._write(folderUri, path, base);
         await this._refreshAll();
     }
 

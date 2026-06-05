@@ -34,7 +34,7 @@ import type { Project } from './typings/models';
 import { fail } from './utils/error';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect, signal } from './utils/signal';
-import { projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
+import { parsePath, projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
 const PING_SAMPLE_MS = 60 * 1000;
@@ -302,6 +302,25 @@ export const activate = async (context: vscode.ExtensionContext) => {
                     void vscode.window.showWarningMessage(`PlayCanvas Push: ${err.message}`);
                 } else {
                     void vscode.window.showInformationMessage('PlayCanvas: pushed local changes');
+                }
+            }),
+            vscode.commands.registerCommand(`${NAME}.discard`, async (resource?: vscode.SourceControlResourceState) => {
+                const uri = resource?.resourceUri;
+                if (!uri) {
+                    return;
+                }
+                const [, name] = parsePath(uri.path);
+                const choice = await vscode.window.showWarningMessage(
+                    `Discard local changes to ${name}? This cannot be undone.`,
+                    { modal: true },
+                    'Discard'
+                );
+                if (choice !== 'Discard') {
+                    return;
+                }
+                const [err] = await tryCatch(() => nativeSync.discard(uri));
+                if (err) {
+                    void vscode.window.showWarningMessage(`PlayCanvas Discard: ${err.message}`);
                 }
             })
         );

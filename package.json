@@ -116,6 +116,11 @@
                 "command": "playcanvas.push",
                 "title": "PlayCanvas: Push",
                 "icon": "$(cloud-upload)"
+            },
+            {
+                "command": "playcanvas.discard",
+                "title": "PlayCanvas: Discard Changes",
+                "icon": "$(discard)"
             }
         ],
         "menus": {
@@ -129,6 +134,13 @@
                     "command": "playcanvas.push",
                     "when": "scmProvider == playcanvas",
                     "group": "navigation"
+                }
+            ],
+            "scm/resourceState/context": [
+                {
+                    "command": "playcanvas.discard",
+                    "when": "scmProvider == playcanvas",
+                    "group": "inline"
                 }
             ]
         },
