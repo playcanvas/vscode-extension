@@ -109,13 +109,29 @@
             },
             {
                 "command": "playcanvas.pull",
-                "title": "PlayCanvas: Pull"
+                "title": "PlayCanvas: Pull",
+                "icon": "$(cloud-download)"
             },
             {
                 "command": "playcanvas.push",
-                "title": "PlayCanvas: Push"
+                "title": "PlayCanvas: Push",
+                "icon": "$(cloud-upload)"
             }
         ],
+        "menus": {
+            "scm/title": [
+                {
+                    "command": "playcanvas.pull",
+                    "when": "scmProvider == playcanvas",
+                    "group": "navigation"
+                },
+                {
+                    "command": "playcanvas.push",
+                    "when": "scmProvider == playcanvas",
+                    "group": "navigation"
+                }
+            ]
+        },
         "keybindings": [
             {
                 "command": "playcanvas.undo",

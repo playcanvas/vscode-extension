@@ -41,6 +41,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     error = signal<Error | undefined>(undefined);
 
+    changed = signal(0);
+
     constructor({ events, storageUri }: { events: EventEmitter<EventMap>; storageUri: vscode.Uri }) {
         super();
         this._events = events;
@@ -54,6 +56,24 @@ class NativeSyncEngine extends Linker<LinkParams> {
     statuses() {
         return new Map(this._status);
     }
+
+    baseText(path: string) {
+        const file = this._projectManager?.files.get(path);
+        if (!file || file.type !== 'file') {
+            return undefined;
+        }
+        return this._base.get(file.uniqueId)?.text;
+    }
+
+    // live remote content (R) for the incoming diff view
+    remoteText(path: string) {
+        const file = this._projectManager?.files.get(path);
+        if (!file || file.type !== 'file') {
+            return undefined;
+        }
+        return norm(file.doc.text);
+    }
+
 
     private async _read(folderUri: vscode.Uri, path: string) {
         const uri = vscode.Uri.joinPath(folderUri, path);
@@ -108,6 +128,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 await this._refresh(path);
             }
         }
+        this.changed.set((v) => v + 1);
     }
 
     // recompute all tracked files (used after external changes)

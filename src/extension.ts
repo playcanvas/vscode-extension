@@ -26,6 +26,7 @@ import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
 import { DecorationProvider } from './providers/decoration-provider';
 import { closeSentry, setSentryCollaborators, setSentryProject, setSentryUser } from './sentry';
+import { PlayCanvasScm } from './sync/scm';
 import { NativeSyncEngine } from './sync/sync-engine';
 import { TypeInstaller } from './type-installer';
 import type { EventMap } from './typings/event-map';
@@ -306,6 +307,15 @@ export const activate = async (context: vscode.ExtensionContext) => {
         );
     }
 
+    // native source control panel (experimental; only linked in pullpush mode)
+    const scm = new PlayCanvasScm();
+    effect(() => {
+        const err = scm.error.get();
+        if (err) {
+            failure.set(() => ({ err, source: 'native-scm' }));
+        }
+    });
+
     // reload function
     let reloading = false;
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
@@ -323,6 +333,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const uriState = await uriHandler.unlink();
             const collabState = await collabProvider.unlink();
             const dirtyState = await decorationProvider.unlink();
+            const scmState = pullPush ? await scm.unlink() : undefined;
             const nativeSyncState = pullPush ? await nativeSync.unlink() : undefined;
             const diskState = await disk.unlink();
             const projectState = await projectManager.unlink();
@@ -340,6 +351,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await disk.link({ ...diskState, types });
             if (pullPush && nativeSyncState) {
                 await nativeSync.link(nativeSyncState);
+            }
+            if (pullPush && scmState) {
+                await scm.link(scmState);
             }
             await decorationProvider.link(dirtyState);
             await collabProvider.link(collabState);
@@ -806,12 +820,18 @@ export const activate = async (context: vscode.ExtensionContext) => {
             })
         );
 
-        // link native sync engine (experimental pullpush mode)
+        // link native sync engine + source control panel (experimental pullpush mode)
         if (pullPush) {
             await nativeSync.link({ folderUri, projectManager, projectId: project.id, branchId });
             context.subscriptions.push(
                 new vscode.Disposable(() => {
                     void nativeSync.unlink();
+                })
+            );
+            await scm.link({ folderUri, engine: nativeSync });
+            context.subscriptions.push(
+                new vscode.Disposable(() => {
+                    void scm.unlink();
                 })
             );
         }

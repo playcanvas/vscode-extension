@@ -442,4 +442,22 @@ suite('sync/sync-engine', () => {
         assert.ok(err, 'push should be rejected');
         assert.strictEqual(applied.length, 0, 'must not submit when behind');
     });
+
+    test('baseText returns the seeded base for a tracked file', async () => {
+        await writeFile('a.js', 'hello\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith({ text: 'hello\n' }), projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.baseText('a.js'), 'hello\n');
+        assert.strictEqual(e.baseText('missing.js'), undefined);
+    });
+
+    test('remoteText returns the live doc text', async () => {
+        await writeFile('a.js', 'hello\n');
+        const doc = { text: 'hello\n' };
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
+        doc.text = 'hello\nremote\n';
+        assert.strictEqual(e.remoteText('a.js'), 'hello\nremote\n');
+        assert.strictEqual(e.remoteText('missing.js'), undefined);
+    });
 });
