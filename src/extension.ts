@@ -265,7 +265,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const typeInstaller = new TypeInstaller({ context });
 
     const disk = new Disk({
-        events
+        events,
+        pullPush
     });
     effect(() => {
         const err = disk.error.get();

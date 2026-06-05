@@ -131,10 +131,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _types?: TypeFiles;
 
-    constructor({ events }: { events: EventEmitter<EventMap> }) {
+    private _pullPush = false;
+
+    constructor({ events, pullPush = false }: { events: EventEmitter<EventMap>; pullPush?: boolean }) {
         super();
 
         this._events = events;
+        this._pullPush = pullPush;
     }
 
     private _checkIgnoreUpdated(uri: vscode.Uri, deleted = false) {
@@ -261,6 +264,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const contentText = norm(buffer.toString(content));
                 if (existingText === contentText) {
                     this._diskHash.set(uri.path, hash(contentText));
+                    return;
+                }
+
+                // pullpush: never clobber divergent local content — the sync
+                // engine classifies it; remote lands only via explicit pull
+                if (this._pullPush) {
                     return;
                 }
 
@@ -549,6 +558,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private async _subscribed(uri: vscode.Uri, path: string, content: string, dirty: boolean) {
+        // pullpush: subscribe never mutates buffer or disk — keep the dirty
+        // indicator, leave reconciliation to the sync engine
+        if (this._pullPush) {
+            if (dirty) {
+                this._events.emit('asset:file:dirty', path, true);
+            }
+            return;
+        }
+
         // undo inverses reference pre-reload OT history — clear so undo can't resurrect missing content
         this._undos.get(uri.path)?.clear();
 
@@ -774,6 +792,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             await this._reconcile(uri, path, type);
         });
         const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content, prev) => {
+            // pullpush mode: the sync engine tracks remote changes; never auto-write to disk
+            if (this._pullPush) {
+                return;
+            }
             const uri = vscode.Uri.joinPath(folderUri, path);
             const key = `${uri}`;
             this._opLocks.set(key, (this._opLocks.get(key) ?? 0) + 1);
@@ -1067,6 +1089,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const { document, contentChanges, reason } = e;
             // check if in folder
             if (!uriStartsWith(document.uri, folderUri)) {
+                return;
+            }
+
+            // pullpush mode: edits are local-only; never submit keystrokes upstream
+            if (this._pullPush) {
                 return;
             }
 
@@ -1535,6 +1562,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(uri, folderUri);
             const file = projectManager.files.get(path);
             if (!file || file.type === 'folder') {
+                return;
+            }
+
+            // pullpush mode: closed-file edits stay local; never submit upstream
+            if (this._pullPush) {
                 return;
             }
 
