@@ -110,6 +110,10 @@
             {
                 "command": "playcanvas.pull",
                 "title": "PlayCanvas: Pull"
+            },
+            {
+                "command": "playcanvas.push",
+                "title": "PlayCanvas: Push"
             }
         ],
         "keybindings": [

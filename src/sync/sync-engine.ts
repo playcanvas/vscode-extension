@@ -168,6 +168,46 @@ class NativeSyncEngine extends Linker<LinkParams> {
         await this._refreshAll();
     }
 
+    // push: submit local edits as OT ops + flush to S3. fast-forward only —
+    // rejected if any file is behind/conflicted (no force push; pull first).
+    async push() {
+        const folderUri = this._folderUri;
+        const pm = this._projectManager;
+        if (!folderUri || !pm) {
+            return;
+        }
+
+        await this._refreshAll();
+        for (const state of this._status.values()) {
+            if (state === 'behind' || state === 'both' || state === 'conflicted') {
+                throw fail`remote has changes — pull before pushing`;
+            }
+        }
+
+        for (const [path, file] of pm.files) {
+            if (file.type !== 'file' || this._status.get(path) !== 'modified') {
+                continue;
+            }
+            const working = await this._read(folderUri, path);
+            if (working === undefined) {
+                continue;
+            }
+            const base = this._base.get(file.uniqueId);
+            // re-check remote is still unchanged, synchronous with write()'s apply
+            // so a remote op can't interleave — went behind mid-push, leave for pull
+            if (base && norm(file.doc.text) !== base.text) {
+                continue;
+            }
+            // write() diffs against the live doc and marks dirty so save() flushes
+            await pm.write(path, buffer.from(working));
+            pm.save(path);
+            this._base.set(file.uniqueId, working);
+        }
+
+        await this._base.flush();
+        await this._refreshAll();
+    }
+
     async link({ folderUri, projectManager, projectId, branchId }: LinkParams) {
         if (this._folderUri !== undefined) {
             throw this.error.set(() => fail`already linked`);

@@ -12,9 +12,10 @@ import { classify } from '../../sync/status';
 import { NativeSyncEngine } from '../../sync/sync-engine';
 import type { EventMap } from '../../typings/event-map';
 import type { Project } from '../../typings/models';
+import type { ShareDbTextOp } from '../../typings/sharedb';
 import * as buffer from '../../utils/buffer';
 import { EventEmitter } from '../../utils/event-emitter';
-import { delta } from '../../utils/text';
+import { delta, norm } from '../../utils/text';
 import { sanitizeName, projectToName, hash, tryCatch } from '../../utils/utils';
 
 suite('utils', () => {
@@ -274,6 +275,35 @@ suite('sync/sync-engine', () => {
         return { files } as unknown as ProjectManager;
     };
 
+    // pm whose doc records submitted ops and applies them (simulating the server)
+    const pushPm = () => {
+        const applied: ShareDbTextOp[] = [];
+        const saved: string[] = [];
+        const doc = {
+            text: 'x\n',
+            apply(op: ShareDbTextOp) {
+                applied.push(op);
+                doc.text = ottext.apply(doc.text, op) as string;
+            }
+        };
+        const file = { type: 'file', uniqueId: 1, doc, dirty: false };
+        const files = new Map([['a.js', file]]);
+        const pm = {
+            files,
+            // mirrors ProjectManager.write: delta vs live doc, mark dirty
+            write: async (_p: string, content: Uint8Array) => {
+                const op = delta(doc.text, norm(buffer.toString(content)));
+                if (!op) {
+                    return;
+                }
+                doc.apply(op);
+                file.dirty = true;
+            },
+            save: (p: string) => saved.push(p)
+        } as unknown as ProjectManager;
+        return { pm, doc, applied, saved };
+    };
+
     test('clean when working equals remote', async () => {
         await writeFile('a.js', 'x\n');
         const e = engine();
@@ -375,5 +405,41 @@ suite('sync/sync-engine', () => {
         await e.pull();
         assert.ok((await readFile('a.js')).includes('<<<<<<< Working (your changes)'), 'has markers');
         assert.strictEqual(e.status('a.js'), 'conflicted');
+    });
+
+    test('push - submits delta, flushes, advances base', async () => {
+        const { pm, applied, saved } = pushPm();
+        await writeFile('a.js', 'x\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\nlocal\n');
+        await e.refresh();
+        assert.strictEqual(e.status('a.js'), 'modified');
+        await e.push();
+        assert.strictEqual(applied.length, 1, 'one op submitted');
+        assert.deepStrictEqual(applied[0], delta('x\n', 'x\nlocal\n'));
+        assert.deepStrictEqual(saved, ['a.js'], 'flushed to server');
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('push - no-op when nothing modified', async () => {
+        const { pm, applied, saved } = pushPm();
+        await writeFile('a.js', 'x\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await e.push();
+        assert.strictEqual(applied.length, 0);
+        assert.strictEqual(saved.length, 0);
+    });
+
+    test('push - rejected when behind (no force push)', async () => {
+        const { pm, doc, applied } = pushPm();
+        await writeFile('a.js', 'x\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        doc.text = 'x\nremote\n';
+        const [err] = await tryCatch(() => e.push());
+        assert.ok(err, 'push should be rejected');
+        assert.strictEqual(applied.length, 0, 'must not submit when behind');
     });
 });
