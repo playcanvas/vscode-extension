@@ -4,11 +4,16 @@ import * as os from 'os';
 import { type as ottext } from 'ot-text';
 import * as vscode from 'vscode';
 
+import type { ProjectManager } from '../../project-manager';
 import { BaseStore } from '../../sync/base-store';
 import { hasConflictMarkers } from '../../sync/markers';
 import { merge } from '../../sync/merge';
 import { classify } from '../../sync/status';
+import { NativeSyncEngine } from '../../sync/sync-engine';
+import type { EventMap } from '../../typings/event-map';
 import type { Project } from '../../typings/models';
+import * as buffer from '../../utils/buffer';
+import { EventEmitter } from '../../utils/event-emitter';
 import { delta } from '../../utils/text';
 import { sanitizeName, projectToName, hash, tryCatch } from '../../utils/utils';
 
@@ -239,5 +244,88 @@ suite('sync/base-store', () => {
         const b = new BaseStore({ storageUri: dir });
         await b.load(1, 'dev');
         assert.strictEqual(b.get(1), undefined);
+    });
+});
+
+suite('sync/sync-engine', () => {
+    const root = vscode.Uri.joinPath(vscode.Uri.file(os.tmpdir()), 'pc-sync-engine-test');
+    const storage = vscode.Uri.joinPath(root, 'storage');
+    const work = vscode.Uri.joinPath(root, 'work');
+
+    const clean = async () => {
+        await tryCatch(async () => vscode.workspace.fs.delete(root, { recursive: true, useTrash: false }));
+    };
+
+    setup(clean);
+    suiteTeardown(clean);
+
+    const writeFile = async (name: string, text: string) => {
+        await vscode.workspace.fs.createDirectory(work);
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(work, name), buffer.from(text));
+    };
+
+    const engine = () => new NativeSyncEngine({ events: new EventEmitter<EventMap>(), storageUri: storage });
+
+    const pmWith = (doc: { text: string }) => {
+        const files = new Map([['a.js', { type: 'file', uniqueId: 1, doc, dirty: false }]]);
+        return { files } as unknown as ProjectManager;
+    };
+
+    test('clean when working equals remote', async () => {
+        await writeFile('a.js', 'x\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('modified when working diverges from base', async () => {
+        await writeFile('a.js', 'x\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\nlocal\n');
+        await e.refresh();
+        assert.strictEqual(e.status('a.js'), 'modified');
+    });
+
+    test('behind when remote advances past base', async () => {
+        await writeFile('a.js', 'x\n');
+        const doc = { text: 'x\n' };
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
+        doc.text = 'x\nremote\n';
+        await e.refresh();
+        assert.strictEqual(e.status('a.js'), 'behind');
+    });
+
+    test('both when working and remote diverge', async () => {
+        await writeFile('a.js', 'x\n');
+        const doc = { text: 'x\n' };
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\nlocal\n');
+        doc.text = 'x\nremote\n';
+        await e.refresh();
+        assert.strictEqual(e.status('a.js'), 'both');
+    });
+
+    test('conflicted when working has markers', async () => {
+        await writeFile('a.js', 'x\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\n<<<<<<< Working (your changes)\na\n=======\nb\n>>>>>>> Server (origin)\n');
+        await e.refresh();
+        assert.strictEqual(e.status('a.js'), 'conflicted');
+    });
+
+    test('base persists across relink', async () => {
+        await writeFile('a.js', 'x\n');
+        const e1 = engine();
+        await e1.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        await e1.unlink();
+
+        await writeFile('a.js', 'x\nlocal\n');
+        const e2 = engine();
+        await e2.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        assert.strictEqual(e2.status('a.js'), 'modified');
     });
 });

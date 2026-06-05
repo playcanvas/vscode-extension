@@ -1,0 +1,164 @@
+import * as vscode from 'vscode';
+
+import type { ProjectManager } from '../project-manager';
+import type { EventMap } from '../typings/event-map';
+import * as buffer from '../utils/buffer';
+import { fail } from '../utils/error';
+import type { EventEmitter } from '../utils/event-emitter';
+import { Linker } from '../utils/linker';
+import { signal } from '../utils/signal';
+import { norm } from '../utils/text';
+import { hash, tryCatch } from '../utils/utils';
+
+import { BaseStore } from './base-store';
+import { classify } from './status';
+import type { SyncState } from './status';
+
+type LinkParams = {
+    folderUri: vscode.Uri;
+    projectManager: ProjectManager;
+    projectId: number;
+    branchId: string;
+};
+
+// native git-style sync: observes per-file state (base vs working vs remote)
+// without touching the live realtime path. pull/push land in later parts.
+class NativeSyncEngine extends Linker<LinkParams> {
+    private _events: EventEmitter<EventMap>;
+
+    private _base: BaseStore;
+
+    private _folderUri?: vscode.Uri;
+
+    private _projectManager?: ProjectManager;
+
+    private _projectId?: number;
+
+    private _branchId?: string;
+
+    private _status = new Map<string, SyncState>();
+
+    error = signal<Error | undefined>(undefined);
+
+    constructor({ events, storageUri }: { events: EventEmitter<EventMap>; storageUri: vscode.Uri }) {
+        super();
+        this._events = events;
+        this._base = new BaseStore({ storageUri });
+    }
+
+    status(path: string) {
+        return this._status.get(path) ?? 'clean';
+    }
+
+    statuses() {
+        return new Map(this._status);
+    }
+
+    private async _read(folderUri: vscode.Uri, path: string) {
+        const uri = vscode.Uri.joinPath(folderUri, path);
+        const [err, data] = await tryCatch(async () => vscode.workspace.fs.readFile(uri));
+        return err ? undefined : norm(buffer.toString(data));
+    }
+
+    private async _refresh(path: string) {
+        const folderUri = this._folderUri;
+        const pm = this._projectManager;
+        if (!folderUri || !pm) {
+            return;
+        }
+
+        const file = pm.files.get(path);
+        if (!file || file.type !== 'file') {
+            this._status.delete(path);
+            return;
+        }
+
+        const working = await this._read(folderUri, path);
+        if (working === undefined) {
+            return; // not on disk yet
+        }
+        const remote = norm(file.doc.text);
+
+        // seed the base on first sight: treat the current server state as the
+        // last-pulled ancestor. provisional until pull/push lands.
+        let base = this._base.get(file.uniqueId);
+        if (!base) {
+            this._base.set(file.uniqueId, remote);
+            base = this._base.get(file.uniqueId);
+        }
+        if (!base) {
+            return;
+        }
+
+        this._status.set(path, classify(base.hash, hash(working), hash(remote), working));
+    }
+
+    private async _refreshAll() {
+        const pm = this._projectManager;
+        if (!pm) {
+            return;
+        }
+        for (const [path, file] of pm.files) {
+            if (file.type === 'file') {
+                await this._refresh(path);
+            }
+        }
+    }
+
+    // recompute all tracked files (used after external changes)
+    async refresh() {
+        await this._refreshAll();
+    }
+
+    async link({ folderUri, projectManager, projectId, branchId }: LinkParams) {
+        if (this._folderUri !== undefined) {
+            throw this.error.set(() => fail`already linked`);
+        }
+        await super.unlink();
+
+        await this._base.load(projectId, branchId);
+
+        this._folderUri = folderUri;
+        this._projectManager = projectManager;
+        this._projectId = projectId;
+        this._branchId = branchId;
+
+        await this._refreshAll();
+
+        const recompute = () => void this.refresh();
+        const onUpdate = this._events.on('asset:file:update', recompute);
+        const onSave = this._events.on('asset:file:save', recompute);
+        this._cleanup.push(async () => {
+            this._events.off('asset:file:update', onUpdate);
+            this._events.off('asset:file:save', onSave);
+        });
+
+        await this._base.flush();
+
+        this._log.info(`linked ${folderUri.toString()} (${this._status.size} files tracked)`);
+    }
+
+    async unlink() {
+        const folderUri = this._folderUri;
+        const projectManager = this._projectManager;
+        const projectId = this._projectId;
+        const branchId = this._branchId;
+        if (!folderUri || !projectManager || projectId === undefined || branchId === undefined) {
+            throw this.error.set(() => fail`unlink called before link`);
+        }
+
+        await this._base.flush();
+        await super.unlink();
+
+        this._folderUri = undefined;
+        this._projectManager = undefined;
+        this._projectId = undefined;
+        this._branchId = undefined;
+        this._status.clear();
+
+        this._log.info(`unlinked ${folderUri.toString()}`);
+        return { folderUri, projectManager, projectId, branchId };
+    }
+}
+
+export { NativeSyncEngine };

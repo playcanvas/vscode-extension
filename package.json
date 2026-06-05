@@ -54,6 +54,19 @@
                     "type": "string",
                     "default": "",
                     "description": "Specify the root directory for PlayCanvas projects (non-web extension only). Leave empty to use the default directory."
+                },
+                "playcanvas.syncMode": {
+                    "type": "string",
+                    "enum": [
+                        "realtime",
+                        "pullpush"
+                    ],
+                    "enumDescriptions": [
+                        "Sync edits with the server in real time (default).",
+                        "Experimental: git-style manual pull/push (native only)."
+                    ],
+                    "default": "realtime",
+                    "description": "How the native extension syncs with the server. 'pullpush' is experimental and currently observes status only."
                 }
             }
         },

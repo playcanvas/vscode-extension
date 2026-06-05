@@ -26,6 +26,7 @@ import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
 import { DecorationProvider } from './providers/decoration-provider';
 import { closeSentry, setSentryCollaborators, setSentryProject, setSentryUser } from './sentry';
+import { NativeSyncEngine } from './sync/sync-engine';
 import { TypeInstaller } from './type-installer';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
@@ -88,6 +89,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const rootUri = ROOT_FOLDER
         ? vscode.Uri.parse(`${ROOT_FOLDER}/${ENV}`)
         : vscode.Uri.parse(config.get<string>('rootDir') || `${context.globalStorageUri.path}/${ENV}`);
+
+    // experimental git-style pull/push sync (native only; off by default)
+    const pullPush = !WEB && config.get<string>('syncMode') === 'pullpush';
 
     // auth
     const auth = new Auth(context);
@@ -270,6 +274,15 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     });
 
+    // native sync engine (experimental; only linked in pullpush mode)
+    const nativeSync = new NativeSyncEngine({ events, storageUri: context.globalStorageUri });
+    effect(() => {
+        const err = nativeSync.error.get();
+        if (err) {
+            failure.set(() => ({ err, source: 'native-sync' }));
+        }
+    });
+
     // reload function
     let reloading = false;
     const reload = async (projectManager: ProjectManager, branchId?: string) => {
@@ -287,6 +300,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const uriState = await uriHandler.unlink();
             const collabState = await collabProvider.unlink();
             const dirtyState = await decorationProvider.unlink();
+            const nativeSyncState = pullPush ? await nativeSync.unlink() : undefined;
             const diskState = await disk.unlink();
             const projectState = await projectManager.unlink();
 
@@ -301,6 +315,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 version: config.engineVersion
             });
             await disk.link({ ...diskState, types });
+            if (pullPush && nativeSyncState) {
+                await nativeSync.link(nativeSyncState);
+            }
             await decorationProvider.link(dirtyState);
             await collabProvider.link(collabState);
             await uriHandler.link(uriState);
@@ -765,6 +782,16 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 void decorationProvider.unlink();
             })
         );
+
+        // link native sync engine (experimental pullpush mode)
+        if (pullPush) {
+            await nativeSync.link({ folderUri, projectManager, projectId: project.id, branchId });
+            context.subscriptions.push(
+                new vscode.Disposable(() => {
+                    void nativeSync.unlink();
+                })
+            );
+        }
 
         // desync surfaces — sticky status-bar item + one-shot toast per
         // false→true transition. signal resets to false on project unlink.
