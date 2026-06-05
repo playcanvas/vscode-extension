@@ -854,10 +854,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // just active-editor changes — a stale context lets Ctrl+Z fall through to
         // native undo, which bypasses OT sync. (the native-undo handler stays as a
         // safety net for Edit-menu / palette undo, which keybindings can't gate.)
+        // in pullpush mode editing is local, so keep playcanvas.active false —
+        // let native undo/redo handle cmd+z
         let active: boolean | undefined;
         const updateCtx = () => {
             const e = vscode.window.activeTextEditor;
-            const next = !!(e && uriStartsWith(e.document.uri, folderUri));
+            const next = !!(!this._pullPush && e && uriStartsWith(e.document.uri, folderUri));
             if (next === active) {
                 return;
             }
