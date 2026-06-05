@@ -284,6 +284,20 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     });
 
+    // experimental pull command (native pullpush mode)
+    if (pullPush) {
+        context.subscriptions.push(
+            vscode.commands.registerCommand(`${NAME}.pull`, async () => {
+                const [err] = await tryCatch(() => nativeSync.pull());
+                if (err) {
+                    void vscode.window.showWarningMessage(`PlayCanvas Pull: ${err.message}`);
+                } else {
+                    void vscode.window.showInformationMessage('PlayCanvas: pulled latest changes');
+                }
+            })
+        );
+    }
+
     // reload function
     let reloading = false;
     const reload = async (projectManager: ProjectManager, branchId?: string) => {

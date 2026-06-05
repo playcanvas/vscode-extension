@@ -106,6 +106,10 @@
             {
                 "command": "playcanvas.redo",
                 "title": "PlayCanvas: Redo"
+            },
+            {
+                "command": "playcanvas.pull",
+                "title": "PlayCanvas: Pull"
             }
         ],
         "keybindings": [

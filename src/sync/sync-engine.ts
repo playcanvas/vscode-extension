@@ -11,6 +11,7 @@ import { norm } from '../utils/text';
 import { hash, tryCatch } from '../utils/utils';
 
 import { BaseStore } from './base-store';
+import { merge } from './merge';
 import { classify } from './status';
 import type { SyncState } from './status';
 
@@ -60,6 +61,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
         return err ? undefined : norm(buffer.toString(data));
     }
 
+    private async _write(folderUri: vscode.Uri, path: string, text: string) {
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folderUri, path), buffer.from(text));
+    }
+
     private async _refresh(path: string) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
@@ -107,6 +112,59 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     // recompute all tracked files (used after external changes)
     async refresh() {
+        await this._refreshAll();
+    }
+
+    // fetch + 3-way merge: bring remote changes into the working tree.
+    // refuses while a previous merge is unresolved (git-like).
+    async pull() {
+        const folderUri = this._folderUri;
+        const pm = this._projectManager;
+        if (!folderUri || !pm) {
+            return;
+        }
+
+        await this._refreshAll();
+        for (const state of this._status.values()) {
+            if (state === 'conflicted') {
+                throw fail`resolve conflicts before pulling`;
+            }
+        }
+
+        for (const [path, file] of pm.files) {
+            if (file.type !== 'file') {
+                continue;
+            }
+            const working = await this._read(folderUri, path);
+            if (working === undefined) {
+                continue;
+            }
+            const remote = norm(file.doc.text);
+            const base = this._base.get(file.uniqueId);
+
+            // unseen, or no local divergence -> fast-forward to remote
+            if (!base || working === base.text) {
+                if (remote !== working) {
+                    await this._write(folderUri, path, remote);
+                }
+                this._base.set(file.uniqueId, remote);
+                continue;
+            }
+
+            // remote unchanged since base -> nothing to pull
+            if (remote === base.text) {
+                continue;
+            }
+
+            // both diverged -> 3-way merge into the working tree
+            const result = merge(base.text, working, remote);
+            await this._write(folderUri, path, result.text);
+            if (!result.conflicted) {
+                this._base.set(file.uniqueId, remote);
+            }
+        }
+
+        await this._base.flush();
         await this._refreshAll();
     }
 

@@ -264,6 +264,9 @@ suite('sync/sync-engine', () => {
         await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(work, name), buffer.from(text));
     };
 
+    const readFile = async (name: string) =>
+        buffer.toString(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(work, name)));
+
     const engine = () => new NativeSyncEngine({ events: new EventEmitter<EventMap>(), storageUri: storage });
 
     const pmWith = (doc: { text: string }) => {
@@ -327,5 +330,50 @@ suite('sync/sync-engine', () => {
         const e2 = engine();
         await e2.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
         assert.strictEqual(e2.status('a.js'), 'modified');
+    });
+
+    test('pull - fast-forward when no local edits', async () => {
+        await writeFile('a.js', 'x\n');
+        const doc = { text: 'x\n' };
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
+        doc.text = 'x\ny\n';
+        await e.pull();
+        assert.strictEqual(await readFile('a.js'), 'x\ny\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('pull - leaves local edits when remote unchanged', async () => {
+        await writeFile('a.js', 'x\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\nlocal\n');
+        await e.pull();
+        assert.strictEqual(await readFile('a.js'), 'x\nlocal\n');
+        assert.strictEqual(e.status('a.js'), 'modified');
+    });
+
+    test('pull - clean 3-way merge of non-overlapping edits', async () => {
+        await writeFile('a.js', 'a\nb\nc\n');
+        const doc = { text: 'a\nb\nc\n' };
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'A\nb\nc\n');
+        doc.text = 'a\nb\nC\n';
+        await e.pull();
+        assert.strictEqual(await readFile('a.js'), 'A\nb\nC\n');
+        assert.strictEqual(e.status('a.js'), 'modified');
+    });
+
+    test('pull - conflict writes markers and stays conflicted', async () => {
+        await writeFile('a.js', 'a\nb\nc\n');
+        const doc = { text: 'a\nb\nc\n' };
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'a\nLOCAL\nc\n');
+        doc.text = 'a\nREMOTE\nc\n';
+        await e.pull();
+        assert.ok((await readFile('a.js')).includes('<<<<<<< Working (your changes)'), 'has markers');
+        assert.strictEqual(e.status('a.js'), 'conflicted');
     });
 });
