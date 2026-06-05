@@ -103,7 +103,9 @@ class PlayCanvasScm extends Linker<LinkParams> {
         }
         await super.unlink();
 
-        const scm = vscode.scm.createSourceControl('playcanvas', 'PlayCanvas', folderUri);
+        // no rootUri: sharing git's project folder makes VS Code render git's
+        // resource-group actions (stage/discard) on our groups
+        const scm = vscode.scm.createSourceControl('playcanvas', 'PlayCanvas');
         scm.inputBox.visible = false;
         const changes = scm.createResourceGroup('changes', 'Changes');
         const incoming = scm.createResourceGroup('incoming', 'Incoming Changes');
