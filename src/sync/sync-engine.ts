@@ -76,6 +76,11 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     private async _read(folderUri: vscode.Uri, path: string) {
         const uri = vscode.Uri.joinPath(folderUri, path);
+        // prefer the open buffer so status reflects unsaved edits (live)
+        const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+        if (open && !open.isClosed) {
+            return norm(open.getText());
+        }
         const [err, data] = await tryCatch(async () => vscode.workspace.fs.readFile(uri));
         return err ? undefined : norm(buffer.toString(data));
     }
@@ -130,9 +135,14 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this.changed.set((v) => v + 1);
     }
 
-    // recompute all tracked files (used after external changes)
-    async refresh() {
-        await this._refreshAll();
+    // recompute status — a single file (cheap, for live edits) or all
+    async refresh(path?: string) {
+        if (path === undefined) {
+            await this._refreshAll();
+            return;
+        }
+        await this._refresh(path);
+        this.changed.set((v) => v + 1);
     }
 
     // fetch + 3-way merge: bring remote changes into the working tree.
@@ -144,6 +154,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
 
+        // flush open buffers so merges write to disk and reload cleanly
+        await vscode.workspace.saveAll(false);
         await this._refreshAll();
         for (const state of this._status.values()) {
             if (state === 'conflicted') {
@@ -197,6 +209,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
 
+        // flush open buffers so the pushed content matches the editor
+        await vscode.workspace.saveAll(false);
         await this._refreshAll();
         for (const state of this._status.values()) {
             if (state === 'behind' || state === 'both' || state === 'conflicted') {
@@ -258,7 +272,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
         await this._refreshAll();
 
-        const recompute = () => void this.refresh();
+        const recompute = (path: string) => void this.refresh(path);
         const onUpdate = this._events.on('asset:file:update', recompute);
         const onSave = this._events.on('asset:file:save', recompute);
         this._cleanup.push(async () => {

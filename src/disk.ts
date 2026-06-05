@@ -1211,6 +1211,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             );
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
+            // pullpush mode: saving is local-only — no server save on cmd+s
+            if (this._pullPush) {
+                return;
+            }
             const { document } = e;
 
             // check if file is in memory
@@ -1242,6 +1246,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
         });
         const ondidsave = vscode.workspace.onDidSaveTextDocument((document) => {
+            // pullpush mode: saving is local-only — server save happens on Push
+            if (this._pullPush) {
+                return;
+            }
             if (!uriStartsWith(document.uri, folderUri)) {
                 return;
             }

@@ -1,15 +1,17 @@
 import * as vscode from 'vscode';
 
+import { Debouncer } from '../utils/debouncer';
 import { fail } from '../utils/error';
 import { Linker } from '../utils/linker';
 import { effect, signal } from '../utils/signal';
-import { relativePath, uriStartsWith } from '../utils/utils';
+import { relativePath, uriStartsWith, tryCatch } from '../utils/utils';
 
 import type { SyncState } from './status';
 import type { NativeSyncEngine } from './sync-engine';
 
 const BASE_SCHEME = 'playcanvas-base';
 const REMOTE_SCHEME = 'playcanvas-remote';
+const REFRESH_DELAY = 200;
 
 type LinkParams = { folderUri: vscode.Uri; engine: NativeSyncEngine };
 
@@ -136,11 +138,23 @@ class PlayCanvasScm extends Linker<LinkParams> {
             provideTextDocumentContent: (uri) => engine.remoteText(relativePath(uri, folderUri)) ?? ''
         });
 
-        // recompute status on local save (edits are local-only in pullpush mode)
+        // recompute status of the saved file (saveAll during pull/push fires
+        // one event per buffer — a full refresh each would rescan the project)
         const onSave = vscode.workspace.onDidSaveTextDocument((doc) => {
             if (uriStartsWith(doc.uri, folderUri)) {
-                void engine.refresh();
+                void engine.refresh(relativePath(doc.uri, folderUri));
             }
+        });
+
+        // live status: per-path debounce so concurrent edits to different files
+        // don't cancel each other's refresh
+        const debouncer = new Debouncer<void>(REFRESH_DELAY);
+        const onChange = vscode.workspace.onDidChangeTextDocument((e) => {
+            if (!uriStartsWith(e.document.uri, folderUri)) {
+                return;
+            }
+            const path = relativePath(e.document.uri, folderUri);
+            void tryCatch(debouncer.debounce(path, () => engine.refresh(path)));
         });
 
         this._folderUri = folderUri;
@@ -164,6 +178,8 @@ class PlayCanvasScm extends Linker<LinkParams> {
 
         this._cleanup.push(async () => {
             stop();
+            debouncer.clear();
+            onChange.dispose();
             onSave.dispose();
             content.dispose();
             baseChanged.dispose();
