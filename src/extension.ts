@@ -322,7 +322,29 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 if (err) {
                     void vscode.window.showWarningMessage(`PlayCanvas Discard: ${err.message}`);
                 }
-            })
+            }),
+            vscode.commands.registerCommand(
+                `${NAME}.resolveMerge`,
+                async (arg?: vscode.Uri | vscode.SourceControlResourceState) => {
+                    const uri = arg instanceof vscode.Uri ? arg : arg?.resourceUri;
+                    if (!uri) {
+                        return;
+                    }
+                    const input = (scheme: string) => uri.with({ scheme });
+                    const [err] = await tryCatch(async () =>
+                        vscode.commands.executeCommand('_open.mergeEditor', {
+                            base: input('playcanvas-merge-base'),
+                            input1: { uri: input('playcanvas-merge-local'), title: 'Working (your changes)' },
+                            input2: { uri: input('playcanvas-merge-remote'), title: 'Server (incoming)' },
+                            output: uri
+                        })
+                    );
+                    if (err) {
+                        // fallback: open the file with inline conflict markers
+                        await vscode.window.showTextDocument(uri);
+                    }
+                }
+            )
         );
     }
 

@@ -472,4 +472,47 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(await readFile('a.js'), 'x\n');
         assert.strictEqual(e.status('a.js'), 'clean');
     });
+
+    test('resolve after conflict makes the file pushable (not stuck)', async () => {
+        const { pm, doc, applied } = pushPm();
+        await writeFile('a.js', 'a\nb\nc\n');
+        doc.text = 'a\nb\nc\n';
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+
+        // local + remote change the same line -> conflict on pull
+        await writeFile('a.js', 'a\nLOCAL\nc\n');
+        doc.text = 'a\nREMOTE\nc\n';
+        await e.pull();
+        assert.strictEqual(e.status('a.js'), 'conflicted');
+
+        // resolve: remove markers, keep a resolution
+        await writeFile('a.js', 'a\nRESOLVED\nc\n');
+        await e.refresh();
+        assert.strictEqual(e.status('a.js'), 'modified', 'resolved file must be pushable, not stuck in both');
+
+        await e.push();
+        assert.ok(applied.length >= 1, 'resolution is pushed');
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('mergeInputs exposes ancestor/local/remote during conflict, cleared on resolve', async () => {
+        const doc = { text: 'a\nb\nc\n' };
+        await writeFile('a.js', 'a\nb\nc\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'a\nLOCAL\nc\n');
+        doc.text = 'a\nREMOTE\nc\n';
+        await e.pull();
+
+        const m = e.mergeInputs('a.js');
+        assert.ok(m, 'merge inputs present during conflict');
+        assert.strictEqual(m.base, 'a\nb\nc\n');
+        assert.strictEqual(m.local, 'a\nLOCAL\nc\n');
+        assert.strictEqual(m.remote, 'a\nREMOTE\nc\n');
+
+        await writeFile('a.js', 'a\nRESOLVED\nc\n');
+        await e.refresh();
+        assert.strictEqual(e.mergeInputs('a.js'), undefined, 'cleared after resolve');
+    });
 });

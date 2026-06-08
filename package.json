@@ -121,6 +121,11 @@
                 "command": "playcanvas.discard",
                 "title": "PlayCanvas: Discard Changes",
                 "icon": "$(discard)"
+            },
+            {
+                "command": "playcanvas.resolveMerge",
+                "title": "PlayCanvas: Resolve in Merge Editor",
+                "icon": "$(git-merge)"
             }
         ],
         "menus": {

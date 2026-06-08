@@ -39,6 +39,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     private _status = new Map<string, SyncState>();
 
+    private _merges = new Map<number, { base: string; local: string; remote: string }>();
+
     error = signal<Error | undefined>(undefined);
 
     changed = signal(0);
@@ -72,6 +74,15 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return undefined;
         }
         return norm(file.doc.text);
+    }
+
+    // base/local/remote inputs for a conflicted file's 3-way merge editor
+    mergeInputs(path: string) {
+        const file = this._projectManager?.files.get(path);
+        if (!file || file.type !== 'file') {
+            return undefined;
+        }
+        return this._merges.get(file.uniqueId);
     }
 
     private async _read(folderUri: vscode.Uri, path: string) {
@@ -119,7 +130,12 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
 
-        this._status.set(path, classify(base.hash, hash(working), hash(remote), working));
+        const state = classify(base.hash, hash(working), hash(remote), working);
+        this._status.set(path, state);
+        // merge resolved (markers gone) -> drop the stashed merge inputs
+        if (state !== 'conflicted') {
+            this._merges.delete(file.uniqueId);
+        }
     }
 
     private async _refreshAll() {
@@ -188,12 +204,18 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 continue;
             }
 
-            // both diverged -> 3-way merge into the working tree
+            // both diverged -> 3-way merge into the working tree. advance base to
+            // remote even on conflict: the merge incorporated remote, so the working
+            // tree (markers until resolved) is now our local-ahead work. markers keep
+            // status 'conflicted' (push-blocked); once resolved it becomes 'modified'
+            // and is pushable — otherwise the file is stuck both behind and ahead.
             const result = merge(base.text, working, remote);
-            await this._write(folderUri, path, result.text);
-            if (!result.conflicted) {
-                this._base.set(file.uniqueId, remote);
+            if (result.conflicted) {
+                // stash the three sides for the merge editor (base advances below)
+                this._merges.set(file.uniqueId, { base: base.text, local: working, remote });
             }
+            await this._write(folderUri, path, result.text);
+            this._base.set(file.uniqueId, remote);
         }
 
         await this._base.flush();
@@ -302,6 +324,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._projectId = undefined;
         this._branchId = undefined;
         this._status.clear();
+        this._merges.clear();
 
         this._log.info(`unlinked ${folderUri.toString()}`);
         return { folderUri, projectManager, projectId, branchId };

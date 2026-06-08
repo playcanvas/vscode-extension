@@ -11,6 +11,7 @@ import type { NativeSyncEngine } from './sync-engine';
 
 const BASE_SCHEME = 'playcanvas-base';
 const REMOTE_SCHEME = 'playcanvas-remote';
+const MERGE_SCHEME = 'playcanvas-merge';
 const REFRESH_DELAY = 200;
 
 type LinkParams = { folderUri: vscode.Uri; engine: NativeSyncEngine };
@@ -32,6 +33,17 @@ class PlayCanvasScm extends Linker<LinkParams> {
     error = signal<Error | undefined>(undefined);
 
     private _resource(uri: vscode.Uri, path: string, state: SyncState) {
+        if (state === 'conflicted') {
+            return {
+                resourceUri: uri,
+                decorations: { tooltip: 'conflict — open the merge editor' },
+                command: {
+                    command: 'playcanvas.resolveMerge',
+                    title: 'Resolve in Merge Editor',
+                    arguments: [uri]
+                }
+            };
+        }
         // incoming: diff against the live remote — working vs base is empty here
         if (state === 'behind') {
             return {
@@ -138,6 +150,15 @@ class PlayCanvasScm extends Linker<LinkParams> {
             provideTextDocumentContent: (uri) => engine.remoteText(relativePath(uri, folderUri)) ?? ''
         });
 
+        // serve ancestor/local/remote for the merge editor (one scheme each)
+        const mergeProvider = (field: 'base' | 'local' | 'remote') =>
+            vscode.workspace.registerTextDocumentContentProvider(`${MERGE_SCHEME}-${field}`, {
+                provideTextDocumentContent: (uri) => engine.mergeInputs(relativePath(uri, folderUri))?.[field] ?? ''
+            });
+        const mergeBase = mergeProvider('base');
+        const mergeLocal = mergeProvider('local');
+        const mergeRemote = mergeProvider('remote');
+
         // recompute status of the saved file (saveAll during pull/push fires
         // one event per buffer — a full refresh each would rescan the project)
         const onSave = vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -185,6 +206,9 @@ class PlayCanvasScm extends Linker<LinkParams> {
             baseChanged.dispose();
             remote.dispose();
             remoteChanged.dispose();
+            mergeBase.dispose();
+            mergeLocal.dispose();
+            mergeRemote.dispose();
             scm.dispose();
         });
 
