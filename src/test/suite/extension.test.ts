@@ -18,6 +18,7 @@ import * as buffer from '../../utils/buffer';
 import { Debouncer } from '../../utils/debouncer';
 import { EventEmitter } from '../../utils/event-emitter';
 import { Mutex } from '../../utils/mutex';
+import { norm } from '../../utils/text';
 import { hash, tryCatch, withTimeout } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
@@ -3034,6 +3035,73 @@ suite('extension', () => {
 
         assert.strictEqual(tdoc.getText(), '// LOCAL\n// ORIGINAL', 'buffer should have local edit again');
         assert.strictEqual(documents.get(asset.uniqueId), '// LOCAL\n// ORIGINAL', 'OT doc should match');
+    });
+
+    test('native undo/redo after CRLF whole-buffer paste stays synced', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'crlf_native_undo.js', content: 'CCC' });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        const editor = await vscode.window.showTextDocument(tdoc);
+        await assertResolves(
+            new Promise<void>((resolve) => {
+                if (!tdoc.isDirty && tdoc.getText() === 'CCC') {
+                    resolve();
+                    return;
+                }
+                const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                    if (e.document.uri.toString() !== uri.toString()) {
+                        return;
+                    }
+                    if (!tdoc.isDirty && tdoc.getText() === 'CCC') {
+                        disposable.dispose();
+                        resolve();
+                    }
+                });
+            }),
+            'initial document settle'
+        );
+
+        await editor.edit((edit) => {
+            edit.setEndOfLine(vscode.EndOfLine.CRLF);
+        });
+        assert.strictEqual(tdoc.eol, vscode.EndOfLine.CRLF, 'document should use CRLF for this regression');
+
+        const pasteOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['AAA\nBBB', { d: 3 }]]);
+        await editor.edit(
+            (edit) => {
+                edit.replace(
+                    new vscode.Range(tdoc.positionAt(0), tdoc.positionAt(tdoc.getText().length)),
+                    'AAA\r\nBBB'
+                );
+            },
+            { undoStopBefore: true, undoStopAfter: true }
+        );
+        await assertResolves(pasteOp, 'CRLF whole-buffer paste op');
+        await waitForIdle('CRLF paste settle');
+
+        assert.strictEqual(norm(tdoc.getText()), 'AAA\nBBB', 'buffer should contain pasted text');
+        assert.strictEqual(documents.get(asset.uniqueId), 'AAA\nBBB', 'OT doc should match pasted buffer');
+
+        const undoOp = assertOpsPromise(`documents:${asset.uniqueId}`, [[{ d: 7 }, 'CCC']]);
+        await vscode.commands.executeCommand('undo');
+        await assertResolves(undoOp, 'native undo op');
+        await waitForIdle('native undo settle');
+
+        assert.strictEqual(norm(tdoc.getText()), 'CCC', 'native undo should revert the buffer');
+        assert.strictEqual(documents.get(asset.uniqueId), 'CCC', 'native undo should sync OT doc');
+
+        const redoOp = assertOpsPromise(`documents:${asset.uniqueId}`, [['AAA\nBBB', { d: 3 }]]);
+        await vscode.commands.executeCommand('redo');
+        await assertResolves(redoOp, 'native redo op');
+        await waitForIdle('native redo settle');
+
+        assert.strictEqual(norm(tdoc.getText()), 'AAA\nBBB', 'native redo should restore pasted text');
+        assert.strictEqual(documents.get(asset.uniqueId), 'AAA\nBBB', 'native redo should sync OT doc');
     });
 
     test('undo skips remote edits - only reverts local', async () => {

@@ -953,6 +953,58 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         };
     }
 
+    private _resetNativeHistory(document: vscode.TextDocument, text: string) {
+        const key = `${document.uri}`;
+        void this._writeMutex.atomic([key], async () => {
+            if (this._locks.has(key)) {
+                return;
+            }
+
+            const raw = document.getText();
+            const next = document.eol === vscode.EndOfLine.CRLF ? text.replace(/\n/g, '\r\n') : text;
+            if (raw === next) {
+                return;
+            }
+
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(document.uri, new vscode.Range(document.positionAt(0), document.positionAt(raw.length)), next);
+
+            this._locks.add(key);
+            const [err, applied] = await tryCatch(Promise.resolve(vscode.workspace.applyEdit(edit)));
+            this._locks.delete(key);
+            if (err || !applied) {
+                this._log.warn(`native history reset failed ${document.uri}`);
+            }
+        });
+    }
+
+    private _syncNativeHistory(
+        document: vscode.TextDocument,
+        path: string,
+        file: { doc: { text: string; apply: (op: ShareDbTextOp) => void }; dirty: boolean },
+        mgr: UndoManager | undefined,
+        redo: boolean
+    ) {
+        const op = redo ? mgr?.redo(file.doc.text) : mgr?.undo(file.doc.text);
+        if (!op) {
+            this._resetNativeHistory(document, file.doc.text);
+            return;
+        }
+
+        const expected = ottext.apply(file.doc.text, op) as string;
+        file.doc.apply(op);
+
+        const wasDirty = file.dirty;
+        file.dirty = true;
+        if (!wasDirty) {
+            this._events.emit('asset:file:dirty', path, true);
+        }
+
+        if (norm(document.getText()) !== expected) {
+            this._resetNativeHistory(document, expected);
+        }
+    }
+
     private _watchDocument(folderUri: vscode.Uri, projectManager: ProjectManager) {
         for (const open of vscode.workspace.textDocuments) {
             if (!uriStartsWith(open.uri, folderUri)) {
@@ -1030,6 +1082,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            const mgr = this._undos.get(document.uri.path);
+            if (reason === vscode.TextDocumentChangeReason.Undo || reason === vscode.TextDocumentChangeReason.Redo) {
+                this._syncNativeHistory(document, path, file, mgr, reason === vscode.TextDocumentChangeReason.Redo);
+                return;
+            }
+
             // check if content actually changed (avoid echo and discard)
             // normalize to LF — canonical OT state is always LF
             const text = norm(document.getText());
@@ -1038,17 +1096,16 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // skip discard/revert: buffer reverted to stale disk content,
-            // not a real edit. undo/redo are real edits that must reconcile OT state.
+            // not a real edit. native undo/redo is handled above.
             if (!reason && !document.isDirty && hash(text) === this._diskHash.get(document.uri.path)) {
                 return;
             }
 
             // submit ops via OTDocument (applies locally + submits to ShareDB)
             const ops = vscode2sharedb(document, contentChanges, file.doc.text);
-            const mgr = this._undos.get(document.uri.path);
             for (const op of ops) {
                 // push inverse to undo stack for local edits
-                // (undo/redo apply under _locks, so they never reach here)
+                // (extension undo/redo apply under _locks, so they never reach here)
                 if (mgr) {
                     const snap = file.doc.text;
                     const inv = ottext.semanticInvert(snap, op) as ShareDbTextOp;
