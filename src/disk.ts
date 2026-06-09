@@ -1106,9 +1106,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
-            // skip discard/revert: buffer reverted to stale disk content,
-            // not a real edit. native undo/redo is handled above.
-            if (!reason && !document.isDirty && hash(text) === this._diskHash.get(document.uri.path)) {
+            // skip discard/revert: a non-undo/redo change that lands the buffer back on
+            // the on-disk bytes is a revert (Don't Save / Revert File), never a real edit.
+            // the disk file is the derived save-only artifact (server treats the live OT
+            // doc as source of truth), so pushing it upstream rolls every collaborator back
+            // to stale content (#315). the native close dialog can fire this while
+            // document.isDirty is still true, so do NOT gate on the transient dirty flag.
+            // undo/redo carry a reason and are handled above.
+            if (!reason && hash(text) === this._diskHash.get(document.uri.path)) {
                 return;
             }
 

@@ -1677,6 +1677,79 @@ suite('extension', () => {
         assert.strictEqual(ops.length, 0, 'should not submit rollback ops on dirty close');
     });
 
+    test('file close - discard while still dirty does not roll back collaborator edits', async () => {
+        // regression #315: a collaborator's remote op lands in an inactive tab and marks
+        // it dirty. closing + "Don't Save" reverts the buffer to the stale on-disk bytes,
+        // firing onChange with no reason while isDirty is still true (the native close
+        // dialog fires before the dirty flag clears). the old guard gated on !isDirty, so
+        // it pushed that revert upstream as a rollback op, wiping the collaborator's edits
+        // for everyone. open-file remote ops never touch disk, so _diskHash stays at the
+        // last-saved hash and the revert lands exactly on it.
+
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'discard_dirty_collab.js', content: '// ORIGINAL' });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+        await waitForIdle('initial open settle');
+
+        // collaborator edit arrives as a remote op on the open (inactive) tab
+        const collab = '// COLLAB B EDIT\n// ORIGINAL';
+        const changed = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && e.document.getText() === collab) {
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+        doc.submitOp(['// COLLAB B EDIT\n'], { source: 'remote' });
+        await assertResolves(changed, 'collaborator edit buffer apply');
+        await waitForIdle('remote op settle');
+
+        assert.strictEqual(tdoc.getText(), collab, 'buffer should hold collaborator edit');
+        assert.strictEqual(tdoc.isDirty, true, 'remote op into open tab should mark it dirty');
+        assert.strictEqual(documents.get(asset.uniqueId), collab, 'OT doc should hold collaborator edit');
+
+        // capture dirty state when the revert fires — proves we exercise the isDirty=true
+        // path (the native-dialog timing), not the trivially-skipped isDirty=false path
+        let dirtyAtRevert: boolean | undefined;
+        const reverted = new Promise<void>((resolve) => {
+            const disposable = vscode.workspace.onDidChangeTextDocument((e) => {
+                if (e.document.uri.toString() === uri.toString() && e.document.getText() === '// ORIGINAL') {
+                    dirtyAtRevert = e.document.isDirty;
+                    disposable.dispose();
+                    resolve();
+                }
+            });
+        });
+
+        doc.submitOp.resetHistory();
+
+        // simulate "Don't Save": buffer reverts to on-disk content as a forward edit, so
+        // isDirty stays true (the revert command would clear it — that path is covered by
+        // the discard-after-first-keystroke test above)
+        const revert = new vscode.WorkspaceEdit();
+        revert.delete(uri, new vscode.Range(0, 0, 1, 0));
+        await vscode.workspace.applyEdit(revert);
+        await assertResolves(reverted, 'revert to disk change');
+        await waitForIdle('revert settle');
+
+        assert.strictEqual(dirtyAtRevert, true, 'revert must fire while still dirty to exercise #315');
+        assert.strictEqual(doc.submitOp.callCount, 0, 'discard revert must not submit a rollback op (#315)');
+        assert.strictEqual(
+            documents.get(asset.uniqueId),
+            collab,
+            'server doc must retain collaborator edit, not roll back'
+        );
+    });
+
     test('file save - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
