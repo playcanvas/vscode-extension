@@ -26,7 +26,9 @@ export const delta = (from: string, to: string): ShareDbTextOp | null => {
     const { prefix, suffix } = diff(from, to);
     const del = from.length - prefix - suffix;
     const ins = to.substring(prefix, to.length - suffix);
-    return del > 0 && ins.length > 0 ? [prefix, ins, { d: del }] : del > 0 ? [prefix, { d: del }] : [prefix, ins];
+    // omit a leading 0 skip — ot-text checkOp rejects skip=0 (#318)
+    const op: ShareDbTextOp = del > 0 && ins.length > 0 ? [ins, { d: del }] : del > 0 ? [{ d: del }] : [ins];
+    return prefix ? [prefix, ...op] : op;
 };
 
 export const stat = (op: ShareDbTextOp) => {

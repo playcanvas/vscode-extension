@@ -820,13 +820,25 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _watchUndoRedo(folderUri: vscode.Uri, projectManager: ProjectManager) {
-        // track active editor to gate keybindings
-        const updateCtx = (e?: vscode.TextEditor) => {
-            const collab = e && uriStartsWith(e.document.uri, folderUri);
-            vscode.commands.executeCommand('setContext', 'playcanvas.active', !!collab);
+        // gate the undo/redo keybindings on an active collab editor. re-derive
+        // from the LIVE activeTextEditor on focus/visible-editor changes too, not
+        // just active-editor changes — a stale context lets Ctrl+Z fall through to
+        // native undo, which bypasses OT sync. (the native-undo handler stays as a
+        // safety net for Edit-menu / palette undo, which keybindings can't gate.)
+        let active: boolean | undefined;
+        const updateCtx = () => {
+            const e = vscode.window.activeTextEditor;
+            const next = !!(e && uriStartsWith(e.document.uri, folderUri));
+            if (next === active) {
+                return;
+            }
+            active = next;
+            vscode.commands.executeCommand('setContext', 'playcanvas.active', next);
         };
-        updateCtx(vscode.window.activeTextEditor);
+        updateCtx();
         const onEditor = vscode.window.onDidChangeActiveTextEditor(updateCtx);
+        const onVisible = vscode.window.onDidChangeVisibleTextEditors(updateCtx);
+        const onWindow = vscode.window.onDidChangeWindowState(updateCtx);
 
         // shared apply logic for undo/redo — op pop + apply are atomic inside mutex
         const applyOp = async (
@@ -837,56 +849,53 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         ) => {
             this._locks.add(`${uri}`);
             await tryCatch(async () => {
-                // capture pre-apply canonical text for correct buffer-space delta
-                const pre = file.doc.text;
-
                 // apply to OT canonical state (submits to ShareDB)
                 file.doc.apply(op);
+                const target = file.doc.text;
 
-                // apply visual edit to buffer
+                // write the buffer to match canonical via a minimal diff against
+                // the ACTUAL current buffer — never assume it equals pre-op
+                // canonical. a stale buffer (e.g. a prior buffer write that failed
+                // to land) would otherwise be misread as concurrent user input and
+                // the op transformed against a phantom divergence, duplicating
+                // content. diffing against the live buffer self-heals any drift.
                 const doc = await vscode.workspace.openTextDocument(uri);
-                const raw = doc.getText();
-                const buf = norm(raw);
+                const buf = norm(doc.getText());
+                const bufOp = delta(buf, target);
 
-                // delta from pre-apply canonical to buffer gives true user divergence
-                const userOp = delta(pre, buf);
-                const bufOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
-                const edit = sharedb2vscode(doc, uri, [bufOp], buf);
-                const applied = await vscode.workspace.applyEdit(edit);
-
-                if (!applied) {
-                    this._log.warn(`sync.undo.apply failed ${uri}`);
-                    return;
-                }
-
-                // reconcile: recover keystrokes typed during applyEdit await
-                const postText = norm(doc.getText());
-                const expected = ottext.apply(buf, bufOp) as string;
-
-                const late = delta(expected, postText);
-                if (late) {
-                    const adv = delta(expected, file.doc.text);
-                    const adjusted = adv ? (ottext.transform(late, adv, 'left') as ShareDbTextOp) : late;
-                    file.doc.apply(adjusted);
-                }
-
-                // cursor: position after the buffer-space op's primary edit
-                const active = vscode.window.activeTextEditor;
-                if (active && active.document.uri.toString() === uri.toString()) {
-                    let cursor = 0;
-                    if (bufOp.length === 1) {
-                        if (typeof bufOp[0] === 'string') {
-                            cursor = bufOp[0].length;
+                if (bufOp) {
+                    const edit = sharedb2vscode(doc, uri, [bufOp], buf);
+                    const applied = await vscode.workspace.applyEdit(edit);
+                    if (!applied) {
+                        this._log.warn(`sync.undo.apply failed ${uri}`);
+                    } else {
+                        // reconcile keystrokes typed during the applyEdit await
+                        const late = delta(target, norm(doc.getText()));
+                        if (late) {
+                            const adv = delta(target, file.doc.text);
+                            const adjusted = adv ? (ottext.transform(late, adv, 'left') as ShareDbTextOp) : late;
+                            file.doc.apply(adjusted);
                         }
-                    } else if (bufOp.length > 1 && typeof bufOp[0] === 'number') {
-                        cursor = bufOp[0];
-                        if (typeof bufOp[1] === 'string') {
-                            cursor += bufOp[1].length;
+
+                        // cursor: position after the op's primary edit
+                        const active = vscode.window.activeTextEditor;
+                        if (active && active.document.uri.toString() === uri.toString()) {
+                            let cursor = 0;
+                            if (bufOp.length === 1) {
+                                if (typeof bufOp[0] === 'string') {
+                                    cursor = bufOp[0].length;
+                                }
+                            } else if (bufOp.length > 1 && typeof bufOp[0] === 'number') {
+                                cursor = bufOp[0];
+                                if (typeof bufOp[1] === 'string') {
+                                    cursor += bufOp[1].length;
+                                }
+                            }
+                            const pos = doc.positionAt(cursor);
+                            active.selection = new vscode.Selection(pos, pos);
+                            active.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.Default);
                         }
                     }
-                    const pos = doc.positionAt(cursor);
-                    active.selection = new vscode.Selection(pos, pos);
-                    active.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.Default);
                 }
 
                 // mark dirty
@@ -947,10 +956,64 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         return () => {
             onEditor.dispose();
+            onVisible.dispose();
+            onWindow.dispose();
             undoCmd.dispose();
             redoCmd.dispose();
             vscode.commands.executeCommand('setContext', 'playcanvas.active', false);
         };
+    }
+
+    private _resetNativeHistory(document: vscode.TextDocument, text: string) {
+        const key = `${document.uri}`;
+        void this._writeMutex.atomic([key], async () => {
+            if (this._locks.has(key)) {
+                return;
+            }
+
+            const raw = document.getText();
+            const next = document.eol === vscode.EndOfLine.CRLF ? text.replace(/\n/g, '\r\n') : text;
+            if (raw === next) {
+                return;
+            }
+
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(document.uri, new vscode.Range(document.positionAt(0), document.positionAt(raw.length)), next);
+
+            this._locks.add(key);
+            const [err, applied] = await tryCatch(Promise.resolve(vscode.workspace.applyEdit(edit)));
+            this._locks.delete(key);
+            if (err || !applied) {
+                this._log.warn(`native history reset failed ${document.uri}`);
+            }
+        });
+    }
+
+    private _syncNativeHistory(
+        document: vscode.TextDocument,
+        path: string,
+        file: { doc: { text: string; apply: (op: ShareDbTextOp) => void }; dirty: boolean },
+        mgr: UndoManager | undefined,
+        redo: boolean
+    ) {
+        const op = redo ? mgr?.redo(file.doc.text) : mgr?.undo(file.doc.text);
+        if (!op) {
+            this._resetNativeHistory(document, file.doc.text);
+            return;
+        }
+
+        const expected = ottext.apply(file.doc.text, op) as string;
+        file.doc.apply(op);
+
+        const wasDirty = file.dirty;
+        file.dirty = true;
+        if (!wasDirty) {
+            this._events.emit('asset:file:dirty', path, true);
+        }
+
+        if (norm(document.getText()) !== expected) {
+            this._resetNativeHistory(document, expected);
+        }
     }
 
     private _watchDocument(folderUri: vscode.Uri, projectManager: ProjectManager) {
@@ -1030,6 +1093,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            const mgr = this._undos.get(document.uri.path);
+            if (reason === vscode.TextDocumentChangeReason.Undo || reason === vscode.TextDocumentChangeReason.Redo) {
+                this._syncNativeHistory(document, path, file, mgr, reason === vscode.TextDocumentChangeReason.Redo);
+                return;
+            }
+
             // check if content actually changed (avoid echo and discard)
             // normalize to LF — canonical OT state is always LF
             const text = norm(document.getText());
@@ -1038,17 +1107,16 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // skip discard/revert: buffer reverted to stale disk content,
-            // not a real edit. undo/redo are real edits that must reconcile OT state.
+            // not a real edit. native undo/redo is handled above.
             if (!reason && !document.isDirty && hash(text) === this._diskHash.get(document.uri.path)) {
                 return;
             }
 
             // submit ops via OTDocument (applies locally + submits to ShareDB)
             const ops = vscode2sharedb(document, contentChanges, file.doc.text);
-            const mgr = this._undos.get(document.uri.path);
             for (const op of ops) {
                 // push inverse to undo stack for local edits
-                // (undo/redo apply under _locks, so they never reach here)
+                // (extension undo/redo apply under _locks, so they never reach here)
                 if (mgr) {
                     const snap = file.doc.text;
                     const inv = ottext.semanticInvert(snap, op) as ShareDbTextOp;
