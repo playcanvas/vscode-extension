@@ -820,13 +820,25 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _watchUndoRedo(folderUri: vscode.Uri, projectManager: ProjectManager) {
-        // track active editor to gate keybindings
-        const updateCtx = (e?: vscode.TextEditor) => {
-            const collab = e && uriStartsWith(e.document.uri, folderUri);
-            vscode.commands.executeCommand('setContext', 'playcanvas.active', !!collab);
+        // gate the undo/redo keybindings on an active collab editor. re-derive
+        // from the LIVE activeTextEditor on focus/visible-editor changes too, not
+        // just active-editor changes — a stale context lets Ctrl+Z fall through to
+        // native undo, which bypasses OT sync. (the native-undo handler stays as a
+        // safety net for Edit-menu / palette undo, which keybindings can't gate.)
+        let active: boolean | undefined;
+        const updateCtx = () => {
+            const e = vscode.window.activeTextEditor;
+            const next = !!(e && uriStartsWith(e.document.uri, folderUri));
+            if (next === active) {
+                return;
+            }
+            active = next;
+            vscode.commands.executeCommand('setContext', 'playcanvas.active', next);
         };
-        updateCtx(vscode.window.activeTextEditor);
+        updateCtx();
         const onEditor = vscode.window.onDidChangeActiveTextEditor(updateCtx);
+        const onVisible = vscode.window.onDidChangeVisibleTextEditors(updateCtx);
+        const onWindow = vscode.window.onDidChangeWindowState(updateCtx);
 
         // shared apply logic for undo/redo — op pop + apply are atomic inside mutex
         const applyOp = async (
@@ -944,6 +956,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         return () => {
             onEditor.dispose();
+            onVisible.dispose();
+            onWindow.dispose();
             undoCmd.dispose();
             redoCmd.dispose();
             vscode.commands.executeCommand('setContext', 'playcanvas.active', false);
