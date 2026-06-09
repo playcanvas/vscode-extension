@@ -25,13 +25,20 @@ type Manifest = {
 
 type ChildProcess = typeof childProcess;
 
-const npm = () => (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+const WIN = process.platform === 'win32';
+
+const npm = () => (WIN ? 'npm.cmd' : 'npm');
 
 const normalize = (version?: string) => (version || PLAYCANVAS_VERSION).replace(/^v/i, '');
 
 const run = async (proc: ChildProcess, cmd: string, args: string[], cwd: string) => {
     return new Promise<string>((resolve, reject) => {
-        const child = proc.spawn(cmd, args, { cwd, windowsHide: true });
+        // npm.cmd is a batch file — windows needs shell:true to run it, and shell space-joins args, so quote any with spaces
+        const child = proc.spawn(cmd, WIN ? args.map((a) => (/\s/.test(a) ? `"${a}"` : a)) : args, {
+            cwd,
+            windowsHide: true,
+            shell: WIN
+        });
         const chunks: string[] = [];
         const timer = setTimeout(() => {
             child.kill();
