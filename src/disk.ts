@@ -837,56 +837,53 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         ) => {
             this._locks.add(`${uri}`);
             await tryCatch(async () => {
-                // capture pre-apply canonical text for correct buffer-space delta
-                const pre = file.doc.text;
-
                 // apply to OT canonical state (submits to ShareDB)
                 file.doc.apply(op);
+                const target = file.doc.text;
 
-                // apply visual edit to buffer
+                // write the buffer to match canonical via a minimal diff against
+                // the ACTUAL current buffer — never assume it equals pre-op
+                // canonical. a stale buffer (e.g. a prior buffer write that failed
+                // to land) would otherwise be misread as concurrent user input and
+                // the op transformed against a phantom divergence, duplicating
+                // content. diffing against the live buffer self-heals any drift.
                 const doc = await vscode.workspace.openTextDocument(uri);
-                const raw = doc.getText();
-                const buf = norm(raw);
+                const buf = norm(doc.getText());
+                const bufOp = delta(buf, target);
 
-                // delta from pre-apply canonical to buffer gives true user divergence
-                const userOp = delta(pre, buf);
-                const bufOp = userOp ? (ottext.transform(op, userOp, 'right') as ShareDbTextOp) : op;
-                const edit = sharedb2vscode(doc, uri, [bufOp], buf);
-                const applied = await vscode.workspace.applyEdit(edit);
-
-                if (!applied) {
-                    this._log.warn(`sync.undo.apply failed ${uri}`);
-                    return;
-                }
-
-                // reconcile: recover keystrokes typed during applyEdit await
-                const postText = norm(doc.getText());
-                const expected = ottext.apply(buf, bufOp) as string;
-
-                const late = delta(expected, postText);
-                if (late) {
-                    const adv = delta(expected, file.doc.text);
-                    const adjusted = adv ? (ottext.transform(late, adv, 'left') as ShareDbTextOp) : late;
-                    file.doc.apply(adjusted);
-                }
-
-                // cursor: position after the buffer-space op's primary edit
-                const active = vscode.window.activeTextEditor;
-                if (active && active.document.uri.toString() === uri.toString()) {
-                    let cursor = 0;
-                    if (bufOp.length === 1) {
-                        if (typeof bufOp[0] === 'string') {
-                            cursor = bufOp[0].length;
+                if (bufOp) {
+                    const edit = sharedb2vscode(doc, uri, [bufOp], buf);
+                    const applied = await vscode.workspace.applyEdit(edit);
+                    if (!applied) {
+                        this._log.warn(`sync.undo.apply failed ${uri}`);
+                    } else {
+                        // reconcile keystrokes typed during the applyEdit await
+                        const late = delta(target, norm(doc.getText()));
+                        if (late) {
+                            const adv = delta(target, file.doc.text);
+                            const adjusted = adv ? (ottext.transform(late, adv, 'left') as ShareDbTextOp) : late;
+                            file.doc.apply(adjusted);
                         }
-                    } else if (bufOp.length > 1 && typeof bufOp[0] === 'number') {
-                        cursor = bufOp[0];
-                        if (typeof bufOp[1] === 'string') {
-                            cursor += bufOp[1].length;
+
+                        // cursor: position after the op's primary edit
+                        const active = vscode.window.activeTextEditor;
+                        if (active && active.document.uri.toString() === uri.toString()) {
+                            let cursor = 0;
+                            if (bufOp.length === 1) {
+                                if (typeof bufOp[0] === 'string') {
+                                    cursor = bufOp[0].length;
+                                }
+                            } else if (bufOp.length > 1 && typeof bufOp[0] === 'number') {
+                                cursor = bufOp[0];
+                                if (typeof bufOp[1] === 'string') {
+                                    cursor += bufOp[1].length;
+                                }
+                            }
+                            const pos = doc.positionAt(cursor);
+                            active.selection = new vscode.Selection(pos, pos);
+                            active.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.Default);
                         }
                     }
-                    const pos = doc.positionAt(cursor);
-                    active.selection = new vscode.Selection(pos, pos);
-                    active.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.Default);
                 }
 
                 // mark dirty
