@@ -13,7 +13,8 @@ import {
     PING_INTERVAL_MS,
     PONG_TIMEOUT_MS,
     RECONNECT_BASE_MS,
-    RECONNECT_MAX_MS
+    RECONNECT_MAX_MS,
+    RESUME_GAP_MS
 } from './constants';
 import { latency } from './latency';
 
@@ -95,6 +96,8 @@ class Messenger extends EventEmitter<EventMap> {
     private _getToken: (() => Promise<string | undefined>) | null = null;
 
     private _lastPong = 0;
+
+    private _lastTick = 0;
 
     private _pings: number[] = [];
 
@@ -193,6 +196,7 @@ class Messenger extends EventEmitter<EventMap> {
         // reset backoff on successful auth
         this._reconnectAttempt = 0;
         this._lastPong = Date.now();
+        this._lastTick = Date.now();
         this._pings.length = 0;
 
         // reset keep alive
@@ -200,6 +204,26 @@ class Messenger extends EventEmitter<EventMap> {
             clearInterval(this._alive);
         }
         this._alive = setInterval(() => {
+            // suspend/resume guard: interval starved past the resume gap means wall-clock
+            // jumped (sleep/lock); the socket may be a half-open zombie — force reconnect (#316)
+            const now = Date.now();
+            if (now - this._lastTick > RESUME_GAP_MS) {
+                this._log.warn('resume detected, forcing reconnect');
+                // stop the heartbeat and tear down without a close handshake — a dead
+                // peer never replies, pinning the socket CLOSING for ws's 30s timeout
+                if (this._alive) {
+                    clearInterval(this._alive);
+                    this._alive = null;
+                }
+                if (WEB) {
+                    socket.close(4001, 'resume');
+                } else {
+                    socket.terminate();
+                }
+                return;
+            }
+            this._lastTick = now;
+
             // check for pong timeout
             if (Date.now() - this._lastPong > PONG_TIMEOUT_MS) {
                 this._log.warn('pong timeout, closing socket');

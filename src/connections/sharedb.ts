@@ -19,6 +19,7 @@ import {
     PONG_TIMEOUT_MS,
     RECONNECT_BASE_MS,
     RECONNECT_MAX_MS,
+    RESUME_GAP_MS,
     SUBSCRIBE_TIMEOUT_MS
 } from './constants';
 import { delay, latency } from './latency';
@@ -60,6 +61,8 @@ class ShareDb extends EventEmitter<EventMap> {
     private _getToken: (() => Promise<string | undefined>) | null = null;
 
     private _lastPong = 0;
+
+    private _lastTick = 0;
 
     url: string;
 
@@ -173,6 +176,7 @@ class ShareDb extends EventEmitter<EventMap> {
         this._reconnectAttempt = 0;
         this._authRetried = false;
         this._lastPong = Date.now();
+        this._lastTick = Date.now();
 
         if (this._connection) {
             this._connection.bindToSocket(socket as Socket);
@@ -188,7 +192,28 @@ class ShareDb extends EventEmitter<EventMap> {
             clearInterval(this._alive);
         }
         this._alive = setInterval(() => {
-            // check for pong timeout — server pings every 1s so we should always receive data
+            // suspend/resume guard: interval starved past the resume gap means wall-clock
+            // jumped (sleep/lock); the socket may be a half-open zombie — force reconnect (#316)
+            const now = Date.now();
+            if (now - this._lastTick > RESUME_GAP_MS) {
+                this._log.warn('resume detected, forcing reconnect');
+                // stop the heartbeat and tear down without a close handshake — a dead
+                // peer never replies, pinning the socket CLOSING for ws's 30s timeout
+                if (this._alive) {
+                    clearInterval(this._alive);
+                    this._alive = null;
+                }
+                if (WEB) {
+                    socket.close(4001, 'resume');
+                } else {
+                    socket.terminate();
+                }
+                return;
+            }
+            this._lastTick = now;
+
+            // check for pong timeout — inbound data is the pp echo of our own 1s ping;
+            // server ws pings are control frames that never surface as messages
             if (Date.now() - this._lastPong > PONG_TIMEOUT_MS) {
                 this._log.warn('pong timeout, closing socket');
                 socket.close(4001, 'pong timeout');

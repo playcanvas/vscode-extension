@@ -2,9 +2,11 @@ import * as assert from 'assert';
 
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
+import { WebSocketServer } from 'ws';
 
 import * as authModule from '../../auth';
 import { NAME, PUBLISHER } from '../../config';
+import { RESUME_GAP_MS } from '../../connections/constants';
 import * as messengerModule from '../../connections/messenger';
 import * as relayModule from '../../connections/relay';
 import * as restModule from '../../connections/rest';
@@ -19,7 +21,7 @@ import { Debouncer } from '../../utils/debouncer';
 import { EventEmitter } from '../../utils/event-emitter';
 import { Mutex } from '../../utils/mutex';
 import { norm } from '../../utils/text';
-import { hash, tryCatch, withTimeout } from '../../utils/utils';
+import { hash, tryCatch, tryCatchSync, withTimeout } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
 import {
@@ -3621,5 +3623,87 @@ suite('extension', () => {
             .getCalls()
             .find((c) => `${c.args[0]}`.includes('mock 500: assetCreate refused'));
         assert.ok(errorCall, 'showErrorMessage must surface the rest failure');
+    });
+});
+
+// regression #316: after an OS suspend (windows lock for hours) the websocket can
+// return as a half-open zombie whose buffered traffic keeps refreshing ShareDb._lastPong,
+// so the pong-timeout never trips, the doc never re-syncs, and resumed edits roll back
+// collaborators. the resume guard fires on the wall-clock jump regardless of inbound
+// traffic. exercises the real ShareDb (not the mock) against a local ws server; the
+// identical guard is mirrored in Messenger and Relay.
+suite('connections — resume guard (#316)', () => {
+    // MockShareDb extends the real class, so its prototype is the unstubbed ShareDb
+    const RealShareDb = Object.getPrototypeOf(MockShareDb) as typeof sharedbModule.ShareDb;
+    const clock = sinon.createSandbox();
+    let server: WebSocketServer;
+    let port = 0;
+    let connections = 0;
+    let keepalives: NodeJS.Timeout[] = [];
+    let sb: InstanceType<typeof sharedbModule.ShareDb> | undefined;
+
+    suiteSetup(async () => {
+        await new Promise<void>((resolve) => {
+            server = new WebSocketServer({ port: 0 }, () => {
+                port = (server.address() as { port: number }).port;
+                resolve();
+            });
+        });
+        server.on('connection', (ws) => {
+            connections++;
+            ws.on('message', (raw) => {
+                const str = raw.toString();
+                if (str.startsWith('auth')) {
+                    ws.send(`auth${JSON.stringify({ id: 1 })}`);
+                    // simulate buffered server traffic delivered on resume — any inbound
+                    // message refreshes ShareDb._lastPong, masking the dead socket
+                    keepalives.push(setInterval(() => ws.readyState === ws.OPEN && ws.send('hb:0'), 200));
+                    return;
+                }
+                // complete the sharedb protocol handshake so Connection.ping() can send
+                const [, msg] = tryCatchSync(() => JSON.parse(str));
+                if (msg?.a === 'hs') {
+                    ws.send(JSON.stringify({ a: 'hs', protocol: 1, protocolMinor: 1, id: '1', type: 'json0' }));
+                }
+            });
+        });
+    });
+
+    suiteTeardown(async () => {
+        keepalives.forEach(clearInterval);
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    setup(() => {
+        connections = 0;
+        keepalives = [];
+    });
+
+    teardown(() => {
+        clock.restore();
+        keepalives.forEach(clearInterval);
+        sb?.disconnect();
+        sb = undefined;
+    });
+
+    test('forces a reconnect on wall-clock jump even while traffic keeps the socket alive', async function () {
+        this.timeout(20000);
+
+        sb = new RealShareDb({ url: `ws://127.0.0.1:${port}`, origin: 'http://localhost' });
+        await sb.connect(async () => 'token');
+        assert.strictEqual(connections, 1, 'should connect once');
+
+        // simulate resume from suspend: wall-clock jumps past the resume gap while the
+        // server keeps sending traffic, so the pong-timeout never trips on its own.
+        // compute target before stubbing — Date.now() in the arg would hit the new stub
+        const jumped = Date.now() + RESUME_GAP_MS + 5000;
+        clock.stub(Date, 'now').returns(jumped);
+
+        // the next heartbeat tick should detect the gap and force-close → reconnect.
+        // poll on iteration count, not Date.now (stubbed) — ~15s real ceiling
+        for (let i = 0; i < 150 && connections < 2; i++) {
+            await new Promise((r) => setTimeout(r, 100));
+        }
+        assert.strictEqual(connections, 2, 'resume guard should force exactly one reconnect');
     });
 });
