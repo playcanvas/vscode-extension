@@ -3626,13 +3626,13 @@ suite('extension', () => {
     });
 });
 
-// regression #316: after an OS suspend (windows lock for hours) the websocket can
+// regression: after an OS suspend (windows lock for hours) the websocket can
 // return as a half-open zombie whose buffered traffic keeps refreshing ShareDb._lastPong,
 // so the pong-timeout never trips, the doc never re-syncs, and resumed edits roll back
 // collaborators. the resume guard fires on the wall-clock jump regardless of inbound
 // traffic. exercises the real ShareDb (not the mock) against a local ws server; the
 // identical guard is mirrored in Messenger and Relay.
-suite('connections — resume guard (#316)', () => {
+suite('connections - suspend recovery', () => {
     // MockShareDb extends the real class, so its prototype is the unstubbed ShareDb
     const RealShareDb = Object.getPrototypeOf(MockShareDb) as typeof sharedbModule.ShareDb;
     const clock = sinon.createSandbox();
