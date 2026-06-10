@@ -147,7 +147,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
         const remoteChanged = new vscode.EventEmitter<vscode.Uri>();
         const remote = vscode.workspace.registerTextDocumentContentProvider(REMOTE_SCHEME, {
             onDidChange: remoteChanged.event,
-            provideTextDocumentContent: (uri) => engine.remoteText(relativePath(uri, folderUri)) ?? ''
+            provideTextDocumentContent: async (uri) => (await engine.remoteText(relativePath(uri, folderUri))) ?? ''
         });
 
         // serve ancestor/local/remote for the merge editor (one scheme each)

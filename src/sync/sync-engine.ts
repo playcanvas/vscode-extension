@@ -41,6 +41,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     private _merges = new Map<number, { base: string; local: string; remote: string }>();
 
+    // push-promoted stubs awaiting their flush ack before release
+    private _promoted = new Set<string>();
+
     error = signal<Error | undefined>(undefined);
 
     changed = signal(0);
@@ -61,19 +64,25 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     baseText(path: string) {
         const file = this._projectManager?.files.get(path);
-        if (!file || file.type !== 'file') {
+        if (!file || file.type === 'folder') {
             return undefined;
         }
         return this._base.get(file.uniqueId)?.text;
     }
 
-    // live remote content (R) for the incoming diff view
-    remoteText(path: string) {
-        const file = this._projectManager?.files.get(path);
-        if (!file || file.type !== 'file') {
+    // remote content (R) for the incoming diff view: live doc when subscribed;
+    // stubs read S3 via REST so a diff click never creates a subscription
+    async remoteText(path: string) {
+        const pm = this._projectManager;
+        const file = pm?.files.get(path);
+        if (!pm || !file || file.type === 'folder') {
             return undefined;
         }
-        return norm(file.doc.text);
+        if (file.type === 'file') {
+            return norm(file.doc.text);
+        }
+        const [err, buf] = await tryCatch(async () => pm.fetchContent(file.uniqueId));
+        return err ? undefined : norm(buffer.toString(buf));
     }
 
     // base/local/remote inputs for a conflicted file's 3-way merge editor
@@ -108,7 +117,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
 
         const file = pm.files.get(path);
-        if (!file || file.type !== 'file') {
+        if (!file || file.type === 'folder') {
             this._status.delete(path);
             return;
         }
@@ -117,20 +126,37 @@ class NativeSyncEngine extends Linker<LinkParams> {
         if (working === undefined) {
             return; // not on disk yet
         }
-        const remote = norm(file.doc.text);
 
-        // seed the base on first sight: treat the current server state as the
-        // last-pulled ancestor. provisional until pull/push lands.
+        // stubs have no live doc — the replicated S3 hash stands in for R, so
+        // closed files classify without subscribing (projects have >1000s)
+        const remote = file.type === 'file' ? hash(norm(file.doc.text)) : pm.fileHash(path);
+        if (remote === undefined) {
+            return;
+        }
+
+        // seed the base on first sight (provisional until pull/push lands):
+        // live doc text when subscribed; for stubs use disk when it matches
+        // the S3 hash, else fetch S3 so the base can anchor a future merge
         let base = this._base.get(file.uniqueId);
         if (!base) {
-            this._base.set(file.uniqueId, remote);
+            if (file.type === 'file') {
+                this._base.set(file.uniqueId, norm(file.doc.text));
+            } else if (hash(working) === remote) {
+                this._base.set(file.uniqueId, working);
+            } else {
+                const [err, buf] = await tryCatch(async () => pm.fetchContent(file.uniqueId));
+                if (err) {
+                    return;
+                }
+                this._base.set(file.uniqueId, norm(buffer.toString(buf)));
+            }
             base = this._base.get(file.uniqueId);
         }
         if (!base) {
             return;
         }
 
-        const state = classify(base.hash, hash(working), hash(remote), working);
+        const state = classify(base.hash, hash(working), remote, working);
         this._status.set(path, state);
         // merge resolved (markers gone) -> drop the stashed merge inputs
         if (state !== 'conflicted') {
@@ -144,7 +170,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
         for (const [path, file] of pm.files) {
-            if (file.type === 'file') {
+            if (file.type !== 'folder') {
                 await this._refresh(path);
             }
         }
@@ -159,6 +185,22 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
         await this._refresh(path);
         this.changed.set((v) => v + 1);
+    }
+
+    // release an engine-initiated subscription so standing docs stay limited
+    // to open editors. skipped if the user opened the file meanwhile
+    private async _release(path: string) {
+        const folderUri = this._folderUri;
+        const pm = this._projectManager;
+        if (!folderUri || !pm) {
+            return;
+        }
+        const uri = vscode.Uri.joinPath(folderUri, path);
+        const open = vscode.workspace.textDocuments.some((d) => !d.isClosed && d.uri.toString() === uri.toString());
+        if (open) {
+            return;
+        }
+        await tryCatch(async () => pm.unsubscribe(path));
     }
 
     // fetch + 3-way merge: bring remote changes into the working tree.
@@ -179,7 +221,25 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
         }
 
-        for (const [path, file] of pm.files) {
+        const pulled: string[] = [];
+        for (const [path, f] of pm.files) {
+            if (f.type === 'folder') {
+                continue;
+            }
+            // stubs subscribe on demand — only when there is something to pull
+            let file = f;
+            if (file.type === 'stub') {
+                const state = this._status.get(path);
+                if (state !== 'behind' && state !== 'both') {
+                    continue;
+                }
+                const promoted = await pm.subscribe(path);
+                if (!promoted) {
+                    continue;
+                }
+                file = promoted;
+                pulled.push(path);
+            }
             if (file.type !== 'file') {
                 continue;
             }
@@ -218,6 +278,11 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._base.set(file.uniqueId, remote);
         }
 
+        // pull never leaves ops pending — release promoted docs right away
+        for (const path of pulled) {
+            await this._release(path);
+        }
+
         await this._base.flush();
         await this._refreshAll();
     }
@@ -240,18 +305,40 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
         }
 
-        for (const [path, file] of pm.files) {
-            if (file.type !== 'file' || this._status.get(path) !== 'modified') {
+        for (const [path, f] of pm.files) {
+            if (f.type === 'folder' || this._status.get(path) !== 'modified') {
                 continue;
             }
             const working = await this._read(folderUri, path);
             if (working === undefined) {
                 continue;
             }
+            // closed-file local edits live on stubs — subscribe to submit.
+            // released on the flush ack (asset:file:save), not here: the doc
+            // has pending ops until then and an early close races the save
+            let file = f;
+            let fresh = false;
+            if (file.type === 'stub') {
+                const promoted = await pm.subscribe(path);
+                if (!promoted) {
+                    continue;
+                }
+                file = promoted;
+                this._promoted.add(path);
+                fresh = true;
+            }
+            if (file.type !== 'file') {
+                continue;
+            }
             const base = this._base.get(file.uniqueId);
             // re-check remote is still unchanged, synchronous with write()'s apply
             // so a remote op can't interleave — went behind mid-push, leave for pull
             if (base && norm(file.doc.text) !== base.text) {
+                // nothing saved, so no ack will release a doc promoted just now
+                if (fresh) {
+                    this._promoted.delete(path);
+                    void this._release(path);
+                }
                 continue;
             }
             // write() diffs against the live doc and marks dirty so save() flushes
@@ -296,9 +383,18 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
         const recompute = (path: string) => void this.refresh(path);
         const onUpdate = this._events.on('asset:file:update', recompute);
-        const onSave = this._events.on('asset:file:save', recompute);
+        // restatus on promote: R upgrades from the S3 hash to the live doc
+        const onSubscribed = this._events.on('asset:file:subscribed', recompute);
+        const onSave = this._events.on('asset:file:save', (path: string) => {
+            void this.refresh(path);
+            // flush landed — release a push-promoted doc
+            if (this._promoted.delete(path)) {
+                void this._release(path);
+            }
+        });
         this._cleanup.push(async () => {
             this._events.off('asset:file:update', onUpdate);
+            this._events.off('asset:file:subscribed', onSubscribed);
             this._events.off('asset:file:save', onSave);
         });
 
@@ -325,6 +421,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._branchId = undefined;
         this._status.clear();
         this._merges.clear();
+        this._promoted.clear();
 
         this._log.info(`unlinked ${folderUri.toString()}`);
         return { folderUri, projectManager, projectId, branchId };

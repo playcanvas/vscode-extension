@@ -457,8 +457,151 @@ suite('sync/sync-engine', () => {
         const e = engine();
         await e.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
         doc.text = 'hello\nremote\n';
-        assert.strictEqual(e.remoteText('a.js'), 'hello\nremote\n');
-        assert.strictEqual(e.remoteText('missing.js'), undefined);
+        assert.strictEqual(await e.remoteText('a.js'), 'hello\nremote\n');
+        assert.strictEqual(await e.remoteText('missing.js'), undefined);
+    });
+
+    test('stub - tracks remote via s3 hash without subscribing', async () => {
+        await writeFile('a.js', 'x\n');
+        let s3 = hash('x\n');
+        const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = { files, fileHash: () => s3 } as unknown as ProjectManager;
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.status('a.js'), 'clean');
+        s3 = hash('x\nremote\n');
+        await e.refresh();
+        assert.strictEqual(e.status('a.js'), 'behind');
+    });
+
+    test('pull - subscribes a behind stub and fast-forwards', async () => {
+        await writeFile('a.js', 'x\n');
+        let s3 = hash('x\n');
+        const doc = { text: 'x\nremote\n' };
+        const files = new Map<string, unknown>([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            fileHash: () => s3,
+            // mirrors ProjectManager.subscribe: promotes the stub in place
+            subscribe: async (p: string) => {
+                const promoted = { type: 'file', uniqueId: 1, doc, dirty: false };
+                files.set(p, promoted);
+                return promoted;
+            },
+            // mirrors ProjectManager.unsubscribe: demotes back to a stub
+            unsubscribe: async (p: string) => {
+                files.set(p, { type: 'stub', uniqueId: 1, dirty: false });
+            }
+        } as unknown as ProjectManager;
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        s3 = hash('x\nremote\n');
+        await e.pull();
+        assert.strictEqual(await readFile('a.js'), 'x\nremote\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+        assert.strictEqual((files.get('a.js') as { type: string }).type, 'stub', 'released after pull');
+    });
+
+    test('subscribe upgrades stub status to the live doc', async () => {
+        await writeFile('a.js', 'x\n');
+        const files = new Map<string, unknown>([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = { files, fileHash: () => hash('x\n') } as unknown as ProjectManager;
+        const events = new EventEmitter<EventMap>();
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.status('a.js'), 'clean');
+        // editor open promotes the stub; the doc carries unflushed remote edits
+        files.set('a.js', { type: 'file', uniqueId: 1, doc: { text: 'x\nremote\n' }, dirty: true });
+        events.emit('asset:file:subscribed', 'a.js', 'x\nremote\n', true);
+        for (let i = 0; i < 50 && e.status('a.js') !== 'behind'; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        assert.strictEqual(e.status('a.js'), 'behind');
+    });
+
+    test('push - releases the promoted doc once the flush lands', async () => {
+        await writeFile('a.js', 'x\n');
+        const doc = {
+            text: 'x\n',
+            apply(op: ShareDbTextOp) {
+                doc.text = ottext.apply(doc.text, op) as string;
+            }
+        };
+        const file = { type: 'file', uniqueId: 1, doc, dirty: false };
+        const files = new Map<string, unknown>([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            fileHash: () => hash('x\n'),
+            subscribe: async (p: string) => {
+                files.set(p, file);
+                return file;
+            },
+            write: async (_p: string, content: Uint8Array) => {
+                const op = delta(doc.text, norm(buffer.toString(content)));
+                if (op) {
+                    doc.apply(op);
+                }
+            },
+            save: () => undefined,
+            unsubscribe: async (p: string) => {
+                files.set(p, { type: 'stub', uniqueId: 1, dirty: file.dirty });
+            }
+        } as unknown as ProjectManager;
+        const events = new EventEmitter<EventMap>();
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\nlocal\n');
+        await e.refresh();
+        await e.push();
+        assert.strictEqual((files.get('a.js') as { type: string }).type, 'file', 'subscribed until flush ack');
+        events.emit('asset:file:save', 'a.js');
+        for (let i = 0; i < 50 && (files.get('a.js') as { type: string }).type !== 'stub'; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        assert.strictEqual((files.get('a.js') as { type: string }).type, 'stub', 'released after flush ack');
+    });
+
+    test('push - subscribes a modified stub and submits', async () => {
+        await writeFile('a.js', 'x\n');
+        const applied: ShareDbTextOp[] = [];
+        const saved: string[] = [];
+        const doc = {
+            text: 'x\n',
+            apply(op: ShareDbTextOp) {
+                applied.push(op);
+                doc.text = ottext.apply(doc.text, op) as string;
+            }
+        };
+        const file = { type: 'file', uniqueId: 1, doc, dirty: false };
+        const files = new Map<string, unknown>([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            fileHash: () => hash('x\n'),
+            subscribe: async (p: string) => {
+                files.set(p, file);
+                return file;
+            },
+            // mirrors ProjectManager.write: delta vs live doc, mark dirty
+            write: async (_p: string, content: Uint8Array) => {
+                const op = delta(doc.text, norm(buffer.toString(content)));
+                if (!op) {
+                    return;
+                }
+                doc.apply(op);
+                file.dirty = true;
+            },
+            save: (p: string) => saved.push(p)
+        } as unknown as ProjectManager;
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\nlocal\n');
+        await e.refresh();
+        assert.strictEqual(e.status('a.js'), 'modified');
+        await e.push();
+        assert.strictEqual(applied.length, 1, 'one op submitted');
+        assert.strictEqual(doc.text, 'x\nlocal\n');
+        assert.deepStrictEqual(saved, ['a.js'], 'flushed to server');
+        assert.strictEqual(e.status('a.js'), 'clean');
     });
 
     test('discard reverts the working file to base', async () => {
