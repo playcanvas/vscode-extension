@@ -200,11 +200,12 @@ class MockRest extends Rest {
                     documents.set(asset.uniqueId, document);
                 }
 
-                // call messenger assetCreated signal
+                // call messenger assetCreated signal — backend sends the asset _id
+                // (uniqueId) here, not item_id (see assets.onAssetCreated)
                 messenger.emit('asset.new', {
                     data: {
                         asset: {
-                            id: asset.item_id,
+                            id: `${asset.uniqueId}`,
                             name: asset.name,
                             type: asset.type,
                             branchId: _branchId

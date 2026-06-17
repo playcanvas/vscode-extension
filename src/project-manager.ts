@@ -996,7 +996,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             if (!file || file.type !== 'folder') {
                 throw this.error.set(() => fail`missing parent folder ${parentPath} of ${path}`);
             }
-            parent = file.uniqueId;
+            // REST keys by item_id; uniqueId (ShareDB _id) only equals item_id on the
+            // branch a folder was created on. fall back for optimistic folders not yet in the map.
+            parent = this._idUniqueId.getR(file.uniqueId) ?? file.uniqueId;
         }
 
         // create rest promise first to use in load promise
@@ -1162,9 +1164,15 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 this._events.on('asset:update', onupdate);
             });
 
-            // rename asset
+            // rename asset (REST keys by item_id, not the ShareDB _id/uniqueId — they
+            // only match on the branch the asset was created on)
             const renamed = guard(
-                this._rest.assetRename(this._projectId, this._branchId, file.uniqueId, newName),
+                this._rest.assetRename(
+                    this._projectId,
+                    this._branchId,
+                    this._idUniqueId.getR(file.uniqueId) ?? file.uniqueId,
+                    newName
+                ),
                 this.error
             );
 

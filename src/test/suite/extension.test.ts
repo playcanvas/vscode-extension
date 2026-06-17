@@ -1120,6 +1120,51 @@ suite('extension', () => {
         assert.deepStrictEqual(created, [parentName, subfolderName, fileName], 'assets should be created in order');
     });
 
+    test('file create - subfolder parent uses item_id not uniqueId (#323)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // simulate a non-main branch: assets get item_id != uniqueId and REST asset
+        // endpoints match parent by item_id only (production semantics). teardown's
+        // resetFailures() clears both flags.
+        rest.distinctAssetIds = true;
+        rest.assetEndpointsUseItemIds = true;
+
+        const parentName = 'branch_parent';
+        const fileName = 'branch_child.js';
+        const fileContent = '// CHILD ON BRANCH';
+
+        rest.assetCreate.resetHistory();
+
+        const parentUri = vscode.Uri.joinPath(folderUri, parentName);
+        const fileUri = vscode.Uri.joinPath(parentUri, fileName);
+
+        const parentCreated = waitForEmit('asset.new', (args) => assetNewName(args, parentName), 'parent asset.new');
+        await vscode.workspace.fs.createDirectory(parentUri);
+        await parentCreated;
+
+        // parent folder now has divergent ids
+        const parentAsset = Array.from(assets.values()).find((a) => a.name === parentName);
+        assert.ok(parentAsset, 'parent folder asset should exist');
+        const parentItemId = parseInt(parentAsset.item_id, 10);
+        assert.notStrictEqual(parentItemId, parentAsset.uniqueId, 'fixture should have item_id != uniqueId');
+
+        // create child file inside the folder — would 400 (parent not found) if uniqueId is sent
+        const fileCreated = waitForEmit('asset.new', (args) => assetNewName(args, fileName), 'file asset.new');
+        await vscode.workspace.fs.writeFile(fileUri, buffer.from(fileContent));
+        await fileCreated;
+        await waitForIdle('branch child create settle');
+
+        const fileCall = rest.assetCreate.getCalls().find((c) => c.args[2].name === fileName);
+        assert.ok(fileCall, 'assetCreate should have been called for the child file');
+        assert.strictEqual(
+            fileCall.args[2].parent,
+            parentItemId,
+            'child create should send the parent folder item_id, not its uniqueId'
+        );
+    });
+
     test('folder create - siblings local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -2310,6 +2355,40 @@ suite('extension', () => {
             call.args,
             [project.id, projectSettings.branch, asset.uniqueId, newName],
             'assetRename args should match'
+        );
+    });
+
+    test('file rename - sends item_id not uniqueId (#323)', async () => {
+        // get folder uri
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        // simulate a non-main branch: item_id != uniqueId and REST asset endpoints
+        // match by item_id only. teardown's resetFailures() clears both flags.
+        rest.distinctAssetIds = true;
+        rest.assetEndpointsUseItemIds = true;
+
+        const oldName = 'branch_rename.js';
+        const newName = 'branch_rename_renamed.js';
+        const document = `console.log('branch rename');\n`;
+        const asset = await assetCreate({ name: oldName, content: document });
+        const itemId = parseInt(asset.item_id, 10);
+        assert.notStrictEqual(itemId, asset.uniqueId, 'fixture should have item_id != uniqueId');
+
+        // rename op would never fire if uniqueId is sent (mock rejects it like the backend)
+        const renamed = assertOpsPromise(`assets:${asset.uniqueId}`, [[{ p: ['name'], oi: newName }]]);
+        rest.assetRename.resetHistory();
+
+        const oldUri = vscode.Uri.joinPath(folderUri, asset.name);
+        const newUri = vscode.Uri.joinPath(folderUri, newName);
+        await assertResolves(vscode.workspace.fs.rename(oldUri, newUri), 'fs.rename');
+        await assertResolves(renamed, 'asset.rename');
+
+        const call = rest.assetRename.getCall(0);
+        assert.deepStrictEqual(
+            call.args,
+            [project.id, projectSettings.branch, itemId, newName],
+            'rename should send the asset item_id, not its uniqueId'
         );
     });
 
