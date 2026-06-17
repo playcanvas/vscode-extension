@@ -249,10 +249,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                const viewing =
-                    this._opened.has(uri.path) ||
-                    vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
-                if (viewing) {
+                if (this._isOpen(uri)) {
                     this._log.debug(`create.remote.open ${uri}`);
                     return;
                 }
@@ -318,6 +315,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
+    // robust open check — `_opened` is a hand-maintained shadow set that can drift;
+    // textDocuments is the source of truth. keeps the watcher from pushing open files upstream
+    private _isOpen(uri: vscode.Uri) {
+        return (
+            this._opened.has(uri.path) ||
+            vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString())
+        );
+    }
+
     private _update(uri: vscode.Uri, op: ShareDbTextOp, content: string, prev: string) {
         const snapshot = norm(content);
         return this._writeMutex.atomic([`${uri}`], async () => {
@@ -326,9 +332,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // check if file is open in editor
-            const viewing =
-                this._opened.has(uri.path) ||
-                vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
+            const viewing = this._isOpen(uri);
 
             // update on disk if not open in editor (avoid conflicts with unsaved buffer content)
             if (!viewing) {
@@ -1335,6 +1339,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         ) {
                                             return;
                                         }
+                                        // open file: editor's onDidChangeTextDocument owns reload+submit;
+                                        // pushing here too races and duplicates content
+                                        if (this._isOpen(op.uri)) {
+                                            this._log.debug(`change.local (atomic open-skip) ${op.uri}`);
+                                            return;
+                                        }
                                         this._log.debug(`change.local (atomic) ${op.uri}`);
                                         await projectManager.write(path, content);
                                         if (this._opened.has(op.uri.path)) {
@@ -1504,8 +1514,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // check if document is not open
-            // NOTE: document change event handles open files
-            if (this._opened.has(uri.path)) {
+            // NOTE: document change event handles open files. use _isOpen, not the raw
+            // _opened set — a stale set lets the watcher push an open file's content
+            // upstream, racing the editor path and duplicating content on the server
+            if (this._isOpen(uri)) {
                 return;
             }
 
