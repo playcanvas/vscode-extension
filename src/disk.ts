@@ -90,8 +90,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _projectManager?: ProjectManager;
 
-    private _opened = new Set<string>();
-
     private _echo: Map<string, string> = new Map<string, string>();
 
     private _locks = new Set<string>();
@@ -249,10 +247,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                const viewing =
-                    this._opened.has(uri.path) ||
-                    vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
-                if (viewing) {
+                if (this._isOpen(uri)) {
                     this._log.debug(`create.remote.open ${uri}`);
                     return;
                 }
@@ -318,6 +313,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
+    // open check — textDocuments is the source of truth. keeps the watcher from
+    // pushing open files upstream, racing the editor path and duplicating content
+    private _isOpen(uri: vscode.Uri) {
+        return vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
+    }
+
     private _update(uri: vscode.Uri, op: ShareDbTextOp, content: string, prev: string) {
         const snapshot = norm(content);
         return this._writeMutex.atomic([`${uri}`], async () => {
@@ -326,9 +327,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // check if file is open in editor
-            const viewing =
-                this._opened.has(uri.path) ||
-                vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
+            const viewing = this._isOpen(uri);
 
             // update on disk if not open in editor (avoid conflicts with unsaved buffer content)
             if (!viewing) {
@@ -514,7 +513,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // open files: disk writes only via VS Code's native save.
             // no document.save() to avoid triggering formatOnSave.
-            if (this._opened.has(uri.path)) {
+            if (this._isOpen(uri)) {
                 const document = await vscode.workspace.openTextDocument(uri);
 
                 // empty documents: flush to disk and revert to clear mtime
@@ -545,7 +544,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // undo inverses reference pre-reload OT history — clear so undo can't resurrect missing content
         this._undos.get(uri.path)?.clear();
 
-        if (this._opened.has(uri.path)) {
+        if (this._isOpen(uri)) {
             // reconcile buffer with live ShareDB doc after subscribe
             await this._writeMutex.atomic([`${uri}`], async () => {
                 this._locks.add(`${uri}`);
@@ -623,7 +622,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private async _reconcile(uri: vscode.Uri, path: string, type: 'file' | 'folder') {
-        if (type !== 'file' || !this._opened.has(uri.path)) {
+        if (type !== 'file' || !this._isOpen(uri)) {
             return;
         }
 
@@ -799,7 +798,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const assetFileFailed = this._events.on('asset:file:failed', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-            if (!doc || !this._opened.has(uri.path) || doc.isDirty) {
+            if (!doc || doc.isDirty) {
                 return;
             }
             await this._dirty(doc);
@@ -1022,7 +1021,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 continue;
             }
             const path = relativePath(open.uri, folderUri);
-            this._opened.add(open.uri.path);
             this._undos.set(open.uri.path, new UndoManager());
             if (!this._diskHash.has(open.uri.path)) {
                 this._diskHash.set(open.uri.path, hash(norm(open.getText())));
@@ -1035,7 +1033,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
             const path = relativePath(document.uri, folderUri);
-            this._opened.add(document.uri.path);
             this._undos.set(document.uri.path, new UndoManager());
             this._diskHash.set(document.uri.path, hash(norm(document.getText())));
             this._events.emit('asset:doc:open', path);
@@ -1046,7 +1043,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
             const path = relativePath(document.uri, folderUri);
-            this._opened.delete(document.uri.path);
             this._undos.get(document.uri.path)?.clear();
             this._undos.delete(document.uri.path);
             this._diskHash.delete(document.uri.path);
@@ -1335,15 +1331,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         ) {
                                             return;
                                         }
+                                        // open file: editor's onDidChangeTextDocument owns reload+submit;
+                                        // pushing here too races and duplicates content
+                                        if (this._isOpen(op.uri)) {
+                                            this._log.debug(`change.local (atomic open-skip) ${op.uri}`);
+                                            return;
+                                        }
                                         this._log.debug(`change.local (atomic) ${op.uri}`);
                                         await projectManager.write(path, content);
-                                        if (this._opened.has(op.uri.path)) {
-                                            const doc = vscode.workspace.textDocuments.find(
-                                                (d) => d.uri.path === op.uri.path
-                                            );
-                                            if (doc) {
-                                                this._dirty(doc);
-                                            }
+                                        // dirtify if the file is open in an editor
+                                        const doc = vscode.workspace.textDocuments.find(
+                                            (d) => d.uri.path === op.uri.path
+                                        );
+                                        if (doc) {
+                                            this._dirty(doc);
                                         }
                                         return;
                                     }
@@ -1410,13 +1411,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     await projectManager.write(path, content);
 
                                     // dirtify if file was opened while change was deferred
-                                    if (this._opened.has(op.uri.path)) {
-                                        const doc = vscode.workspace.textDocuments.find(
-                                            (d) => d.uri.path === op.uri.path
-                                        );
-                                        if (doc) {
-                                            this._dirty(doc);
-                                        }
+                                    const doc = vscode.workspace.textDocuments.find((d) => d.uri.path === op.uri.path);
+                                    if (doc) {
+                                        this._dirty(doc);
                                     }
 
                                     return Promise.resolve();
@@ -1504,8 +1501,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
 
             // check if document is not open
-            // NOTE: document change event handles open files
-            if (this._opened.has(uri.path)) {
+            // NOTE: document change event handles open files; the watcher must defer to
+            // it or it races the editor path and duplicates content on the server
+            if (this._isOpen(uri)) {
                 return;
             }
 
@@ -1710,7 +1708,6 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             await this._readMutex.clear();
             await this._writeMutex.clear();
             this._debouncer.clear();
-            this._opened.clear();
             this._ignoring = (_uri: vscode.Uri) => false;
             this._ignoreHash = '';
             this._types = undefined;
