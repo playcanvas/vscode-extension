@@ -109,6 +109,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _diskStat = new Map<string, { mtime: number; size: number }>();
 
+    private _remoteAhead = new Set<string>();
+
     private _saving = new Set<string>();
 
     private _blocked = new Set<string>();
@@ -370,6 +372,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            // remote op advances the OT doc past the on-disk bytes without rewriting disk,
+            // so a later revert-to-disk is a discard, not a local edit (#315 discard guard)
+            this._remoteAhead.add(uri.path);
+
             // transform undo/redo stacks against the remote op (OT-space)
             const mgr = this._undos.get(uri.path);
             if (mgr) {
@@ -473,6 +479,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             this._diskHash.delete(uri.path);
             this._diskStat.delete(uri.path);
+            this._remoteAhead.delete(uri.path);
 
             this._log.debug(`delete.remote file ${uri}`);
         });
@@ -500,6 +507,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // next _update or _create write on newUri.path will repopulate
             this._diskHash.delete(oldUri.path);
             this._diskStat.delete(oldUri.path);
+            this._remoteAhead.delete(oldUri.path);
 
             this._log.debug(`rename.remote ${oldUri.path} -> ${newUri.path}`);
         });
@@ -1035,6 +1043,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const path = relativePath(document.uri, folderUri);
             this._undos.set(document.uri.path, new UndoManager());
             this._diskHash.set(document.uri.path, hash(norm(document.getText())));
+            this._remoteAhead.delete(document.uri.path);
             this._events.emit('asset:doc:open', path);
             this._dirty(document);
         });
@@ -1047,6 +1056,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._undos.delete(document.uri.path);
             this._diskHash.delete(document.uri.path);
             this._diskStat.delete(document.uri.path);
+            this._remoteAhead.delete(document.uri.path);
             this._saving.delete(document.uri.path);
             this._blocked.delete(`${document.uri}`);
             this._opLocks.delete(`${document.uri}`);
@@ -1106,10 +1116,18 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // the on-disk bytes is a revert (Don't Save / Revert File), never a real edit.
             // the disk file is the derived save-only artifact (server treats the live OT
             // doc as source of truth), so pushing it upstream rolls every collaborator back
-            // to stale content (#315). the native close dialog can fire this while
-            // document.isDirty is still true, so do NOT gate on the transient dirty flag.
+            // to stale content (#315). a normal Revert File / discard clears the dirty
+            // flag, so !isDirty catches it (#278). the native close dialog can fire the
+            // revert while isDirty is still true (#315), but only after a remote op has
+            // advanced the OT doc past disk — so _remoteAhead covers that case. a purely
+            // local round-trip (move a line down then back up) lands on the disk hash too
+            // but stays dirty with no remote op, so it must still submit.
             // undo/redo carry a reason and are handled above.
-            if (!reason && hash(text) === this._diskHash.get(document.uri.path)) {
+            if (
+                !reason &&
+                hash(text) === this._diskHash.get(document.uri.path) &&
+                (!document.isDirty || this._remoteAhead.has(document.uri.path))
+            ) {
                 return;
             }
 
@@ -1186,6 +1204,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // native save completes before the remote save is triggered.
             const h = hash(norm(document.getText()));
             this._diskHash.set(document.uri.path, h);
+            this._remoteAhead.delete(document.uri.path);
             this._saving.add(document.uri.path);
 
             // check if ignore updated (only if file has unsaved changes)
@@ -1733,6 +1752,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._types = undefined;
         this._diskHash.clear();
         this._diskStat.clear();
+        this._remoteAhead.clear();
         this._opLocks.clear();
         this._undos.forEach((m) => m.clear());
         this._undos.clear();

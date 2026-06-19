@@ -1797,6 +1797,66 @@ suite('extension', () => {
         );
     });
 
+    test('move line down then back up syncs the reverse edit to remote', async () => {
+        // regression: autoSave is off, so _diskHash stays at the opened/saved content.
+        // moving a line down submits fine, but moving it back lands the buffer exactly on
+        // the on-disk bytes — the #315 discard guard then misread it as a Don't Save revert
+        // and dropped the op, leaving the server stuck on the first move (silent divergence).
+        // unlike #315, the divergence here is purely local (no remote op), so it must submit.
+
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const original = '// ALPHA\n// BETA\n// GAMMA';
+        const asset = await assetCreate({ name: 'move_line_roundtrip.js', content: original });
+        assert.ok(asset, 'asset should be created');
+
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+        await waitForIdle('initial open settle');
+
+        // move line "// ALPHA" down (swap lines 0 and 1). this is the first edit after
+        // open, which fires the #278 transient isDirty=false external path — wait for the
+        // follow-up _dirtyReload applyEdit so its _locks releases before the next edit.
+        const moved = '// BETA\n// ALPHA\n// GAMMA';
+        const downSettled = waitForApplyEdit(uri, 2, 'move down dirty reload');
+        const down = new vscode.WorkspaceEdit();
+        down.replace(uri, new vscode.Range(0, 0, 1, 100), '// BETA\n// ALPHA');
+        await vscode.workspace.applyEdit(down);
+        await downSettled;
+        await waitForIdle('move line down settle');
+
+        assert.strictEqual(tdoc.getText(), moved, 'buffer should hold moved-down content');
+        assert.strictEqual(documents.get(asset.uniqueId), moved, 'first move must reach the server');
+
+        // move it back up — buffer returns to the on-disk content. no remote op happened
+        // and the buffer stays dirty, so this must submit rather than be read as a discard.
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+        doc.submitOp.resetHistory();
+
+        const up = new vscode.WorkspaceEdit();
+        up.replace(uri, new vscode.Range(0, 0, 1, 100), '// ALPHA\n// BETA');
+        await vscode.workspace.applyEdit(up);
+        await waitForIdle('move line back up settle');
+
+        assert.strictEqual(tdoc.getText(), original, 'buffer should be back to original');
+        assert.ok(doc.submitOp.callCount > 0, 'reverse move must submit an op, not be dropped as a discard');
+        assert.strictEqual(documents.get(asset.uniqueId), original, 'server must follow the reverse move back');
+
+        // clean up: the local move edits set file.dirty, and the round-tripped content
+        // matches the saved hash so no save path can clear it (both markSaved and the mock
+        // doc:save short-circuit on a matching hash). a lingering dirty file sits in
+        // unsafeFiles() and blocks the reload/branch-switch guarded tests later in the
+        // suite, so close the editor and delete the asset outright.
+        await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+        const fileDeleted = waitForEmit('asset:file:delete', (args) => args[0] === asset.name, 'cleanup delete');
+        await assertResolves(vscode.workspace.fs.delete(uri), 'cleanup fs.delete');
+        await assertResolves(fileDeleted, 'cleanup asset:file:delete');
+        await waitForIdle('move line test cleanup');
+    });
+
     test('file save - local to remote', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
