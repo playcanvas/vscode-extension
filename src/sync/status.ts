@@ -1,6 +1,6 @@
 import { hasConflictMarkers } from './markers';
 
-export type SyncState = 'clean' | 'modified' | 'behind' | 'both' | 'conflicted';
+export type SyncState = 'clean' | 'modified' | 'behind' | 'both' | 'conflicted' | 'added' | 'deleted' | 'renamed';
 
 // classify a file's content sync state.
 // base = last pull, working = disk, remote = current server.

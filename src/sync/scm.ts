@@ -34,6 +34,17 @@ class PlayCanvasScm extends Linker<LinkParams> {
 
     private _resource(uri: vscode.Uri, path: string, state: SyncState) {
         if (state === 'conflicted') {
+            if (this._engine?.structuralConflict(path)) {
+                return {
+                    resourceUri: uri,
+                    decorations: { tooltip: 'structural conflict — resolve' },
+                    command: {
+                        command: 'playcanvas.resolveStructuralConflict',
+                        title: 'Resolve Structural Conflict',
+                        arguments: [uri]
+                    }
+                };
+            }
             return {
                 resourceUri: uri,
                 decorations: { tooltip: 'conflict — open the merge editor' },
@@ -84,7 +95,13 @@ class PlayCanvasScm extends Linker<LinkParams> {
                 merge.push(rs);
             } else if (state === 'behind') {
                 incoming.push(rs);
-            } else if (state === 'modified' || state === 'both') {
+            } else if (
+                state === 'modified' ||
+                state === 'both' ||
+                state === 'added' ||
+                state === 'deleted' ||
+                state === 'renamed'
+            ) {
                 changes.push(rs);
                 // both: surface the server side too — base vs remote isolates
                 // what pull will merge, without conflating your local edits
@@ -212,6 +229,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
             scm.dispose();
         });
 
+        void vscode.commands.executeCommand('setContext', 'playcanvas.pullpush', true);
         this._log.info(`linked ${folderUri.toString()}`);
     }
 
@@ -228,6 +246,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
         this._changes = undefined;
         this._incoming = undefined;
         this._merge = undefined;
+        void vscode.commands.executeCommand('setContext', 'playcanvas.pullpush', false);
         this._log.info(`unlinked ${folderUri.toString()}`);
         return { folderUri, engine };
     }

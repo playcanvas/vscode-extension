@@ -21,6 +21,14 @@ type LinkParams = {
     projectId: number;
     branchId: string;
 };
+type LocalOp =
+    | { action: 'added'; path: string; type: 'file' | 'folder' }
+    | { action: 'deleted'; path: string; type: 'file' | 'folder' }
+    | { action: 'renamed'; from: string; path: string; type: 'file' | 'folder' };
+type RemoteOp =
+    | { action: 'created'; path: string; type: 'file' | 'folder'; content: Uint8Array; conflicted?: boolean }
+    | { action: 'deleted'; path: string; conflicted?: boolean }
+    | { action: 'renamed'; from: string; path: string; conflicted?: boolean };
 
 // native git-style sync: observes per-file state (base vs working vs remote)
 // without touching the live realtime path. pull/push land in later parts.
@@ -38,6 +46,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
     private _branchId?: string;
 
     private _status = new Map<string, SyncState>();
+
+    private _local = new Map<string, LocalOp>();
+
+    private _remote = new Map<string, RemoteOp>();
 
     private _merges = new Map<number, { base: string; local: string; remote: string }>();
 
@@ -62,16 +74,191 @@ class NativeSyncEngine extends Linker<LinkParams> {
         return new Map(this._status);
     }
 
+    structuralConflict(target: string | vscode.Uri) {
+        const path = this._path(target);
+        const op = this._remote.get(path);
+        if (!op?.conflicted) {
+            return undefined;
+        }
+        return {
+            action: op.action,
+            path: op.path,
+            from: op.action === 'renamed' ? op.from : undefined
+        };
+    }
+
     baseText(path: string) {
         const file = this._projectManager?.files.get(path);
         if (!file || file.type === 'folder') {
-            return undefined;
+            const op = this._local.get(path);
+            if (op?.action !== 'renamed') {
+                return undefined;
+            }
+            const from = this._projectManager?.files.get(op.from);
+            if (!from || from.type === 'folder') {
+                return undefined;
+            }
+            return this._base.get(from.uniqueId)?.text;
         }
         return this._base.get(file.uniqueId)?.text;
     }
 
-    // remote content (R) for the incoming diff view: live doc when subscribed;
-    // stubs read S3 via REST so a diff click never creates a subscription
+    private _path(target: string | vscode.Uri) {
+        if (typeof target === 'string') {
+            return target;
+        }
+        return this._folderUri ? relativePath(target, this._folderUri) : target.path;
+    }
+
+    private _setLocal(op: LocalOp) {
+        this._local.set(op.path, op);
+        this._status.set(op.path, op.action);
+        this.changed.set((v) => v + 1);
+    }
+
+    private _setRemote(op: RemoteOp, conflicted = false) {
+        this._remote.set(op.path, { ...op, conflicted });
+        this._status.set(op.path, conflicted ? 'conflicted' : 'behind');
+        this.changed.set((v) => v + 1);
+    }
+
+    private _touches(a: string, b: string) {
+        return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+    }
+
+    private _localOpTouches(path: string) {
+        for (const op of this._local.values()) {
+            if (this._touches(op.path, path) || (op.action === 'renamed' && this._touches(op.from, path))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private _localTouches(path: string) {
+        for (const op of this._local.values()) {
+            if (this._touches(op.path, path) || (op.action === 'renamed' && this._touches(op.from, path))) {
+                return true;
+            }
+        }
+        for (const [p, state] of this._status) {
+            if (this._touches(p, path) && (state === 'modified' || state === 'both' || state === 'conflicted')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private _dropLocal(...paths: string[]) {
+        for (const [path, op] of Array.from(this._local)) {
+            const touches = paths.some(
+                (p) => this._touches(op.path, p) || (op.action === 'renamed' && this._touches(op.from, p))
+            );
+            if (!touches) {
+                continue;
+            }
+            this._local.delete(path);
+            this._status.delete(path);
+            if (op.action === 'renamed') {
+                this._status.delete(op.from);
+            }
+        }
+        for (const path of paths) {
+            this._status.delete(path);
+        }
+    }
+
+    private async _exists(path: string) {
+        const folderUri = this._folderUri;
+        if (!folderUri) {
+            return false;
+        }
+        const [err] = await tryCatch(async () => vscode.workspace.fs.stat(vscode.Uri.joinPath(folderUri, path)));
+        return !err;
+    }
+
+    private async _type(path: string) {
+        const folderUri = this._folderUri;
+        if (!folderUri) {
+            return undefined;
+        }
+        const [err, stat] = await tryCatch(async () => vscode.workspace.fs.stat(vscode.Uri.joinPath(folderUri, path)));
+        if (err) {
+            return undefined;
+        }
+        return stat.type === vscode.FileType.Directory ? 'folder' : 'file';
+    }
+
+    private _localCreate(path: string, type: 'file' | 'folder') {
+        this._setLocal({ action: 'added', path, type });
+    }
+
+    private _localDelete(path: string, type: 'file' | 'folder') {
+        const op = this._local.get(path);
+        if (op?.action === 'added') {
+            this._local.delete(path);
+            this._status.delete(path);
+            this.changed.set((v) => v + 1);
+            return;
+        }
+        if (op?.action === 'renamed') {
+            this._local.delete(path);
+            this._setLocal({ action: 'deleted', path: op.from, type });
+            return;
+        }
+        this._setLocal({ action: 'deleted', path, type });
+    }
+
+    private _localRename(from: string, path: string, type: 'file' | 'folder') {
+        const op = this._local.get(from);
+        if (op?.action === 'added') {
+            this._local.delete(from);
+            this._status.delete(from);
+            this._setLocal({ action: 'added', path, type });
+            return;
+        }
+        if (op?.action === 'renamed') {
+            this._local.delete(from);
+            this._status.delete(from);
+            this._setLocal({ action: 'renamed', from: op.from, path, type });
+            return;
+        }
+        this._setLocal({ action: 'renamed', from, path, type });
+    }
+
+    private async _remoteCreate(path: string, type: 'file' | 'folder', content: Uint8Array) {
+        if (this._localTouches(path)) {
+            this._setRemote({ action: 'created', path, type, content }, true);
+            return;
+        }
+        const working = type === 'file' ? await this._read(this._folderUri!, path) : undefined;
+        const same = type === 'file' && content.length > 0 && working === norm(buffer.toString(content));
+        this._setRemote({ action: 'created', path, type, content }, working !== undefined && !same);
+    }
+
+    private _remoteDelete(path: string) {
+        this._setRemote({ action: 'deleted', path }, this._localTouches(path));
+    }
+
+    private async _remoteRename(from: string, path: string) {
+        this._status.delete(from);
+        const op = { action: 'renamed' as const, from, path };
+        const conflicted = this._localOpTouches(from) || this._localTouches(path);
+        this._setRemote(op, conflicted);
+        if (!conflicted && (await this._exists(path))) {
+            this._setRemote(op, true);
+        }
+    }
+
+    private async _content(op: RemoteOp & { action: 'created' }) {
+        if (op.type !== 'file' || op.content.length > 0) {
+            return op.content;
+        }
+        const text = await this.remoteText(op.path);
+        return text === undefined ? op.content : buffer.from(text);
+    }
+
+    // remote content for the incoming diff view; stubs are promoted only while read
     async remoteText(path: string) {
         const pm = this._projectManager;
         const file = pm?.files.get(path);
@@ -81,8 +268,13 @@ class NativeSyncEngine extends Linker<LinkParams> {
         if (file.type === 'file') {
             return norm(file.doc.text);
         }
-        const [err, buf] = await tryCatch(async () => pm.fetchContent(file.uniqueId));
-        return err ? undefined : norm(buffer.toString(buf));
+        const [err, promoted] = await tryCatch(async () => pm.subscribe(path));
+        if (err || !promoted || promoted.type !== 'file') {
+            return undefined;
+        }
+        const text = norm(promoted.doc.text);
+        await this._release(path);
+        return text;
     }
 
     // base/local/remote inputs for a conflicted file's 3-way merge editor
@@ -92,6 +284,78 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return undefined;
         }
         return this._merges.get(file.uniqueId);
+    }
+
+    async acceptIncoming(uri: vscode.Uri) {
+        const path = this._path(uri);
+        const op = this._remote.get(path);
+        if (!op) {
+            return;
+        }
+        this._dropLocal(op.path, op.action === 'renamed' ? op.from : op.path);
+        if (op.action === 'created') {
+            if (await this._exists(op.path)) {
+                await this._applyDelete(op.path);
+            }
+            await this._applyCreate(op.path, op.type, await this._content(op));
+        } else if (op.action === 'deleted') {
+            if (await this._exists(op.path)) {
+                await this._applyDelete(op.path);
+            }
+        } else {
+            if (await this._exists(op.path)) {
+                await this._applyDelete(op.path);
+            }
+            if (await this._exists(op.from)) {
+                await this._applyRename(op.from, op.path);
+            }
+        }
+        this._remote.delete(path);
+        await this._refreshAll();
+    }
+
+    async keepCurrent(uri: vscode.Uri) {
+        const path = this._path(uri);
+        const op = this._remote.get(path);
+        if (!op) {
+            return;
+        }
+        this._remote.delete(path);
+        this._dropLocal(op.path, op.action === 'renamed' ? op.from : op.path);
+        if (op.action === 'deleted') {
+            const type = await this._type(op.path);
+            if (type) {
+                this._setLocal({ action: 'added', path: op.path, type });
+            }
+        } else if (op.action === 'renamed') {
+            const type = await this._type(op.from);
+            if (type) {
+                this._setLocal({ action: 'renamed', from: op.path, path: op.from, type });
+            }
+        }
+        await this._refreshAll();
+    }
+
+    async markResolved(uri: vscode.Uri) {
+        const path = this._path(uri);
+        const op = this._remote.get(path);
+        if (!op) {
+            return;
+        }
+        this._remote.delete(path);
+        this._dropLocal(op.path, op.action === 'renamed' ? op.from : op.path);
+        if (op.action === 'deleted') {
+            const type = await this._type(op.path);
+            if (type) {
+                this._setLocal({ action: 'added', path: op.path, type });
+            }
+        } else if (op.action === 'renamed') {
+            const type = await this._type(op.from);
+            if (type) {
+                this._setLocal({ action: 'renamed', from: op.path, path: op.from, type });
+            }
+        }
+        await this._refreshAll();
     }
 
     private async _read(folderUri: vscode.Uri, path: string) {
@@ -109,6 +373,33 @@ class NativeSyncEngine extends Linker<LinkParams> {
         await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folderUri, path), buffer.from(text));
     }
 
+    private _applyCreate(path: string, type: 'file' | 'folder', content: Uint8Array) {
+        return new Promise<void>((resolve, reject) => {
+            const done = (err?: Error) => (err ? reject(err) : resolve());
+            if (!this._events.emit('sync:file:apply:create', path, type, content, done)) {
+                resolve();
+            }
+        });
+    }
+
+    private _applyDelete(path: string) {
+        return new Promise<void>((resolve, reject) => {
+            const done = (err?: Error) => (err ? reject(err) : resolve());
+            if (!this._events.emit('sync:file:apply:delete', path, done)) {
+                resolve();
+            }
+        });
+    }
+
+    private _applyRename(from: string, path: string) {
+        return new Promise<void>((resolve, reject) => {
+            const done = (err?: Error) => (err ? reject(err) : resolve());
+            if (!this._events.emit('sync:file:apply:rename', from, path, done)) {
+                resolve();
+            }
+        });
+    }
+
     private async _refresh(path: string) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
@@ -116,6 +407,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
 
+        const remoteOp = this._remote.get(path);
+        if (remoteOp) {
+            this._status.set(path, remoteOp.conflicted ? 'conflicted' : 'behind');
+            return;
+        }
+        const local = this._local.get(path);
+        if (local) {
+            this._status.set(path, local.action);
+            return;
+        }
         const file = pm.files.get(path);
         if (!file || file.type === 'folder') {
             this._status.delete(path);
@@ -127,35 +428,33 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return; // not on disk yet
         }
 
-        // stubs have no live doc — the replicated S3 hash stands in for R, so
-        // closed files classify without subscribing (projects have >1000s)
-        const remote = file.type === 'file' ? hash(norm(file.doc.text)) : pm.fileHash(path);
-        if (remote === undefined) {
+        if (file.type === 'stub') {
+            let base = this._base.get(file.uniqueId);
+            if (!base) {
+                this._base.set(file.uniqueId, working);
+                base = this._base.get(file.uniqueId);
+            }
+            if (!base) {
+                return;
+            }
+            const state = classify(base.hash, hash(working), base.hash, working);
+            this._status.set(path, state);
+            if (state !== 'conflicted') {
+                this._merges.delete(file.uniqueId);
+            }
             return;
         }
 
-        // seed the base on first sight (provisional until pull/push lands):
-        // live doc text when subscribed; for stubs use disk when it matches
-        // the S3 hash, else fetch S3 so the base can anchor a future merge
         let base = this._base.get(file.uniqueId);
         if (!base) {
-            if (file.type === 'file') {
-                this._base.set(file.uniqueId, norm(file.doc.text));
-            } else if (hash(working) === remote) {
-                this._base.set(file.uniqueId, working);
-            } else {
-                const [err, buf] = await tryCatch(async () => pm.fetchContent(file.uniqueId));
-                if (err) {
-                    return;
-                }
-                this._base.set(file.uniqueId, norm(buffer.toString(buf)));
-            }
+            this._base.set(file.uniqueId, norm(file.doc.text));
             base = this._base.get(file.uniqueId);
         }
         if (!base) {
             return;
         }
 
+        const remote = hash(norm(file.doc.text));
         const state = classify(base.hash, hash(working), remote, working);
         this._status.set(path, state);
         // merge resolved (markers gone) -> drop the stashed merge inputs
@@ -168,6 +467,13 @@ class NativeSyncEngine extends Linker<LinkParams> {
         const pm = this._projectManager;
         if (!pm) {
             return;
+        }
+        this._status.clear();
+        for (const op of this._local.values()) {
+            this._status.set(op.path, op.action);
+        }
+        for (const op of this._remote.values()) {
+            this._status.set(op.path, op.conflicted ? 'conflicted' : 'behind');
         }
         for (const [path, file] of pm.files) {
             if (file.type !== 'folder') {
@@ -221,18 +527,36 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
         }
 
+        const remoteOps = Array.from(this._remote.values());
+        const created = remoteOps
+            .filter((op): op is RemoteOp & { action: 'created' } => op.action === 'created')
+            .sort((a, b) => a.path.split('/').length - b.path.split('/').length);
+        const renamed = remoteOps.filter((op): op is RemoteOp & { action: 'renamed' } => op.action === 'renamed');
+        const deleted = remoteOps
+            .filter((op): op is RemoteOp & { action: 'deleted' } => op.action === 'deleted')
+            .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
+
+        for (const op of renamed) {
+            await this._applyRename(op.from, op.path);
+            this._remote.delete(op.path);
+        }
+        for (const op of created) {
+            await this._applyCreate(op.path, op.type, await this._content(op));
+            this._remote.delete(op.path);
+        }
+        for (const op of deleted) {
+            await this._applyDelete(op.path);
+            this._remote.delete(op.path);
+        }
+
         const pulled: string[] = [];
         for (const [path, f] of pm.files) {
             if (f.type === 'folder') {
                 continue;
             }
-            // stubs subscribe on demand — only when there is something to pull
+            // pull is an exact remote operation: promote unloaded stubs so R is realtime doc.text
             let file = f;
             if (file.type === 'stub') {
-                const state = this._status.get(path);
-                if (state !== 'behind' && state !== 'both') {
-                    continue;
-                }
                 const promoted = await pm.subscribe(path);
                 if (!promoted) {
                     continue;
@@ -305,6 +629,29 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
         }
 
+        const ops = Array.from(this._local.values());
+        const added = ops
+            .filter((op): op is LocalOp & { action: 'added' } => op.action === 'added')
+            .sort((a, b) => a.path.split('/').length - b.path.split('/').length);
+        const renamed = ops.filter((op): op is LocalOp & { action: 'renamed' } => op.action === 'renamed');
+        const deleted = ops
+            .filter((op): op is LocalOp & { action: 'deleted' } => op.action === 'deleted')
+            .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
+
+        for (const op of renamed) {
+            await pm.rename(op.from, op.path);
+            this._local.delete(op.path);
+        }
+        for (const op of added) {
+            const content = op.type === 'file' ? buffer.from((await this._read(folderUri, op.path)) ?? '') : undefined;
+            await pm.create(op.path, op.type, content);
+            this._local.delete(op.path);
+        }
+        for (const op of deleted) {
+            await pm.delete(op.path, op.type);
+            this._local.delete(op.path);
+        }
+
         for (const [path, f] of pm.files) {
             if (f.type === 'folder' || this._status.get(path) !== 'modified') {
                 continue;
@@ -334,12 +681,11 @@ class NativeSyncEngine extends Linker<LinkParams> {
             // re-check remote is still unchanged, synchronous with write()'s apply
             // so a remote op can't interleave — went behind mid-push, leave for pull
             if (base && norm(file.doc.text) !== base.text) {
-                // nothing saved, so no ack will release a doc promoted just now
                 if (fresh) {
                     this._promoted.delete(path);
-                    void this._release(path);
+                    await this._release(path);
                 }
-                continue;
+                throw fail`remote has changes — pull before pushing`;
             }
             // write() diffs against the live doc and marks dirty so save() flushes
             await pm.write(path, buffer.from(working));
@@ -383,7 +729,19 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
         const recompute = (path: string) => void this.refresh(path);
         const onUpdate = this._events.on('asset:file:update', recompute);
-        // restatus on promote: R upgrades from the S3 hash to the live doc
+        const onCreate = this._events.on(
+            'asset:file:create',
+            (path, type, content) => void this._remoteCreate(path, type, content)
+        );
+        const onDelete = this._events.on('asset:file:delete', (path) => this._remoteDelete(path));
+        const onRename = this._events.on('asset:file:rename', (from, to) => void this._remoteRename(from, to));
+        const onLocalCreate = this._events.on('sync:file:create', (path, type) => this._localCreate(path, type));
+        const onLocalUpdate = this._events.on('sync:file:update', recompute);
+        const onLocalDelete = this._events.on('sync:file:delete', (path, type) => this._localDelete(path, type));
+        const onLocalRename = this._events.on('sync:file:rename', (from, to, type) =>
+            this._localRename(from, to, type)
+        );
+        // restatus on promote: remote upgrades from stub base to live doc
         const onSubscribed = this._events.on('asset:file:subscribed', recompute);
         const onSave = this._events.on('asset:file:save', (path: string) => {
             void this.refresh(path);
@@ -394,6 +752,13 @@ class NativeSyncEngine extends Linker<LinkParams> {
         });
         this._cleanup.push(async () => {
             this._events.off('asset:file:update', onUpdate);
+            this._events.off('asset:file:create', onCreate);
+            this._events.off('asset:file:delete', onDelete);
+            this._events.off('asset:file:rename', onRename);
+            this._events.off('sync:file:create', onLocalCreate);
+            this._events.off('sync:file:update', onLocalUpdate);
+            this._events.off('sync:file:delete', onLocalDelete);
+            this._events.off('sync:file:rename', onLocalRename);
             this._events.off('asset:file:subscribed', onSubscribed);
             this._events.off('asset:file:save', onSave);
         });
@@ -420,6 +785,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._projectId = undefined;
         this._branchId = undefined;
         this._status.clear();
+        this._local.clear();
+        this._remote.clear();
         this._merges.clear();
         this._promoted.clear();
 

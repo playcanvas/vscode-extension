@@ -166,6 +166,18 @@
                 "command": "playcanvas.redo",
                 "key": "ctrl+y",
                 "when": "playcanvas.active && textInputFocus && !editorReadonly && !isMac"
+            },
+            {
+                "command": "playcanvas.push",
+                "key": "ctrl+alt+up",
+                "mac": "cmd+alt+up",
+                "when": "playcanvas.pullpush"
+            },
+            {
+                "command": "playcanvas.pull",
+                "key": "ctrl+alt+down",
+                "mac": "cmd+alt+down",
+                "when": "playcanvas.pullpush"
             }
         ],
         "typescriptServerPlugins": [

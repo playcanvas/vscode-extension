@@ -344,6 +344,38 @@ export const activate = async (context: vscode.ExtensionContext) => {
                         await vscode.window.showTextDocument(uri);
                     }
                 }
+            ),
+            vscode.commands.registerCommand(
+                `${NAME}.resolveStructuralConflict`,
+                async (arg?: vscode.Uri | vscode.SourceControlResourceState) => {
+                    const uri = arg instanceof vscode.Uri ? arg : arg?.resourceUri;
+                    if (!uri || !nativeSync.structuralConflict(uri)) {
+                        return;
+                    }
+                    const choice = await vscode.window.showQuickPick(
+                        [
+                            { label: 'Accept Incoming', action: 'incoming' },
+                            { label: 'Keep Current', action: 'current' },
+                            { label: 'Mark Resolved', action: 'resolved' }
+                        ],
+                        { placeHolder: 'Resolve PlayCanvas structural conflict' }
+                    );
+                    if (!choice) {
+                        return;
+                    }
+                    const [err] = await tryCatch(async () => {
+                        if (choice.action === 'incoming') {
+                            await nativeSync.acceptIncoming(uri);
+                        } else if (choice.action === 'current') {
+                            await nativeSync.keepCurrent(uri);
+                        } else {
+                            await nativeSync.markResolved(uri);
+                        }
+                    });
+                    if (err) {
+                        void vscode.window.showWarningMessage(`PlayCanvas Resolve: ${err.message}`);
+                    }
+                }
             )
         );
     }

@@ -1337,16 +1337,6 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return file?.type === 'stub';
     }
 
-    // last-flushed S3 hash from replicated asset metadata — lets the sync
-    // engine track remote state for stubs without subscribing their docs
-    fileHash(path: string) {
-        const file = this._files.get(path);
-        if (!file || file.type === 'folder') {
-            return undefined;
-        }
-        return this._assets.get(file.uniqueId)?.file?.hash;
-    }
-
     saveFailed() {
         return this._saveFailed.size > 0;
     }

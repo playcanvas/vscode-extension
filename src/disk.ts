@@ -786,6 +786,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _watchEvents(folderUri: vscode.Uri) {
         const assetFileCreate = this._events.on('asset:file:create', async (path, type, content) => {
+            if (this._pullPush) {
+                return;
+            }
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri);
             await this._create(uri, type, content);
@@ -809,16 +812,46 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
         });
         const assetFileDelete = this._events.on('asset:file:delete', async (path) => {
+            if (this._pullPush) {
+                return;
+            }
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri, true);
             await this._delete(uri);
         });
         const assetFileRename = this._events.on('asset:file:rename', async (oldPath, newPath) => {
+            if (this._pullPush) {
+                return;
+            }
             const oldUri = vscode.Uri.joinPath(folderUri, oldPath);
             const newUri = vscode.Uri.joinPath(folderUri, newPath);
             this._checkIgnoreUpdated(oldUri);
             this._checkIgnoreUpdated(newUri);
             await this._rename(oldUri, newUri);
+        });
+        const syncFileApplyCreate = this._events.on('sync:file:apply:create', (path, type, content, done) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            void tryCatch(async () => {
+                this._checkIgnoreUpdated(uri);
+                await this._create(uri, type, content);
+                await this._reconcile(uri, path, type);
+            }).then(([err]) => done(err ?? undefined));
+        });
+        const syncFileApplyDelete = this._events.on('sync:file:apply:delete', (path, done) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            void tryCatch(async () => {
+                this._checkIgnoreUpdated(uri, true);
+                await this._delete(uri);
+            }).then(([err]) => done(err ?? undefined));
+        });
+        const syncFileApplyRename = this._events.on('sync:file:apply:rename', (oldPath, newPath, done) => {
+            const oldUri = vscode.Uri.joinPath(folderUri, oldPath);
+            const newUri = vscode.Uri.joinPath(folderUri, newPath);
+            void tryCatch(async () => {
+                this._checkIgnoreUpdated(oldUri);
+                this._checkIgnoreUpdated(newUri);
+                await this._rename(oldUri, newUri);
+            }).then(([err]) => done(err ?? undefined));
         });
         const assetFileSave = this._events.on('asset:file:save', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
@@ -842,6 +875,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._events.off('asset:file:update', assetFileUpdate);
             this._events.off('asset:file:rename', assetFileRename);
             this._events.off('asset:file:delete', assetFileDelete);
+            this._events.off('sync:file:apply:create', syncFileApplyCreate);
+            this._events.off('sync:file:apply:delete', syncFileApplyDelete);
+            this._events.off('sync:file:apply:rename', syncFileApplyRename);
             this._events.off('asset:file:save', assetFileSave);
             this._events.off('asset:file:failed', assetFileFailed);
             this._events.off('asset:file:subscribed', assetFileSubscribed);
@@ -1353,6 +1389,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         }
 
                                         this._log.debug(`rename.local ${op2.uri} -> ${op1.uri}`);
+                                        if (this._pullPush) {
+                                            this._events.emit('sync:file:rename', path2, path1, type2);
+                                            return;
+                                        }
                                         return projectManager.rename(path2, path1);
                                     });
                                     i++;
@@ -1394,6 +1434,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                             return;
                                         }
                                         this._log.debug(`change.local (atomic) ${op.uri}`);
+                                        if (this._pullPush) {
+                                            this._events.emit('sync:file:update', path);
+                                            return;
+                                        }
                                         await projectManager.write(path, content);
                                         // dirtify if the file is open in an editor
                                         const doc = vscode.workspace.textDocuments.find(
@@ -1402,6 +1446,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         if (doc) {
                                             this._dirty(doc);
                                         }
+                                        return;
+                                    }
+
+                                    if (this._pullPush) {
+                                        this._log.debug(`create.local ${type} ${op.uri}`);
+                                        this._events.emit('sync:file:create', path, type);
                                         return;
                                     }
 
@@ -1464,6 +1514,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     }
 
                                     this._log.debug(`change.local ${op.uri}`);
+                                    if (this._pullPush) {
+                                        this._events.emit('sync:file:update', path);
+                                        return;
+                                    }
                                     await projectManager.write(path, content);
 
                                     // dirtify if file was opened while change was deferred
@@ -1486,6 +1540,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     }
 
                                     this._log.debug(`delete.local ${type} ${op.uri}`);
+                                    if (this._pullPush) {
+                                        this._events.emit('sync:file:delete', path, type);
+                                        return;
+                                    }
                                     return projectManager.delete(path, type);
                                 });
                                 break;
@@ -1577,6 +1635,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // pullpush mode: closed-file edits stay local; never submit upstream
             if (this._pullPush) {
+                this._events.emit('sync:file:update', path);
                 return;
             }
 
