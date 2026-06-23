@@ -56,6 +56,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
     // push-promoted stubs awaiting their flush ack before release
     private _promoted = new Set<string>();
 
+    private _echoes = new Set<string>();
+
     error = signal<Error | undefined>(undefined);
 
     changed = signal(0);
@@ -218,7 +220,18 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._setLocal({ action: 'renamed', from, path, type });
     }
 
+    private _echo(key: string) {
+        if (!this._echoes.has(key)) {
+            return false;
+        }
+        this._echoes.delete(key);
+        return true;
+    }
+
     private async _remoteCreate(path: string, type: 'file' | 'folder', content: Uint8Array) {
+        if (this._echo(`create:${type}:${path}`)) {
+            return;
+        }
         if (this._localTouches(path)) {
             this._setRemote({ action: 'created', path, type, content }, true);
             return;
@@ -229,10 +242,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private _remoteDelete(path: string) {
+        if (this._echo(`delete:${path}`)) {
+            return;
+        }
         this._setRemote({ action: 'deleted', path }, this._localTouches(path));
     }
 
     private async _remoteRename(from: string, path: string) {
+        if (this._echo(`rename:${from}:${path}`)) {
+            return;
+        }
         this._status.delete(from);
         const op = { action: 'renamed' as const, from, path };
         const conflicted = this._localOpTouches(from) || this._localTouches(path);
@@ -613,16 +632,34 @@ class NativeSyncEngine extends Linker<LinkParams> {
             .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
 
         for (const op of renamed) {
-            await pm.rename(op.from, op.path);
+            const key = `rename:${op.from}:${op.path}`;
+            this._echoes.add(key);
+            const [err] = await tryCatch(() => pm.rename(op.from, op.path));
+            this._echoes.delete(key);
+            if (err) {
+                throw err;
+            }
             this._local.delete(op.path);
         }
         for (const op of added) {
             const content = op.type === 'file' ? buffer.from((await this._read(folderUri, op.path)) ?? '') : undefined;
-            await pm.create(op.path, op.type, content);
+            const key = `create:${op.type}:${op.path}`;
+            this._echoes.add(key);
+            const [err] = await tryCatch(() => pm.create(op.path, op.type, content));
+            this._echoes.delete(key);
+            if (err) {
+                throw err;
+            }
             this._local.delete(op.path);
         }
         for (const op of deleted) {
-            await pm.delete(op.path, op.type);
+            const key = `delete:${op.path}`;
+            this._echoes.add(key);
+            const [err] = await tryCatch(() => pm.delete(op.path, op.type));
+            this._echoes.delete(key);
+            if (err) {
+                throw err;
+            }
             this._local.delete(op.path);
         }
 
@@ -763,6 +800,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._remote.clear();
         this._merges.clear();
         this._promoted.clear();
+        this._echoes.clear();
 
         this._log.info(`unlinked ${folderUri.toString()}`);
         return { folderUri, projectManager, projectId, branchId };

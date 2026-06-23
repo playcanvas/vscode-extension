@@ -929,6 +929,30 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('new.js'), 'clean');
     });
 
+    test('push - consumes local create echo', async () => {
+        const events = new EventEmitter<EventMap>();
+        const files = new Map<string, unknown>();
+        const pm = {
+            files,
+            create: async (p: string, t: 'file' | 'folder', content?: Uint8Array) => {
+                files.set(p, {
+                    type: t,
+                    uniqueId: 10,
+                    doc: { text: content ? norm(buffer.toString(content)) : '' },
+                    dirty: false
+                });
+                events.emit('asset:file:create', p, t, content ?? new Uint8Array());
+            }
+        } as unknown as ProjectManager;
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await writeFile('new.js', 'new\n');
+        events.emit('sync:file:create', 'new.js', 'file');
+
+        await e.push();
+        assert.strictEqual(e.status('new.js'), 'clean');
+    });
+
     test('push - deletes local-only file removal', async () => {
         const events = new EventEmitter<EventMap>();
         const deleted: [string, 'file' | 'folder'][] = [];
@@ -950,6 +974,27 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('a.js'), 'deleted');
         await e.push();
         assert.deepStrictEqual(deleted, [['a.js', 'file']]);
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('push - consumes local delete echo', async () => {
+        const events = new EventEmitter<EventMap>();
+        const files = new Map<string, unknown>([
+            ['a.js', { type: 'file', uniqueId: 1, doc: { text: 'x\n' }, dirty: false }]
+        ]);
+        const pm = {
+            files,
+            delete: async (p: string) => {
+                files.delete(p);
+                events.emit('asset:file:delete', p);
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', 'x\n');
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        events.emit('sync:file:delete', 'a.js', 'file');
+
+        await e.push();
         assert.strictEqual(e.status('a.js'), 'clean');
     });
 
@@ -975,6 +1020,28 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('b.js'), 'renamed');
         await e.push();
         assert.deepStrictEqual(renamed, [['a.js', 'b.js']]);
+        assert.strictEqual(e.status('b.js'), 'clean');
+    });
+
+    test('push - consumes local rename echo', async () => {
+        const events = new EventEmitter<EventMap>();
+        const files = new Map<string, unknown>([
+            ['a.js', { type: 'file', uniqueId: 1, doc: { text: 'x\n' }, dirty: false }]
+        ]);
+        const pm = {
+            files,
+            rename: async (from: string, to: string) => {
+                files.set(to, files.get(from));
+                files.delete(from);
+                events.emit('asset:file:rename', from, to);
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', 'x\n');
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        events.emit('sync:file:rename', 'a.js', 'b.js', 'file');
+
+        await e.push();
         assert.strictEqual(e.status('b.js'), 'clean');
     });
 
