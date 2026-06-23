@@ -13,8 +13,28 @@ const BASE_SCHEME = 'playcanvas-base';
 const REMOTE_SCHEME = 'playcanvas-remote';
 const MERGE_SCHEME = 'playcanvas-merge';
 const REFRESH_DELAY = 200;
+const DECORATION: Record<SyncState, { letter: string; color: string; tooltip: string; strikeThrough?: boolean }> = {
+    clean: { letter: '', color: 'gitDecoration.modifiedResourceForeground', tooltip: 'clean' },
+    modified: { letter: 'M', color: 'gitDecoration.modifiedResourceForeground', tooltip: 'modified' },
+    behind: { letter: 'M', color: 'gitDecoration.modifiedResourceForeground', tooltip: 'incoming' },
+    both: { letter: 'M', color: 'gitDecoration.modifiedResourceForeground', tooltip: 'modified, incoming' },
+    conflicted: { letter: '!', color: 'gitDecoration.conflictingResourceForeground', tooltip: 'conflict' },
+    added: { letter: 'A', color: 'gitDecoration.addedResourceForeground', tooltip: 'added' },
+    deleted: { letter: 'D', color: 'gitDecoration.deletedResourceForeground', tooltip: 'deleted', strikeThrough: true },
+    renamed: { letter: 'R', color: 'gitDecoration.renamedResourceForeground', tooltip: 'renamed' }
+};
 
 type LinkParams = { folderUri: vscode.Uri; engine: NativeSyncEngine };
+
+const scmDecoration = (state: SyncState, tooltip = DECORATION[state].tooltip) => {
+    const d = DECORATION[state];
+    return {
+        letter: d.letter,
+        color: new vscode.ThemeColor(d.color),
+        priority: state === 'conflicted' ? 4 : 1,
+        decorations: { tooltip, strikeThrough: d.strikeThrough }
+    };
+};
 
 // git-style Source Control panel backed by the NativeSyncEngine status.
 class PlayCanvasScm extends Linker<LinkParams> {
@@ -37,7 +57,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
             if (this._engine?.structuralConflict(path)) {
                 return {
                     resourceUri: uri,
-                    decorations: { tooltip: 'structural conflict — resolve' },
+                    ...scmDecoration(state, 'structural conflict — resolve'),
                     command: {
                         command: 'playcanvas.resolveStructuralConflict',
                         title: 'Resolve Structural Conflict',
@@ -47,7 +67,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
             }
             return {
                 resourceUri: uri,
-                decorations: { tooltip: 'conflict — open the merge editor' },
+                ...scmDecoration(state, 'conflict — open the merge editor'),
                 command: {
                     command: 'playcanvas.resolveMerge',
                     title: 'Resolve in Merge Editor',
@@ -59,7 +79,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
         if (state === 'behind') {
             return {
                 resourceUri: uri,
-                decorations: { tooltip: 'incoming — pull to apply' },
+                ...scmDecoration(state, 'incoming — pull to apply'),
                 command: {
                     command: 'vscode.diff',
                     title: 'Open Changes',
@@ -69,7 +89,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
         }
         return {
             resourceUri: uri,
-            decorations: { tooltip: state },
+            ...scmDecoration(state),
             command: {
                 command: 'vscode.diff',
                 title: 'Open Changes',
@@ -108,7 +128,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
                 if (state === 'both') {
                     incoming.push({
                         resourceUri: uri,
-                        decorations: { tooltip: 'incoming — pull to merge' },
+                        ...scmDecoration('behind', 'incoming — pull to merge'),
                         command: {
                             command: 'vscode.diff',
                             title: 'Open Changes',
@@ -252,4 +272,4 @@ class PlayCanvasScm extends Linker<LinkParams> {
     }
 }
 
-export { PlayCanvasScm };
+export { PlayCanvasScm, scmDecoration };

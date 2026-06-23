@@ -8,6 +8,7 @@ import type { ProjectManager } from '../../project-manager';
 import { BaseStore } from '../../sync/base-store';
 import { hasConflictMarkers } from '../../sync/markers';
 import { merge } from '../../sync/merge';
+import { scmDecoration } from '../../sync/scm';
 import { classify } from '../../sync/status';
 import { NativeSyncEngine } from '../../sync/sync-engine';
 import type { EventMap } from '../../typings/event-map';
@@ -180,6 +181,19 @@ suite('sync/status', () => {
 
     test('conflicted overrides when markers present', () => {
         assert.strictEqual(classify(B, W, R, 'a\n<<<<<<< Working (your changes)\nb'), 'conflicted');
+    });
+});
+
+suite('sync/scm', () => {
+    test('uses git-style letters for resource states', () => {
+        assert.strictEqual(scmDecoration('modified').letter, 'M');
+        assert.strictEqual(scmDecoration('behind').letter, 'M');
+        assert.strictEqual(scmDecoration('both').letter, 'M');
+        assert.strictEqual(scmDecoration('added').letter, 'A');
+        assert.strictEqual(scmDecoration('deleted').letter, 'D');
+        assert.strictEqual(scmDecoration('renamed').letter, 'R');
+        assert.strictEqual(scmDecoration('conflicted').letter, '!');
+        assert.strictEqual(scmDecoration('deleted').decorations.strikeThrough, true);
     });
 });
 
