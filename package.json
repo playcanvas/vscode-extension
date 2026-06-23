@@ -63,10 +63,10 @@
                     ],
                     "enumDescriptions": [
                         "Sync edits with the server in real time (default).",
-                        "Experimental: git-style manual pull/push (native only)."
+                        "Preview: Git-style manual pull/push against the realtime document (native only)."
                     ],
                     "default": "realtime",
-                    "description": "How the native extension syncs with the server. 'pullpush' is experimental and currently observes status only."
+                    "description": "How the native extension syncs with the server. 'pullpush' uses explicit Git-style pull/push with the realtime document as the remote."
                 }
             }
         },

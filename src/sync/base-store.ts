@@ -54,10 +54,6 @@ export class BaseStore {
         this._entries.set(uniqueId, { text: value, hash: hash(value) });
     }
 
-    delete(uniqueId: number) {
-        this._entries.delete(uniqueId);
-    }
-
     async flush() {
         if (this._projectId === undefined || this._branchId === undefined) {
             return;

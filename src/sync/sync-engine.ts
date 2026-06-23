@@ -76,15 +76,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     structuralConflict(target: string | vscode.Uri) {
         const path = this._path(target);
-        const op = this._remote.get(path);
-        if (!op?.conflicted) {
-            return undefined;
-        }
-        return {
-            action: op.action,
-            path: op.path,
-            from: op.action === 'renamed' ? op.from : undefined
-        };
+        return this._remote.get(path)?.conflicted;
     }
 
     baseText(path: string) {
@@ -337,25 +329,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     async markResolved(uri: vscode.Uri) {
-        const path = this._path(uri);
-        const op = this._remote.get(path);
-        if (!op) {
-            return;
-        }
-        this._remote.delete(path);
-        this._dropLocal(op.path, op.action === 'renamed' ? op.from : op.path);
-        if (op.action === 'deleted') {
-            const type = await this._type(op.path);
-            if (type) {
-                this._setLocal({ action: 'added', path: op.path, type });
-            }
-        } else if (op.action === 'renamed') {
-            const type = await this._type(op.from);
-            if (type) {
-                this._setLocal({ action: 'renamed', from: op.path, path: op.from, type });
-            }
-        }
-        await this._refreshAll();
+        await this.keepCurrent(uri);
     }
 
     private async _read(folderUri: vscode.Uri, path: string) {

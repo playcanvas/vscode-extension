@@ -209,13 +209,6 @@ suite('sync/base-store', () => {
         assert.strictEqual(store.get(1)?.hash, hash('a\nb'));
     });
 
-    test('delete removes entry', () => {
-        const store = new BaseStore({ storageUri: dir });
-        store.set(1, 'x');
-        store.delete(1);
-        assert.strictEqual(store.get(1), undefined);
-    });
-
     test('persists across reload', async () => {
         const a = new BaseStore({ storageUri: dir });
         await a.load(7, 'main');
