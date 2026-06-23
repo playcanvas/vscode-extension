@@ -5,10 +5,11 @@ import { type as ottext } from 'ot-text';
 import * as vscode from 'vscode';
 
 import type { ProjectManager } from '../../project-manager';
+import { DecorationProvider } from '../../providers/decoration-provider';
 import { BaseStore } from '../../sync/base-store';
 import { hasConflictMarkers } from '../../sync/markers';
 import { merge } from '../../sync/merge';
-import { scmDecoration } from '../../sync/scm';
+import { SCM_SCHEME, scmUri } from '../../sync/scm';
 import { classify } from '../../sync/status';
 import { NativeSyncEngine } from '../../sync/sync-engine';
 import type { EventMap } from '../../typings/event-map';
@@ -185,15 +186,30 @@ suite('sync/status', () => {
 });
 
 suite('sync/scm', () => {
-    test('uses git-style letters for resource states', () => {
-        assert.strictEqual(scmDecoration('modified').letter, 'M');
-        assert.strictEqual(scmDecoration('behind').letter, 'M');
-        assert.strictEqual(scmDecoration('both').letter, 'M');
-        assert.strictEqual(scmDecoration('added').letter, 'A');
-        assert.strictEqual(scmDecoration('deleted').letter, 'D');
-        assert.strictEqual(scmDecoration('renamed').letter, 'R');
-        assert.strictEqual(scmDecoration('conflicted').letter, '!');
-        assert.strictEqual(scmDecoration('deleted').decorations.strikeThrough, true);
+    test('uses private uris for scoped row decorations', () => {
+        const uri = vscode.Uri.file('/tmp/a.js');
+        const scm = scmUri(uri);
+        assert.strictEqual(scm.scheme, SCM_SCHEME);
+        assert.strictEqual(scm.path, uri.path);
+    });
+});
+
+suite('decoration-provider', () => {
+    const dir = vscode.Uri.joinPath(vscode.Uri.file(os.tmpdir()), 'pc-decoration-provider-test');
+
+    test('badges pullpush scm uris without decorating real files', async () => {
+        const sync = {
+            changed: { get: () => 0 },
+            status: (path: string) => (path === 'new.js' ? 'added' : 'clean')
+        } as unknown as NativeSyncEngine;
+        const provider = new DecorationProvider({ events: new EventEmitter<EventMap>(), syncEngine: sync });
+        await provider.link({ folderUri: dir, projectManager: { files: new Map() } as unknown as ProjectManager });
+
+        const real = vscode.Uri.joinPath(dir, 'new.js');
+        assert.strictEqual(provider.provideFileDecoration(scmUri(real))?.badge, 'A');
+        assert.strictEqual(provider.provideFileDecoration(real), undefined);
+
+        await provider.unlink();
     });
 });
 

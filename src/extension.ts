@@ -474,7 +474,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     relay.on('room:leave', updateCollabTags);
 
     // dirty decoration provider
-    const decorationProvider = new DecorationProvider({ events });
+    const decorationProvider = new DecorationProvider({ events, syncEngine: pullPush ? nativeSync : undefined });
     effect(() => {
         const err = decorationProvider.error.get();
         if (err) {
