@@ -72,6 +72,20 @@ class NativeSyncEngine extends Linker<LinkParams> {
         return this._status.get(path) ?? 'clean';
     }
 
+    decorationStatus(path: string) {
+        const op = this._remote.get(path);
+        if (!op || op.conflicted) {
+            return this.status(path);
+        }
+        if (op.action === 'created') {
+            return 'added';
+        }
+        if (op.action === 'deleted') {
+            return 'deleted';
+        }
+        return 'renamed';
+    }
+
     statuses() {
         return new Map(this._status);
     }

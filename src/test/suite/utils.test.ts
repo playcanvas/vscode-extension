@@ -200,7 +200,7 @@ suite('decoration-provider', () => {
     test('badges pullpush scm uris without decorating real files', async () => {
         const sync = {
             changed: { get: () => 0 },
-            status: (path: string) => (path === 'new.js' ? 'added' : 'clean')
+            decorationStatus: (path: string) => (path === 'new.js' ? 'added' : 'clean')
         } as unknown as NativeSyncEngine;
         const provider = new DecorationProvider({ events: new EventEmitter<EventMap>(), syncEngine: sync });
         await provider.link({ folderUri: dir, projectManager: { files: new Map() } as unknown as ProjectManager });
@@ -1043,6 +1043,39 @@ suite('sync/sync-engine', () => {
 
         await e.push();
         assert.strictEqual(e.status('b.js'), 'clean');
+    });
+
+    test('incoming structural ops keep git-style decoration states', async () => {
+        await writeFile('a.js', 'x\n');
+        const events = new EventEmitter<EventMap>();
+        const files = new Map<string, unknown>([
+            ['a.js', { type: 'file', uniqueId: 1, doc: { text: 'x\n' }, dirty: false }]
+        ]);
+        const e = new NativeSyncEngine({
+            events,
+            storageUri: storage
+        });
+        await e.link({
+            folderUri: work,
+            projectManager: { files } as unknown as ProjectManager,
+            projectId: 1,
+            branchId: 'main'
+        });
+
+        events.emit('asset:file:create', 'new.js', 'file', buffer.from('remote\n'));
+        for (let i = 0; i < 50 && e.status('new.js') !== 'behind'; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        assert.strictEqual(e.status('new.js'), 'behind');
+        assert.strictEqual(e.decorationStatus('new.js'), 'added');
+
+        events.emit('asset:file:delete', 'a.js');
+        assert.strictEqual(e.status('a.js'), 'behind');
+        assert.strictEqual(e.decorationStatus('a.js'), 'deleted');
+
+        events.emit('asset:file:rename', 'a.js', 'b.js');
+        assert.strictEqual(e.status('b.js'), 'behind');
+        assert.strictEqual(e.decorationStatus('b.js'), 'renamed');
     });
 
     test('discard reverts the working file to base', async () => {

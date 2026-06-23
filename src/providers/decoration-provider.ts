@@ -88,7 +88,7 @@ class DecorationProvider
 
         const path = uri.path.slice(folderUri.path.length + 1);
         if (uri.scheme === SCM_SCHEME) {
-            return syncDecoration(this._syncEngine?.status(path) ?? 'clean');
+            return syncDecoration(this._syncEngine?.decorationStatus(path) ?? 'clean');
         }
 
         const file = pm.files.get(path);
