@@ -837,6 +837,23 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 await this._reconcile(uri, path, type);
             }).then(([err]) => done(err ?? undefined));
         });
+        const syncFileApplyUpdate = this._events.on('sync:file:apply:update', (path, content, done) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            void tryCatch(async () => {
+                await this._writeMutex.atomic([`${uri}`], async () => {
+                    this._checkIgnoreUpdated(uri);
+                    this._debouncer.cancel(`${uri}`);
+                    const h = hash(content);
+                    this._echo.set(`${uri}:change`, h);
+                    await vscode.workspace.fs.writeFile(uri, content);
+                    this._diskHash.set(uri.path, h);
+                    const [, st] = await tryCatch(Promise.resolve(vscode.workspace.fs.stat(uri)));
+                    if (st) {
+                        this._diskStat.set(uri.path, { mtime: st.mtime, size: st.size });
+                    }
+                });
+            }).then(([err]) => done(err ?? undefined));
+        });
         const syncFileApplyDelete = this._events.on('sync:file:apply:delete', (path, done) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             void tryCatch(async () => {
@@ -876,6 +893,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._events.off('asset:file:rename', assetFileRename);
             this._events.off('asset:file:delete', assetFileDelete);
             this._events.off('sync:file:apply:create', syncFileApplyCreate);
+            this._events.off('sync:file:apply:update', syncFileApplyUpdate);
             this._events.off('sync:file:apply:delete', syncFileApplyDelete);
             this._events.off('sync:file:apply:rename', syncFileApplyRename);
             this._events.off('asset:file:save', assetFileSave);
@@ -1714,6 +1732,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // install baseline vcs-aware ignore filter before any disk writes —
         // .pcignore content is parsed later once stubs are on disk
         this._parseIgnoreText('', folderUri);
+        let bootstrap = true;
+        if (this._pullPush && (await fileExists(folderUri))) {
+            const existing = await readDirRecursive(folderUri);
+            bootstrap = !existing.some((uri) => {
+                const path = relativePath(uri, folderUri);
+                return path === Disk.TYPE_DIR || path.startsWith(`${Disk.TYPE_DIR}/`) || !this._ignoring(uri);
+            });
+        }
 
         // sort into hierarchy
         // TODO: store as tree instead of flat map and sorting
@@ -1755,6 +1781,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const writeAll = (entries: typeof ordered, type: 'file' | 'folder') =>
             pool(entries, WRITE_CONCURRENCY, async ([path, file]) => {
                 const uri = vscode.Uri.joinPath(folderUri, path);
+                if (!bootstrap && !(await fileExists(uri))) {
+                    updatingDiskNext();
+                    return;
+                }
                 let content: Uint8Array;
                 if (file.type === 'file') {
                     content = buffer.from(file.doc.text);
@@ -1784,27 +1814,29 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // write type definition files to .pc/
         await this._writeTypeFiles(folderUri, types);
 
-        // remove old files deepest-first — siblings at each level parallelize
-        const levels = new Map<number, vscode.Uri[]>();
-        for (const uri of await readDirRecursive(folderUri)) {
-            const path = relativePath(uri, folderUri);
-            if (
-                !projectManager.files.has(path) &&
-                path !== Disk.TYPE_DIR &&
-                !path.startsWith(`${Disk.TYPE_DIR}/`) &&
-                !this._ignoring(uri)
-            ) {
-                const depth = path.split('/').length;
-                const bucket = levels.get(depth);
-                if (bucket) {
-                    bucket.push(uri);
-                } else {
-                    levels.set(depth, [uri]);
+        if (bootstrap) {
+            // remove old files deepest-first — siblings at each level parallelize
+            const levels = new Map<number, vscode.Uri[]>();
+            for (const uri of await readDirRecursive(folderUri)) {
+                const path = relativePath(uri, folderUri);
+                if (
+                    !projectManager.files.has(path) &&
+                    path !== Disk.TYPE_DIR &&
+                    !path.startsWith(`${Disk.TYPE_DIR}/`) &&
+                    !this._ignoring(uri)
+                ) {
+                    const depth = path.split('/').length;
+                    const bucket = levels.get(depth);
+                    if (bucket) {
+                        bucket.push(uri);
+                    } else {
+                        levels.set(depth, [uri]);
+                    }
                 }
             }
-        }
-        for (const depth of [...levels.keys()].sort((a, b) => b - a)) {
-            await pool(levels.get(depth)!, WRITE_CONCURRENCY, (uri) => this._delete(uri));
+            for (const depth of [...levels.keys()].sort((a, b) => b - a)) {
+                await pool(levels.get(depth)!, WRITE_CONCURRENCY, (uri) => this._delete(uri));
+            }
         }
 
         // watchers
