@@ -181,8 +181,8 @@ suite('sync/status', () => {
         assert.strictEqual(classify(B, W, R, 'work'), 'both');
     });
 
-    test('conflicted overrides when markers present', () => {
-        assert.strictEqual(classify(B, W, R, 'a\n<<<<<<< Working (your changes)\nb'), 'conflicted');
+    test('marker text alone does not create a conflict', () => {
+        assert.strictEqual(classify(B, W, R, 'a\n<<<<<<< Working (your changes)\nb'), 'both');
     });
 });
 
@@ -485,13 +485,13 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('a.js'), 'both');
     });
 
-    test('conflicted when working has markers', async () => {
+    test('marker text alone stays modified', async () => {
         await writeFile('a.js', 'x\n');
         const e = engine();
         await e.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
         await writeFile('a.js', 'x\n<<<<<<< Working (your changes)\na\n=======\nb\n>>>>>>> Server (origin)\n');
         await e.refresh();
-        assert.strictEqual(e.status('a.js'), 'conflicted');
+        assert.strictEqual(e.status('a.js'), 'modified');
     });
 
     test('base persists across relink', async () => {
@@ -1773,5 +1773,26 @@ suite('sync/sync-engine', () => {
         await writeFile('a.js', 'a\nRESOLVED\nc\n');
         await e.refresh();
         assert.strictEqual(e.mergeInputs('a.js'), undefined, 'cleared after resolve');
+    });
+
+    test('mergeInputs survives relink while conflict markers remain', async () => {
+        const doc = { text: 'a\nb\nc\n' };
+        await writeFile('a.js', 'a\nb\nc\n');
+        const e1 = engine();
+        await e1.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'a\nLOCAL\nc\n');
+        doc.text = 'a\nREMOTE\nc\n';
+        await e1.pull();
+        await e1.unlink();
+
+        const e2 = engine();
+        await e2.link({ folderUri: work, projectManager: pmWith(doc), projectId: 1, branchId: 'main' });
+
+        assert.strictEqual(e2.status('a.js'), 'conflicted');
+        const m = e2.mergeInputs('a.js');
+        assert.ok(m, 'merge inputs persisted');
+        assert.strictEqual(m.base, 'a\nb\nc\n');
+        assert.strictEqual(m.local, 'a\nLOCAL\nc\n');
+        assert.strictEqual(m.remote, 'a\nREMOTE\nc\n');
     });
 });

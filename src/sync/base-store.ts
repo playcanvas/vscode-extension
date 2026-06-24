@@ -4,7 +4,8 @@ import * as buffer from '../utils/buffer';
 import { norm } from '../utils/text';
 import { hash, tryCatch, tryCatchSync } from '../utils/utils';
 
-type BaseEntry = { text: string; hash: string };
+type ConflictEntry = { base: string; local: string; remote: string };
+type BaseEntry = { text: string; hash: string; conflict?: ConflictEntry };
 
 // persists the merge base (server snapshot at last pull) per project+branch,
 // in globalStorage so it never enters the user's workspace or git.
@@ -54,7 +55,25 @@ export class BaseStore {
 
     set(uniqueId: number, text: string) {
         const value = norm(text);
-        this._entries.set(uniqueId, { text: value, hash: hash(value) });
+        this._entries.set(uniqueId, { ...this._entries.get(uniqueId), text: value, hash: hash(value) });
+    }
+
+    conflict(uniqueId: number) {
+        return this._entries.get(uniqueId)?.conflict;
+    }
+
+    setConflict(uniqueId: number, conflict: ConflictEntry) {
+        const entry = this._entries.get(uniqueId);
+        if (entry) {
+            entry.conflict = conflict;
+        }
+    }
+
+    deleteConflict(uniqueId: number) {
+        const entry = this._entries.get(uniqueId);
+        if (entry) {
+            delete entry.conflict;
+        }
     }
 
     async flush() {

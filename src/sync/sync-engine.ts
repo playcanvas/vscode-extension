@@ -12,6 +12,7 @@ import { norm } from '../utils/text';
 import { hash, relativePath, tryCatch, withTimeout } from '../utils/utils';
 
 import { BaseStore } from './base-store';
+import { hasConflictMarkers } from './markers';
 import { merge } from './merge';
 import { classify } from './status';
 import type { SyncState } from './status';
@@ -53,8 +54,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
     private _local = new Map<string, LocalOp>();
 
     private _remote = new Map<string, RemoteOp>();
-
-    private _merges = new Map<number, { base: string; local: string; remote: string }>();
 
     // push-promoted stubs awaiting their flush ack before release
     private _promoted = new Set<string>();
@@ -339,10 +338,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
     // base/local/remote inputs for a conflicted file's 3-way merge editor
     mergeInputs(path: string) {
         const file = this._projectManager?.files.get(path);
-        if (!file || file.type !== 'file') {
+        if (!file || file.type === 'folder') {
             return undefined;
         }
-        return this._merges.get(file.uniqueId);
+        return this._base.conflict(file.uniqueId);
     }
 
     async acceptIncoming(uri: vscode.Uri) {
@@ -610,11 +609,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
             if (!base) {
                 return;
             }
+            const conflict = this._base.conflict(file.uniqueId);
+            if (conflict) {
+                if (hasConflictMarkers(working)) {
+                    this._status.set(path, 'conflicted');
+                    return;
+                }
+                this._base.deleteConflict(file.uniqueId);
+            }
             const state = classify(base.hash, hash(working), base.hash, working);
             this._status.set(path, state);
-            if (state !== 'conflicted') {
-                this._merges.delete(file.uniqueId);
-            }
             return;
         }
 
@@ -627,13 +631,17 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
 
+        const conflict = this._base.conflict(file.uniqueId);
+        if (conflict) {
+            if (hasConflictMarkers(working)) {
+                this._status.set(path, 'conflicted');
+                return;
+            }
+            this._base.deleteConflict(file.uniqueId);
+        }
         const remote = hash(norm(file.doc.text));
         const state = classify(base.hash, hash(working), remote, working);
         this._status.set(path, state);
-        // merge resolved (markers gone) -> drop the stashed merge inputs
-        if (state !== 'conflicted') {
-            this._merges.delete(file.uniqueId);
-        }
     }
 
     private async _refreshAll() {
@@ -769,7 +777,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             const result = merge(base.text, working, remote);
             if (result.conflicted) {
                 // stash the three sides for the merge editor (base advances below)
-                this._merges.set(file.uniqueId, { base: base.text, local: working, remote });
+                this._base.setConflict(file.uniqueId, { base: base.text, local: working, remote });
             }
             await this._applyUpdate(path, result.text);
             this._base.set(file.uniqueId, remote);
@@ -989,7 +997,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._status.clear();
         this._local.clear();
         this._remote.clear();
-        this._merges.clear();
         this._promoted.clear();
         this._echoes.clear();
         this._ignoring = (_uri: vscode.Uri) => false;
