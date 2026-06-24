@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 
+import { Disk } from '../disk';
 import type { ProjectManager } from '../project-manager';
 import type { EventMap } from '../typings/event-map';
 import * as buffer from '../utils/buffer';
@@ -16,7 +17,6 @@ import { classify } from './status';
 import type { SyncState } from './status';
 
 const SAVE_TIMEOUT_MS = 30_000;
-const LOCAL_IGNORE_DIRS = new Set(['.pc', '.git', '.hg', '.svn', '.vscode', '.cursor']);
 
 type LinkParams = {
     folderUri: vscode.Uri;
@@ -60,6 +60,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
     private _promoted = new Set<string>();
 
     private _echoes = new Set<string>();
+
+    private _ignoring = (_uri: vscode.Uri) => false;
 
     error = signal<Error | undefined>(undefined);
 
@@ -404,6 +406,17 @@ class NativeSyncEngine extends Linker<LinkParams> {
         return err ? undefined : norm(buffer.toString(data));
     }
 
+    private async _ignoreText(folderUri: vscode.Uri) {
+        const file = this._projectManager?.files.get(Disk.IGNORE_FILE);
+        if (file?.type === 'file') {
+            return file.doc.text;
+        }
+        if (file?.type === 'stub') {
+            return (await this._readDisk(folderUri, Disk.IGNORE_FILE)) ?? '';
+        }
+        return '';
+    }
+
     private async _refreshLocalOnly(folderUri: vscode.Uri, base = '') {
         const pm = this._projectManager;
         if (!pm) {
@@ -413,7 +426,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
         const [, entries] = await tryCatch(async () => vscode.workspace.fs.readDirectory(dir));
         for (const [name, type] of entries ?? []) {
             const path = base ? `${base}/${name}` : name;
-            if (LOCAL_IGNORE_DIRS.has(path.split('/')[0])) {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            if (this._ignoring(uri) || path === Disk.TYPE_DIR || path.startsWith(`${Disk.TYPE_DIR}/`)) {
                 continue;
             }
             const kind = type === vscode.FileType.Directory ? 'folder' : type === vscode.FileType.File ? 'file' : '';
@@ -911,6 +925,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._projectManager = projectManager;
         this._projectId = projectId;
         this._branchId = branchId;
+        this._ignoring = Disk.ignoreMatcher(await this._ignoreText(folderUri), folderUri);
 
         await this._refreshAll();
 
@@ -977,6 +992,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._merges.clear();
         this._promoted.clear();
         this._echoes.clear();
+        this._ignoring = (_uri: vscode.Uri) => false;
 
         this._log.info(`unlinked ${folderUri.toString()}`);
         return { folderUri, projectManager, projectId, branchId };

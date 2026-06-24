@@ -552,6 +552,23 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('local-only.js'), 'clean');
     });
 
+    test('link ignores pre-existing local-only files matched by pcignore', async () => {
+        const files = new Map<string, unknown>([
+            ['.pcignore', { type: 'file', uniqueId: 1, doc: { text: 'ignored*.js\n' }, dirty: false }]
+        ]);
+        await writeFile('ignored_file.js', 'local\n');
+        const e = engine();
+        await e.link({
+            folderUri: work,
+            projectManager: { files } as unknown as ProjectManager,
+            projectId: 1,
+            branchId: 'main'
+        });
+
+        assert.strictEqual(e.status('ignored_file.js'), 'clean');
+        assert.strictEqual(e.statuses().has('ignored_file.js'), false);
+    });
+
     test('pull - fast-forward when no local edits', async () => {
         await writeFile('a.js', 'x\n');
         const doc = { text: 'x\n' };

@@ -84,6 +84,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     // .cursor is Cursor's equivalent editor-local config dir.
     static VCS_IGNORE = '.git\n.hg\n.svn\n.vscode\n.cursor\n';
 
+    static ignoreMatcher(text: string, folderUri: vscode.Uri) {
+        const ig = ignore().add(`${Disk.VCS_IGNORE}${text}`);
+        return (uri: vscode.Uri) => {
+            const path = relativePath(uri, folderUri);
+            return !!path && path !== Disk.IGNORE_FILE && ig.ignores(path);
+        };
+    }
+
     private _events: EventEmitter<EventMap>;
 
     private _folderUri?: vscode.Uri;
@@ -172,24 +180,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _parseIgnoreText(text: string, folderUri: vscode.Uri, h = hash(text)) {
         this._ignoreHash = h;
-
-        // prepend vcs rules so .git/.hg/.svn are always excluded (prevents binary round-trip corruption)
-        const ig = ignore().add(`${Disk.VCS_IGNORE}${text}`);
-        this._ignoring = (uri: vscode.Uri) => {
-            const path = relativePath(uri, folderUri);
-
-            // skip root
-            if (!path) {
-                return false;
-            }
-
-            // skip ignore file itself
-            if (path === Disk.IGNORE_FILE) {
-                return false;
-            }
-
-            return ig.ignores(path);
-        };
+        this._ignoring = Disk.ignoreMatcher(text, folderUri);
         if (text) {
             this._log.debug(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
         }
