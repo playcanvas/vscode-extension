@@ -838,7 +838,41 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
         const path = relativePath(uri, folderUri);
+        const op = this._local.get(path);
         const base = this.baseText(path);
+
+        if (op?.action === 'added') {
+            await this._applyDelete(path);
+            this._local.delete(path);
+            this._status.delete(path);
+            await this._refreshAll();
+            return;
+        }
+
+        if (op?.action === 'deleted') {
+            if (op.type === 'folder') {
+                await this._applyCreate(path, 'folder', new Uint8Array());
+            } else if (base !== undefined) {
+                await this._applyCreate(path, 'file', buffer.from(base));
+            }
+            this._local.delete(path);
+            this._status.delete(path);
+            await this._refreshAll();
+            return;
+        }
+
+        if (op?.action === 'renamed') {
+            await this._applyRename(op.path, op.from);
+            this._local.delete(path);
+            this._status.delete(path);
+            this._status.delete(op.from);
+            if (op.type === 'file' && base !== undefined) {
+                await this._applyUpdate(op.from, base);
+            }
+            await this._refreshAll();
+            return;
+        }
+
         if (base === undefined) {
             return;
         }

@@ -382,10 +382,30 @@ suite('sync/sync-engine', () => {
     };
 
     const engine = (events = new EventEmitter<EventMap>()) => {
+        events.on('sync:file:apply:create', (path, type, content, done) => {
+            void tryCatch(async () => {
+                const uri = vscode.Uri.joinPath(work, path);
+                if (type === 'folder') {
+                    await vscode.workspace.fs.createDirectory(uri);
+                    return;
+                }
+                await writeFile(path, norm(buffer.toString(content)));
+            }).then(([err]) => done(err ?? undefined));
+        });
         events.on('sync:file:apply:update', (path, content, done) => {
             void tryCatch(async () => writeFile(path, norm(buffer.toString(content)))).then(([err]) =>
                 done(err ?? undefined)
             );
+        });
+        events.on('sync:file:apply:delete', (path, done) => {
+            void tryCatch(async () =>
+                vscode.workspace.fs.delete(vscode.Uri.joinPath(work, path), { recursive: false, useTrash: false })
+            ).then(([err]) => done(err ?? undefined));
+        });
+        events.on('sync:file:apply:rename', (from, path, done) => {
+            void tryCatch(async () =>
+                vscode.workspace.fs.rename(vscode.Uri.joinPath(work, from), vscode.Uri.joinPath(work, path))
+            ).then(([err]) => done(err ?? undefined));
         });
         return new NativeSyncEngine({ events, storageUri: storage });
     };
@@ -1527,6 +1547,57 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('a.js'), 'modified');
         await e.discard(vscode.Uri.joinPath(work, 'a.js'));
         assert.strictEqual(await readFile('a.js'), 'x\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('discard removes a local add', async () => {
+        const events = new EventEmitter<EventMap>();
+        const e = engine(events);
+        await e.link({
+            folderUri: work,
+            projectManager: { files: new Map() } as unknown as ProjectManager,
+            projectId: 1,
+            branchId: 'main'
+        });
+        await writeFile('new.js', 'new\n');
+        events.emit('sync:file:create', 'new.js', 'file');
+
+        assert.strictEqual(e.status('new.js'), 'added');
+        await e.discard(vscode.Uri.joinPath(work, 'new.js'));
+
+        assert.strictEqual(await exists('new.js'), false);
+        assert.strictEqual(e.status('new.js'), 'clean');
+    });
+
+    test('discard restores a local delete', async () => {
+        const events = new EventEmitter<EventMap>();
+        await writeFile('a.js', 'x\n');
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'a.js'), { recursive: false, useTrash: false });
+        events.emit('sync:file:delete', 'a.js', 'file');
+
+        assert.strictEqual(e.status('a.js'), 'deleted');
+        await e.discard(vscode.Uri.joinPath(work, 'a.js'));
+
+        assert.strictEqual(await readFile('a.js'), 'x\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('discard reverts a local rename', async () => {
+        const events = new EventEmitter<EventMap>();
+        await writeFile('a.js', 'x\n');
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'a.js'), vscode.Uri.joinPath(work, 'b.js'));
+        events.emit('sync:file:rename', 'a.js', 'b.js', 'file');
+
+        assert.strictEqual(e.status('b.js'), 'renamed');
+        await e.discard(vscode.Uri.joinPath(work, 'b.js'));
+
+        assert.strictEqual(await readFile('a.js'), 'x\n');
+        assert.strictEqual(await exists('b.js'), false);
+        assert.strictEqual(e.status('b.js'), 'clean');
         assert.strictEqual(e.status('a.js'), 'clean');
     });
 
