@@ -499,6 +499,54 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
     }
 
+    private async _pushContent(path: string) {
+        const folderUri = this._folderUri;
+        const pm = this._projectManager;
+        const f = pm?.files.get(path);
+        if (!folderUri || !pm || !f || f.type === 'folder') {
+            return;
+        }
+        const working = await this._readDisk(folderUri, path);
+        if (working === undefined) {
+            return;
+        }
+        // closed-file local edits live on stubs — subscribe to submit.
+        // released on the flush ack (asset:file:save), not here: the doc
+        // has pending ops until then and an early close races the save
+        let file = f;
+        let fresh = false;
+        if (file.type === 'stub') {
+            const promoted = await pm.subscribe(path);
+            if (!promoted) {
+                return;
+            }
+            file = promoted;
+            this._promoted.add(path);
+            fresh = true;
+        }
+        if (file.type !== 'file') {
+            return;
+        }
+        const base = this._base.get(file.uniqueId);
+        // re-check remote is still unchanged, synchronous with write()'s apply
+        // so a remote op can't interleave — went behind mid-push, leave for pull
+        if (base && norm(file.doc.text) !== base.text) {
+            if (fresh) {
+                this._promoted.delete(path);
+                await this._release(path);
+            }
+            throw fail`remote has changes — pull before pushing`;
+        }
+        if (norm(file.doc.text) === working) {
+            this._base.set(file.uniqueId, working);
+            return;
+        }
+        // write() diffs against the live doc and marks dirty so save() flushes
+        await pm.write(path, buffer.from(working));
+        await this._save(path);
+        this._base.set(file.uniqueId, working);
+    }
+
     private async _refresh(path: string) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
@@ -759,6 +807,11 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 throw err;
             }
             this._local.delete(op.path);
+            this._status.delete(op.path);
+            if (op.type === 'file') {
+                await this.refresh(op.path);
+                await this._pushContent(op.path);
+            }
         }
         for (const op of added) {
             const content =
@@ -790,41 +843,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             if (f.type === 'folder' || this._status.get(path) !== 'modified') {
                 continue;
             }
-            const working = await this._readDisk(folderUri, path);
-            if (working === undefined) {
-                continue;
-            }
-            // closed-file local edits live on stubs — subscribe to submit.
-            // released on the flush ack (asset:file:save), not here: the doc
-            // has pending ops until then and an early close races the save
-            let file = f;
-            let fresh = false;
-            if (file.type === 'stub') {
-                const promoted = await pm.subscribe(path);
-                if (!promoted) {
-                    continue;
-                }
-                file = promoted;
-                this._promoted.add(path);
-                fresh = true;
-            }
-            if (file.type !== 'file') {
-                continue;
-            }
-            const base = this._base.get(file.uniqueId);
-            // re-check remote is still unchanged, synchronous with write()'s apply
-            // so a remote op can't interleave — went behind mid-push, leave for pull
-            if (base && norm(file.doc.text) !== base.text) {
-                if (fresh) {
-                    this._promoted.delete(path);
-                    await this._release(path);
-                }
-                throw fail`remote has changes — pull before pushing`;
-            }
-            // write() diffs against the live doc and marks dirty so save() flushes
-            await pm.write(path, buffer.from(working));
-            await this._save(path);
-            this._base.set(file.uniqueId, working);
+            await this._pushContent(path);
         }
 
         await this._base.flush();

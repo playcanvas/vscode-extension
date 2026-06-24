@@ -1458,6 +1458,120 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('b.js'), 'clean');
     });
 
+    test('push - renames and submits edited content', async () => {
+        const events = new EventEmitter<EventMap>();
+        const renamed: [string, string][] = [];
+        const written: [string, string][] = [];
+        const saved: string[] = [];
+        const doc = {
+            text: 'x\n',
+            apply(op: ShareDbTextOp) {
+                doc.text = ottext.apply(doc.text, op) as string;
+            }
+        };
+        const file = { type: 'file', uniqueId: 1, doc, dirty: false };
+        const files = new Map<string, unknown>([['a.js', file]]);
+        const pm = {
+            files,
+            rename: async (from: string, to: string) => {
+                renamed.push([from, to]);
+                files.set(to, files.get(from));
+                files.delete(from);
+            },
+            write: async (path: string, content: Uint8Array) => {
+                const text = norm(buffer.toString(content));
+                const op = delta(doc.text, text);
+                written.push([path, text]);
+                if (op) {
+                    doc.apply(op);
+                    file.dirty = true;
+                }
+            },
+            save: (path: string) => {
+                saved.push(path);
+                events.emit('asset:file:save', path);
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', 'x\n');
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'a.js'), vscode.Uri.joinPath(work, 'b.js'));
+        await writeFile('b.js', 'x\nlocal\n');
+        events.emit('sync:file:rename', 'a.js', 'b.js', 'file');
+
+        await e.push();
+
+        assert.deepStrictEqual(renamed, [['a.js', 'b.js']]);
+        assert.deepStrictEqual(written, [['b.js', 'x\nlocal\n']]);
+        assert.deepStrictEqual(saved, ['b.js']);
+        assert.strictEqual(doc.text, 'x\nlocal\n');
+        assert.strictEqual(e.status('b.js'), 'clean');
+    });
+
+    test('push - retries rename edit as content after write failure', async () => {
+        const events = new EventEmitter<EventMap>();
+        const renamed: [string, string][] = [];
+        const written: [string, string][] = [];
+        const saved: string[] = [];
+        const doc = {
+            text: 'x\n',
+            apply(op: ShareDbTextOp) {
+                doc.text = ottext.apply(doc.text, op) as string;
+            }
+        };
+        const file = { type: 'file', uniqueId: 1, doc, dirty: false };
+        const files = new Map<string, unknown>([['a.js', file]]);
+        let failWrite = true;
+        const pm = {
+            files,
+            rename: async (from: string, to: string) => {
+                renamed.push([from, to]);
+                files.set(to, files.get(from));
+                files.delete(from);
+            },
+            write: async (path: string, content: Uint8Array) => {
+                const text = norm(buffer.toString(content));
+                written.push([path, text]);
+                if (failWrite) {
+                    failWrite = false;
+                    throw new Error('write failed');
+                }
+                const op = delta(doc.text, text);
+                if (op) {
+                    doc.apply(op);
+                    file.dirty = true;
+                }
+            },
+            save: (path: string) => {
+                saved.push(path);
+                events.emit('asset:file:save', path);
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', 'x\n');
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'a.js'), vscode.Uri.joinPath(work, 'b.js'));
+        await writeFile('b.js', 'x\nlocal\n');
+        events.emit('sync:file:rename', 'a.js', 'b.js', 'file');
+
+        const [err] = await tryCatch(() => e.push());
+        assert.ok(err, 'first push should fail after rename');
+        assert.deepStrictEqual(renamed, [['a.js', 'b.js']]);
+        assert.deepStrictEqual(saved, []);
+        assert.strictEqual(e.status('b.js'), 'modified');
+
+        await e.push();
+
+        assert.deepStrictEqual(renamed, [['a.js', 'b.js']]);
+        assert.deepStrictEqual(written, [
+            ['b.js', 'x\nlocal\n'],
+            ['b.js', 'x\nlocal\n']
+        ]);
+        assert.deepStrictEqual(saved, ['b.js']);
+        assert.strictEqual(doc.text, 'x\nlocal\n');
+        assert.strictEqual(e.status('b.js'), 'clean');
+    });
+
     test('push - rejects local rename when remote changed', async () => {
         const events = new EventEmitter<EventMap>();
         const renamed: [string, string][] = [];
