@@ -4,6 +4,7 @@ import * as os from 'os';
 import { type as ottext } from 'ot-text';
 import * as vscode from 'vscode';
 
+import { Disk } from '../../disk';
 import type { ProjectManager } from '../../project-manager';
 import { DecorationProvider } from '../../providers/decoration-provider';
 import { BaseStore } from '../../sync/base-store';
@@ -18,7 +19,7 @@ import type { ShareDbTextOp } from '../../typings/sharedb';
 import * as buffer from '../../utils/buffer';
 import { EventEmitter } from '../../utils/event-emitter';
 import { delta, norm } from '../../utils/text';
-import { sanitizeName, projectToName, hash, tryCatch } from '../../utils/utils';
+import { sanitizeName, projectToName, hash, tryCatch, wait } from '../../utils/utils';
 
 suite('utils', () => {
     test('sanitize name - preserves spaces', () => {
@@ -213,6 +214,75 @@ suite('decoration-provider', () => {
     });
 });
 
+suite('disk/pullpush', () => {
+    const root = vscode.Uri.joinPath(vscode.Uri.file(os.tmpdir()), 'pc-disk-pullpush-test');
+    const fresh = vscode.Uri.joinPath(root, 'fresh');
+    const existing = vscode.Uri.joinPath(root, 'existing');
+    const types = {
+        globals: buffer.from('declare namespace pc {}\n'),
+        module: buffer.from('declare module "playcanvas" { export = pc; }\n'),
+        version: 'test',
+        fallback: false
+    };
+
+    const clean = async () => {
+        await tryCatch(async () => vscode.workspace.fs.delete(root, { recursive: true, useTrash: false }));
+    };
+
+    const pm = () =>
+        ({
+            files: new Map([
+                ['kept.js', { type: 'file', uniqueId: 1, doc: { text: 'kept\n' }, dirty: false }],
+                ['remote.js', { type: 'file', uniqueId: 2, doc: { text: 'remote\n' }, dirty: false }]
+            ])
+        }) as unknown as ProjectManager;
+
+    const exists = async (uri: vscode.Uri) => {
+        const [err] = await tryCatch(async () => vscode.workspace.fs.stat(uri));
+        return !err;
+    };
+
+    const disk = () => {
+        const d = new Disk({ events: new EventEmitter<EventMap>(), pullPush: true });
+        const quiet = d as unknown as {
+            _watchEvents: () => () => void;
+            _watchDocument: () => () => void;
+            _watchDisk: () => () => void;
+            _watchUndoRedo: () => () => void;
+            _writeTypeFiles: () => Promise<void>;
+        };
+        quiet._watchEvents = () => () => undefined;
+        quiet._watchDocument = () => () => undefined;
+        quiet._watchDisk = () => () => undefined;
+        quiet._watchUndoRedo = () => () => undefined;
+        quiet._writeTypeFiles = async () => undefined;
+        return d;
+    };
+
+    setup(clean);
+
+    suiteTeardown(clean);
+
+    test('materializes remote files only on first checkout', async () => {
+        await vscode.workspace.fs.createDirectory(fresh);
+        const first = disk();
+        await first.link({ folderUri: fresh, projectManager: pm(), types });
+        const freshExists = await exists(vscode.Uri.joinPath(fresh, 'remote.js'));
+
+        await vscode.workspace.fs.createDirectory(existing);
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(existing, 'kept.js'), buffer.from('kept\n'));
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(existing, 'local-only.js'), buffer.from('local\n'));
+        const second = disk();
+        await second.link({ folderUri: existing, projectManager: pm(), types });
+        const existingExists = await exists(vscode.Uri.joinPath(existing, 'remote.js'));
+        const localOnlyExists = await exists(vscode.Uri.joinPath(existing, 'local-only.js'));
+
+        assert.strictEqual(freshExists, true);
+        assert.strictEqual(existingExists, false);
+        assert.strictEqual(localOnlyExists, true);
+    });
+});
+
 suite('sync/base-store', () => {
     const dir = vscode.Uri.joinPath(vscode.Uri.file(os.tmpdir()), 'pc-base-store-test');
 
@@ -296,7 +366,14 @@ suite('sync/sync-engine', () => {
         return !err;
     };
 
-    const engine = () => new NativeSyncEngine({ events: new EventEmitter<EventMap>(), storageUri: storage });
+    const engine = (events = new EventEmitter<EventMap>()) => {
+        events.on('sync:file:apply:update', (path, content, done) => {
+            void tryCatch(async () => writeFile(path, norm(buffer.toString(content)))).then(([err]) =>
+                done(err ?? undefined)
+            );
+        });
+        return new NativeSyncEngine({ events, storageUri: storage });
+    };
 
     const pmWith = (doc: { text: string }) => {
         const files = new Map([['a.js', { type: 'file', uniqueId: 1, doc, dirty: false }]]);
@@ -305,6 +382,7 @@ suite('sync/sync-engine', () => {
 
     // pm whose doc records submitted ops and applies them (simulating the server)
     const pushPm = () => {
+        const events = new EventEmitter<EventMap>();
         const applied: ShareDbTextOp[] = [];
         const saved: string[] = [];
         const doc = {
@@ -327,9 +405,12 @@ suite('sync/sync-engine', () => {
                 doc.apply(op);
                 file.dirty = true;
             },
-            save: (p: string) => saved.push(p)
+            save: (p: string) => {
+                saved.push(p);
+                events.emit('asset:file:save', p);
+            }
         } as unknown as ProjectManager;
-        return { pm, doc, applied, saved };
+        return { events, pm, doc, applied, saved };
     };
 
     test('clean when working equals remote', async () => {
@@ -390,6 +471,52 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e2.status('a.js'), 'modified');
     });
 
+    test('link keeps missing based files as local deletes', async () => {
+        await writeFile('a.js', 'x\n');
+        const e1 = engine();
+        await e1.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        await e1.unlink();
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'a.js'), { recursive: false, useTrash: false });
+
+        const e2 = engine();
+        await e2.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        assert.strictEqual(e2.status('a.js'), 'deleted');
+    });
+
+    test('link keeps missing unbased files as incoming adds', async () => {
+        await vscode.workspace.fs.createDirectory(work);
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pmWith({ text: 'x\n' }), projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.status('a.js'), 'behind');
+        assert.strictEqual(e.decorationStatus('a.js'), 'added');
+    });
+
+    test('link keeps pre-existing local-only files as local adds', async () => {
+        const created: [string, 'file' | 'folder', string][] = [];
+        const files = new Map<string, unknown>();
+        const pm = {
+            files,
+            create: async (p: string, t: 'file' | 'folder', content?: Uint8Array) => {
+                created.push([p, t, content ? norm(buffer.toString(content)) : '']);
+                files.set(p, {
+                    type: t,
+                    uniqueId: 10,
+                    doc: { text: content ? norm(buffer.toString(content)) : '' },
+                    dirty: false
+                });
+            }
+        } as unknown as ProjectManager;
+
+        await writeFile('local-only.js', 'local\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+
+        assert.strictEqual(e.status('local-only.js'), 'added');
+        await e.push();
+        assert.deepStrictEqual(created, [['local-only.js', 'file', 'local\n']]);
+        assert.strictEqual(e.status('local-only.js'), 'clean');
+    });
+
     test('pull - fast-forward when no local edits', async () => {
         await writeFile('a.js', 'x\n');
         const doc = { text: 'x\n' };
@@ -399,6 +526,163 @@ suite('sync/sync-engine', () => {
         await e.pull();
         assert.strictEqual(await readFile('a.js'), 'x\ny\n');
         assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('pull - applies content update through disk apply event', async () => {
+        await writeFile('a.js', 'x\n');
+        const events = new EventEmitter<EventMap>();
+        const doc = { text: 'x\n' };
+        const pm = {
+            files: new Map([['a.js', { type: 'file', uniqueId: 1, doc, dirty: false }]])
+        } as unknown as ProjectManager;
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        const applied: string[] = [];
+        events.on('sync:file:apply:update', async (path, content, done) => {
+            applied.push(path);
+            await writeFile(path, norm(buffer.toString(content)));
+            done();
+        });
+
+        doc.text = 'x\ny\n';
+        await e.pull();
+
+        assert.deepStrictEqual(applied, ['a.js']);
+        assert.strictEqual(await readFile('a.js'), 'x\ny\n');
+    });
+
+    test('push - ignores stale clean buffer after pull fast-forwards disk', async () => {
+        const applied: ShareDbTextOp[] = [];
+        const doc = {
+            text: 'x\n',
+            apply(op: ShareDbTextOp) {
+                applied.push(op);
+                doc.text = ottext.apply(doc.text, op) as string;
+            }
+        };
+        const file = { type: 'file', uniqueId: 9, doc, dirty: false };
+        const pm = {
+            files: new Map([['stale.js', file]]),
+            write: async (_p: string, content: Uint8Array) => {
+                const op = delta(doc.text, norm(buffer.toString(content)));
+                if (op) {
+                    doc.apply(op);
+                    file.dirty = true;
+                }
+            },
+            save: () => undefined
+        } as unknown as ProjectManager;
+        await writeFile('stale.js', 'x\n');
+        const uri = vscode.Uri.joinPath(work, 'stale.js');
+        const open = await vscode.workspace.openTextDocument(uri);
+        const e = engine();
+        const [err] = await tryCatch(async () => {
+            await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+            doc.text = 'x\nremote\n';
+
+            await e.pull();
+            await e.push();
+
+            assert.strictEqual(await readFile('stale.js'), 'x\nremote\n');
+            assert.strictEqual(open.isDirty, false);
+            assert.strictEqual(applied.length, 0);
+        });
+        await vscode.window.showTextDocument(open);
+        if (open.isDirty) {
+            await vscode.commands.executeCommand('workbench.action.files.revert');
+        }
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+        if (err) {
+            throw err;
+        }
+    });
+
+    test('pull - writes disk without saving dirty open buffer', async () => {
+        const applied: ShareDbTextOp[] = [];
+        const doc = {
+            text: 'x\n',
+            apply(op: ShareDbTextOp) {
+                applied.push(op);
+                doc.text = ottext.apply(doc.text, op) as string;
+            }
+        };
+        const file = { type: 'file', uniqueId: 10, doc, dirty: false };
+        const pm = {
+            files: new Map([['dirty.js', file]]),
+            write: async (_p: string, content: Uint8Array) => {
+                const op = delta(doc.text, norm(buffer.toString(content)));
+                if (op) {
+                    doc.apply(op);
+                    file.dirty = true;
+                }
+            },
+            save: () => undefined
+        } as unknown as ProjectManager;
+        await writeFile('dirty.js', 'x\n');
+        const uri = vscode.Uri.joinPath(work, 'dirty.js');
+        const open = await vscode.workspace.openTextDocument(uri);
+        const e = engine();
+        const [err] = await tryCatch(async () => {
+            await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+            const editor = await vscode.window.showTextDocument(open);
+            const ok = await editor.edit((edit) => {
+                edit.replace(
+                    new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)),
+                    'x\nunsaved\n'
+                );
+            });
+            assert.strictEqual(ok, true);
+            assert.strictEqual(open.isDirty, true);
+            doc.text = 'x\nremote\n';
+
+            await e.pull();
+            await e.push();
+
+            assert.strictEqual(await readFile('dirty.js'), 'x\nremote\n');
+            assert.strictEqual(open.getText(), 'x\nunsaved\n');
+            assert.strictEqual(open.isDirty, true);
+            assert.strictEqual(applied.length, 0);
+        });
+        await vscode.window.showTextDocument(open);
+        if (open.isDirty) {
+            await vscode.commands.executeCommand('workbench.action.files.revert');
+        }
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+        if (err) {
+            throw err;
+        }
+    });
+
+    test('status ignores unsaved open buffer until saved to disk', async () => {
+        await writeFile('dirty.js', 'x\n');
+        const file = { type: 'file', uniqueId: 11, doc: { text: 'x\n' }, dirty: false };
+        const pm = { files: new Map([['dirty.js', file]]) } as unknown as ProjectManager;
+        const uri = vscode.Uri.joinPath(work, 'dirty.js');
+        const open = await vscode.workspace.openTextDocument(uri);
+        const e = engine();
+        const [err] = await tryCatch(async () => {
+            await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+            const editor = await vscode.window.showTextDocument(open);
+            const ok = await editor.edit((edit) => {
+                edit.replace(
+                    new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)),
+                    'x\nunsaved\n'
+                );
+            });
+            assert.strictEqual(ok, true);
+            assert.strictEqual(open.isDirty, true);
+
+            await e.refresh('dirty.js');
+            assert.strictEqual(e.status('dirty.js'), 'clean');
+        });
+        await vscode.window.showTextDocument(open);
+        if (open.isDirty) {
+            await vscode.commands.executeCommand('workbench.action.files.revert');
+        }
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+        if (err) {
+            throw err;
+        }
     });
 
     test('pull - leaves local edits when remote unchanged', async () => {
@@ -552,6 +836,27 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(await readFile('a.js'), 'local\n');
     });
 
+    test('pull - blocks local delete over remote edit', async () => {
+        await writeFile('a.js', 'x\n');
+        const events = new EventEmitter<EventMap>();
+        const doc = { text: 'x\n' };
+        const pm = {
+            files: new Map([['a.js', { type: 'file', uniqueId: 1, doc, dirty: false }]])
+        } as unknown as ProjectManager;
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'a.js'), { recursive: false, useTrash: false });
+        events.emit('sync:file:delete', 'a.js', 'file');
+        doc.text = 'x\nremote\n';
+
+        await e.refresh('a.js');
+        assert.strictEqual(e.status('a.js'), 'conflicted');
+
+        const [err] = await tryCatch(() => e.pull());
+        assert.ok(err, 'pull should be blocked');
+        assert.strictEqual(await exists('a.js'), false);
+    });
+
     test('pull - blocks remote create over local add', async () => {
         const events = new EventEmitter<EventMap>();
         const files = new Map<string, unknown>();
@@ -569,6 +874,24 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(await readFile('new.js'), 'local\n');
     });
 
+    test('remote create over identical empty disk file is not conflicted', async () => {
+        await writeFile('empty.js', '');
+        const events = new EventEmitter<EventMap>();
+        const files = new Map<string, unknown>();
+        const pm = { files } as unknown as ProjectManager;
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+
+        files.set('empty.js', { type: 'file', uniqueId: 10, doc: { text: '' }, dirty: false });
+        events.emit('asset:file:create', 'empty.js', 'file', new Uint8Array());
+        for (let i = 0; i < 50 && e.status('empty.js') === 'clean'; i++) {
+            await wait(10);
+        }
+
+        assert.strictEqual(e.status('empty.js'), 'behind');
+        assert.strictEqual(e.structuralConflict('empty.js'), false);
+    });
+
     test('structural conflict - keep current add becomes modified against remote create', async () => {
         const events = new EventEmitter<EventMap>();
         const file = { type: 'file', uniqueId: 10, doc: { text: 'remote\n' }, dirty: false };
@@ -584,7 +907,10 @@ suite('sync/sync-engine', () => {
                     written.push(file.doc.text);
                 }
             },
-            save: (p: string) => saved.push(p)
+            save: (p: string) => {
+                saved.push(p);
+                events.emit('asset:file:save', p);
+            }
         } as unknown as ProjectManager;
         const e = new NativeSyncEngine({ events, storageUri: storage });
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
@@ -650,9 +976,9 @@ suite('sync/sync-engine', () => {
     });
 
     test('push - submits delta, flushes, advances base', async () => {
-        const { pm, applied, saved } = pushPm();
+        const { events, pm, applied, saved } = pushPm();
         await writeFile('a.js', 'x\n');
-        const e = engine();
+        const e = engine(events);
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
         await writeFile('a.js', 'x\nlocal\n');
         await e.refresh();
@@ -664,10 +990,51 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('a.js'), 'clean');
     });
 
+    test('push - waits for save ack before advancing base', async () => {
+        await writeFile('a.js', 'x\nlocal\n');
+        const events = new EventEmitter<EventMap>();
+        const doc = {
+            text: 'x\n',
+            apply(op: ShareDbTextOp) {
+                doc.text = ottext.apply(doc.text, op) as string;
+            },
+            whenNothingPending(cb: () => void) {
+                cb();
+            }
+        };
+        const file = { type: 'file', uniqueId: 1, doc, dirty: false };
+        const saves: string[] = [];
+        const pm = {
+            files: new Map([['a.js', file]]),
+            write: async (_p: string, content: Uint8Array) => {
+                const op = delta(doc.text, norm(buffer.toString(content)));
+                if (op) {
+                    doc.apply(op);
+                    file.dirty = true;
+                }
+            },
+            save: (path: string) => {
+                saves.push(path);
+            }
+        } as unknown as ProjectManager;
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+
+        const pushed = e.push();
+        await wait(25);
+
+        assert.deepStrictEqual(saves, ['a.js']);
+        assert.strictEqual(e.status('a.js'), 'modified');
+
+        events.emit('asset:file:save', 'a.js');
+        await pushed;
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
     test('push - no-op when nothing modified', async () => {
-        const { pm, applied, saved } = pushPm();
+        const { events, pm, applied, saved } = pushPm();
         await writeFile('a.js', 'x\n');
-        const e = engine();
+        const e = engine(events);
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
         await e.push();
         assert.strictEqual(applied.length, 0);
@@ -675,9 +1042,9 @@ suite('sync/sync-engine', () => {
     });
 
     test('push - rejected when behind (no force push)', async () => {
-        const { pm, doc, applied } = pushPm();
+        const { events, pm, doc, applied } = pushPm();
         await writeFile('a.js', 'x\n');
-        const e = engine();
+        const e = engine(events);
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
         doc.text = 'x\nremote\n';
         const [err] = await tryCatch(() => e.push());
@@ -813,9 +1180,11 @@ suite('sync/sync-engine', () => {
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
         await writeFile('a.js', 'x\nlocal\n');
         await e.refresh();
-        await e.push();
+        const pushed = e.push();
+        await wait(25);
         assert.strictEqual((files.get('a.js') as { type: string }).type, 'file', 'subscribed until flush ack');
         events.emit('asset:file:save', 'a.js');
+        await pushed;
         for (let i = 0; i < 50 && (files.get('a.js') as { type: string }).type !== 'stub'; i++) {
             await new Promise((resolve) => setTimeout(resolve, 10));
         }
@@ -824,6 +1193,7 @@ suite('sync/sync-engine', () => {
 
     test('push - subscribes a modified stub and submits', async () => {
         await writeFile('a.js', 'x\n');
+        const events = new EventEmitter<EventMap>();
         const applied: ShareDbTextOp[] = [];
         const saved: string[] = [];
         const doc = {
@@ -850,9 +1220,12 @@ suite('sync/sync-engine', () => {
                 doc.apply(op);
                 file.dirty = true;
             },
-            save: (p: string) => saved.push(p)
+            save: (p: string) => {
+                saved.push(p);
+                events.emit('asset:file:save', p);
+            }
         } as unknown as ProjectManager;
-        const e = engine();
+        const e = engine(events);
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
         await writeFile('a.js', 'x\nlocal\n');
         await e.refresh();
@@ -969,6 +1342,7 @@ suite('sync/sync-engine', () => {
         await writeFile('a.js', 'x\n');
         const e = new NativeSyncEngine({ events, storageUri: storage });
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'a.js'), { recursive: false, useTrash: false });
         events.emit('sync:file:delete', 'a.js', 'file');
 
         assert.strictEqual(e.status('a.js'), 'deleted');
@@ -992,10 +1366,35 @@ suite('sync/sync-engine', () => {
         await writeFile('a.js', 'x\n');
         const e = new NativeSyncEngine({ events, storageUri: storage });
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'a.js'), { recursive: false, useTrash: false });
         events.emit('sync:file:delete', 'a.js', 'file');
 
         await e.push();
         assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('push - rejects local delete when remote changed', async () => {
+        const events = new EventEmitter<EventMap>();
+        const deleted: string[] = [];
+        const doc = { text: 'x\n' };
+        const file = { type: 'file', uniqueId: 1, doc, dirty: false };
+        const pm = {
+            files: new Map([['a.js', file]]),
+            delete: async (path: string) => {
+                deleted.push(path);
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', 'x\n');
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'a.js'), { recursive: false, useTrash: false });
+        events.emit('sync:file:delete', 'a.js', 'file');
+        doc.text = 'x\nremote\n';
+
+        const [err] = await tryCatch(() => e.push());
+
+        assert.ok(err, 'push should be blocked');
+        assert.deepStrictEqual(deleted, []);
     });
 
     test('push - renames local-only path', async () => {
@@ -1015,12 +1414,37 @@ suite('sync/sync-engine', () => {
         await writeFile('a.js', 'x\n');
         const e = new NativeSyncEngine({ events, storageUri: storage });
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'a.js'), vscode.Uri.joinPath(work, 'b.js'));
         events.emit('sync:file:rename', 'a.js', 'b.js', 'file');
 
         assert.strictEqual(e.status('b.js'), 'renamed');
         await e.push();
         assert.deepStrictEqual(renamed, [['a.js', 'b.js']]);
         assert.strictEqual(e.status('b.js'), 'clean');
+    });
+
+    test('push - rejects local rename when remote changed', async () => {
+        const events = new EventEmitter<EventMap>();
+        const renamed: [string, string][] = [];
+        const doc = { text: 'x\n' };
+        const file = { type: 'file', uniqueId: 1, doc, dirty: false };
+        const pm = {
+            files: new Map([['a.js', file]]),
+            rename: async (from: string, to: string) => {
+                renamed.push([from, to]);
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', 'x\n');
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'a.js'), vscode.Uri.joinPath(work, 'b.js'));
+        events.emit('sync:file:rename', 'a.js', 'b.js', 'file');
+        doc.text = 'x\nremote\n';
+
+        const [err] = await tryCatch(() => e.push());
+
+        assert.ok(err, 'push should be blocked');
+        assert.deepStrictEqual(renamed, []);
     });
 
     test('push - consumes local rename echo', async () => {
@@ -1039,6 +1463,7 @@ suite('sync/sync-engine', () => {
         await writeFile('a.js', 'x\n');
         const e = new NativeSyncEngine({ events, storageUri: storage });
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'a.js'), vscode.Uri.joinPath(work, 'b.js'));
         events.emit('sync:file:rename', 'a.js', 'b.js', 'file');
 
         await e.push();
@@ -1091,10 +1516,10 @@ suite('sync/sync-engine', () => {
     });
 
     test('resolve after conflict makes the file pushable (not stuck)', async () => {
-        const { pm, doc, applied } = pushPm();
+        const { events, pm, doc, applied } = pushPm();
         await writeFile('a.js', 'a\nb\nc\n');
         doc.text = 'a\nb\nc\n';
-        const e = engine();
+        const e = engine(events);
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
 
         // local + remote change the same line -> conflict on pull

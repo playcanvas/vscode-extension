@@ -8,12 +8,15 @@ import type { EventEmitter } from '../utils/event-emitter';
 import { Linker } from '../utils/linker';
 import { signal } from '../utils/signal';
 import { norm } from '../utils/text';
-import { hash, relativePath, tryCatch } from '../utils/utils';
+import { hash, relativePath, tryCatch, withTimeout } from '../utils/utils';
 
 import { BaseStore } from './base-store';
 import { merge } from './merge';
 import { classify } from './status';
 import type { SyncState } from './status';
+
+const SAVE_TIMEOUT_MS = 30_000;
+const LOCAL_IGNORE_DIRS = new Set(['.pc', '.git', '.hg', '.svn', '.vscode', '.cursor']);
 
 type LinkParams = {
     folderUri: vscode.Uri;
@@ -22,7 +25,7 @@ type LinkParams = {
     branchId: string;
 };
 type LocalOp =
-    | { action: 'added'; path: string; type: 'file' | 'folder' }
+    | { action: 'added'; path: string; type: 'file' | 'folder'; hash?: string }
     | { action: 'deleted'; path: string; type: 'file' | 'folder' }
     | { action: 'renamed'; from: string; path: string; type: 'file' | 'folder' };
 type RemoteOp =
@@ -157,6 +160,23 @@ class NativeSyncEngine extends Linker<LinkParams> {
         return false;
     }
 
+    private _remoteChanged(path: string) {
+        const pm = this._projectManager;
+        if (!pm) {
+            return false;
+        }
+        for (const [p, file] of pm.files) {
+            if (!this._touches(p, path) || file.type !== 'file') {
+                continue;
+            }
+            const base = this._base.get(file.uniqueId);
+            if (base && norm(file.doc.text) !== base.text) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private _dropLocal(...paths: string[]) {
         for (const [path, op] of Array.from(this._local)) {
             const touches = paths.some(
@@ -246,12 +266,24 @@ class NativeSyncEngine extends Linker<LinkParams> {
         if (this._echo(`create:${type}:${path}`)) {
             return;
         }
+        const local = this._local.get(path);
+        if (local?.action === 'added' && local.type === type) {
+            const same = type === 'folder' || local.hash === hash(norm(buffer.toString(content)));
+            if (same) {
+                this._local.delete(path);
+                this._status.delete(path);
+                this._setRemote({ action: 'created', path, type, content });
+                return;
+            }
+            this._setRemote({ action: 'created', path, type, content }, true);
+            return;
+        }
         if (this._localTouches(path)) {
             this._setRemote({ action: 'created', path, type, content }, true);
             return;
         }
-        const working = type === 'file' ? await this._read(this._folderUri!, path) : undefined;
-        const same = type === 'file' && content.length > 0 && working === norm(buffer.toString(content));
+        const working = type === 'file' ? await this._readDisk(this._folderUri!, path) : undefined;
+        const same = type === 'file' && working === norm(buffer.toString(content));
         this._setRemote({ action: 'created', path, type, content }, working !== undefined && !same);
     }
 
@@ -365,19 +397,42 @@ class NativeSyncEngine extends Linker<LinkParams> {
         await this.keepCurrent(uri);
     }
 
-    private async _read(folderUri: vscode.Uri, path: string) {
-        const uri = vscode.Uri.joinPath(folderUri, path);
-        // prefer the open buffer so status reflects unsaved edits (live)
-        const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-        if (open && !open.isClosed) {
-            return norm(open.getText());
-        }
-        const [err, data] = await tryCatch(async () => vscode.workspace.fs.readFile(uri));
+    private async _readDisk(folderUri: vscode.Uri, path: string) {
+        const [err, data] = await tryCatch(async () =>
+            vscode.workspace.fs.readFile(vscode.Uri.joinPath(folderUri, path))
+        );
         return err ? undefined : norm(buffer.toString(data));
     }
 
-    private async _write(folderUri: vscode.Uri, path: string, text: string) {
-        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folderUri, path), buffer.from(text));
+    private async _refreshLocalOnly(folderUri: vscode.Uri, base = '') {
+        const pm = this._projectManager;
+        if (!pm) {
+            return;
+        }
+        const dir = base ? vscode.Uri.joinPath(folderUri, base) : folderUri;
+        const [, entries] = await tryCatch(async () => vscode.workspace.fs.readDirectory(dir));
+        for (const [name, type] of entries ?? []) {
+            const path = base ? `${base}/${name}` : name;
+            if (LOCAL_IGNORE_DIRS.has(path.split('/')[0])) {
+                continue;
+            }
+            const kind = type === vscode.FileType.Directory ? 'folder' : type === vscode.FileType.File ? 'file' : '';
+            if (!kind) {
+                continue;
+            }
+            const text = kind === 'file' ? await this._readDisk(folderUri, path) : undefined;
+            if (!pm.files.has(path) && !this._remote.has(path) && !this._local.has(path)) {
+                this._setLocal({
+                    action: 'added',
+                    path,
+                    type: kind,
+                    hash: text === undefined ? undefined : hash(text)
+                });
+            }
+            if (kind === 'folder') {
+                await this._refreshLocalOnly(folderUri, path);
+            }
+        }
     }
 
     private _applyCreate(path: string, type: 'file' | 'folder', content: Uint8Array) {
@@ -385,6 +440,15 @@ class NativeSyncEngine extends Linker<LinkParams> {
             const done = (err?: Error) => (err ? reject(err) : resolve());
             if (!this._events.emit('sync:file:apply:create', path, type, content, done)) {
                 resolve();
+            }
+        });
+    }
+
+    private _applyUpdate(path: string, text: string) {
+        return new Promise<void>((resolve, reject) => {
+            const done = (err?: Error) => (err ? reject(err) : resolve());
+            if (!this._events.emit('sync:file:apply:update', path, buffer.from(text), done)) {
+                reject(fail`disk apply update handler missing`);
             }
         });
     }
@@ -407,6 +471,34 @@ class NativeSyncEngine extends Linker<LinkParams> {
         });
     }
 
+    private async _save(path: string) {
+        const pm = this._projectManager;
+        if (!pm) {
+            return;
+        }
+        let listener: ((p: string) => void) | undefined;
+        const saved = new Promise<void>((resolve) => {
+            listener = this._events.on('asset:file:save', (p) => {
+                if (p !== path || !listener) {
+                    return;
+                }
+                this._events.off('asset:file:save', listener);
+                listener = undefined;
+                resolve();
+            });
+        });
+        const [err] = await tryCatch(async () => {
+            pm.save(path);
+            await withTimeout(saved, SAVE_TIMEOUT_MS, `save timed out for ${path}`);
+        });
+        if (listener) {
+            this._events.off('asset:file:save', listener);
+        }
+        if (err) {
+            throw err;
+        }
+    }
+
     private async _refresh(path: string) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
@@ -421,6 +513,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
         const local = this._local.get(path);
         if (local) {
+            if (local.action === 'deleted' && this._remoteChanged(path)) {
+                this._status.set(path, 'conflicted');
+                return;
+            }
             this._status.set(path, local.action);
             return;
         }
@@ -430,9 +526,17 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
 
-        const working = await this._read(folderUri, path);
+        const working = await this._readDisk(folderUri, path);
         if (working === undefined) {
-            return; // not on disk yet
+            if (this._localOpTouches(path)) {
+                return;
+            }
+            if (this._base.get(file.uniqueId)) {
+                this._setLocal({ action: 'deleted', path, type: 'file' });
+            } else {
+                this._setRemote({ action: 'created', path, type: 'file', content: new Uint8Array() });
+            }
+            return;
         }
 
         if (file.type === 'stub') {
@@ -472,7 +576,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     private async _refreshAll() {
         const pm = this._projectManager;
-        if (!pm) {
+        const folderUri = this._folderUri;
+        if (!pm || !folderUri) {
             return;
         }
         this._status.clear();
@@ -487,6 +592,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 await this._refresh(path);
             }
         }
+        await this._refreshLocalOnly(folderUri);
         this.changed.set((v) => v + 1);
     }
 
@@ -525,8 +631,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
 
-        // flush open buffers so merges write to disk and reload cleanly
-        await vscode.workspace.saveAll(false);
         await this._refreshAll();
         for (const state of this._status.values()) {
             if (state === 'conflicted') {
@@ -574,7 +678,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             if (file.type !== 'file') {
                 continue;
             }
-            const working = await this._read(folderUri, path);
+            const working = await this._readDisk(folderUri, path);
             if (working === undefined) {
                 continue;
             }
@@ -584,7 +688,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             // unseen, or no local divergence -> fast-forward to remote
             if (!base || working === base.text) {
                 if (remote !== working) {
-                    await this._write(folderUri, path, remote);
+                    await this._applyUpdate(path, remote);
                 }
                 this._base.set(file.uniqueId, remote);
                 continue;
@@ -605,7 +709,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 // stash the three sides for the merge editor (base advances below)
                 this._merges.set(file.uniqueId, { base: base.text, local: working, remote });
             }
-            await this._write(folderUri, path, result.text);
+            await this._applyUpdate(path, result.text);
             this._base.set(file.uniqueId, remote);
         }
 
@@ -627,8 +731,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
 
-        // flush open buffers so the pushed content matches the editor
-        await vscode.workspace.saveAll(false);
         await this._refreshAll();
         for (const state of this._status.values()) {
             if (state === 'behind' || state === 'both' || state === 'conflicted') {
@@ -646,6 +748,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
             .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
 
         for (const op of renamed) {
+            if (this._remoteChanged(op.from)) {
+                throw fail`remote has changes — pull before pushing`;
+            }
             const key = `rename:${op.from}:${op.path}`;
             this._echoes.add(key);
             const [err] = await tryCatch(() => pm.rename(op.from, op.path));
@@ -656,7 +761,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._local.delete(op.path);
         }
         for (const op of added) {
-            const content = op.type === 'file' ? buffer.from((await this._read(folderUri, op.path)) ?? '') : undefined;
+            const content =
+                op.type === 'file' ? buffer.from((await this._readDisk(folderUri, op.path)) ?? '') : undefined;
             const key = `create:${op.type}:${op.path}`;
             this._echoes.add(key);
             const [err] = await tryCatch(() => pm.create(op.path, op.type, content));
@@ -667,6 +773,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._local.delete(op.path);
         }
         for (const op of deleted) {
+            if (this._remoteChanged(op.path)) {
+                throw fail`remote has changes — pull before pushing`;
+            }
             const key = `delete:${op.path}`;
             this._echoes.add(key);
             const [err] = await tryCatch(() => pm.delete(op.path, op.type));
@@ -681,7 +790,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             if (f.type === 'folder' || this._status.get(path) !== 'modified') {
                 continue;
             }
-            const working = await this._read(folderUri, path);
+            const working = await this._readDisk(folderUri, path);
             if (working === undefined) {
                 continue;
             }
@@ -714,7 +823,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
             // write() diffs against the live doc and marks dirty so save() flushes
             await pm.write(path, buffer.from(working));
-            pm.save(path);
+            await this._save(path);
             this._base.set(file.uniqueId, working);
         }
 
@@ -733,7 +842,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         if (base === undefined) {
             return;
         }
-        await this._write(folderUri, path, base);
+        await this._applyUpdate(path, base);
         await this._refreshAll();
     }
 
