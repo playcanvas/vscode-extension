@@ -852,7 +852,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
         await super.unlink();
 
-        await this._base.load(projectId, branchId);
+        await this._base.load(projectId, branchId, hash(folderUri.toString()));
 
         this._folderUri = folderUri;
         this._projectManager = projectManager;

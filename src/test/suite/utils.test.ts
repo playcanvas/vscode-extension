@@ -339,6 +339,21 @@ suite('sync/base-store', () => {
         await b.load(1, 'dev');
         assert.strictEqual(b.get(1), undefined);
     });
+
+    test('separate folder ids are isolated', async () => {
+        const a = new BaseStore({ storageUri: dir });
+        await a.load(1, 'main', 'folder-a');
+        a.set(1, 'from-a');
+        await a.flush();
+
+        const b = new BaseStore({ storageUri: dir });
+        await b.load(1, 'main', 'folder-b');
+        assert.strictEqual(b.get(1), undefined);
+
+        const c = new BaseStore({ storageUri: dir });
+        await c.load(1, 'main', 'folder-a');
+        assert.strictEqual(c.get(1)?.text, 'from-a');
+    });
 });
 
 suite('sync/sync-engine', () => {

@@ -17,17 +17,20 @@ export class BaseStore {
 
     private _branchId?: string;
 
+    private _folderId = 'default';
+
     constructor({ storageUri }: { storageUri: vscode.Uri }) {
         this._storageUri = storageUri;
     }
 
     private _uri(projectId: number, branchId: string) {
-        return vscode.Uri.joinPath(this._storageUri, 'base', `${projectId}-${branchId}.json`);
+        return vscode.Uri.joinPath(this._storageUri, 'base', `${projectId}-${branchId}-${this._folderId}.json`);
     }
 
-    async load(projectId: number, branchId: string) {
+    async load(projectId: number, branchId: string, folderId = 'default') {
         this._projectId = projectId;
         this._branchId = branchId;
+        this._folderId = folderId;
         this._entries.clear();
 
         const [err, data] = await tryCatch(async () => vscode.workspace.fs.readFile(this._uri(projectId, branchId)));
