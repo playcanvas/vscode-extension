@@ -4,6 +4,7 @@ import * as os from 'os';
 import { type as ottext } from 'ot-text';
 import * as vscode from 'vscode';
 
+import type { Rest, SyncItem, SyncPullResponse, SyncPushRequest } from '../../connections/rest';
 import { Disk } from '../../disk';
 import type { ProjectManager } from '../../project-manager';
 import { DecorationProvider } from '../../providers/decoration-provider';
@@ -322,6 +323,30 @@ suite('sync/base-store', () => {
         assert.strictEqual(b.get(2)?.text, 'second');
     });
 
+    test('persists sync metadata across reload', async () => {
+        const a = new BaseStore({ storageUri: dir });
+        await a.load(7, 'main');
+        a.setBase('base-1');
+        a.setSeq(5);
+        a.setItem({
+            kind: 'asset',
+            id: 10,
+            path: 'a.js',
+            type: 'file',
+            modifiedAt: '2026-06-25T00:00:00.000Z',
+            text: 'x\n'
+        });
+        const clientId = a.clientId;
+        await a.flush();
+
+        const b = new BaseStore({ storageUri: dir });
+        await b.load(7, 'main');
+        assert.strictEqual(b.base, 'base-1');
+        assert.strictEqual(b.seq, 5);
+        assert.strictEqual(b.clientId, clientId);
+        assert.strictEqual(b.byPath('a.js')?.text, 'x\n');
+    });
+
     test('load clears entries when no file exists', async () => {
         const store = new BaseStore({ storageUri: dir });
         store.set(99, 'stale');
@@ -446,6 +471,62 @@ suite('sync/sync-engine', () => {
             }
         } as unknown as ProjectManager;
         return { events, pm, doc, applied, saved };
+    };
+
+    const syncItem = (id: number, path: string, text = '', type: 'file' | 'folder' = 'file'): SyncItem => ({
+        kind: 'asset',
+        id,
+        path,
+        type,
+        modifiedAt: '2026-06-25T00:00:00.000Z',
+        text: type === 'file' ? text : undefined
+    });
+
+    const syncRest = (initial: SyncPullResponse) => {
+        let current = initial;
+        const pushes: SyncPushRequest[] = [];
+        const rest = {
+            syncPull: async () => current,
+            syncPush: async (_projectId: number, _branchId: string, body: SyncPushRequest) => {
+                pushes.push(body);
+                const op = body.ops[0];
+                const items = current.items.slice();
+                if (op.type === 'update_text') {
+                    current = {
+                        base: `base-${pushes.length}`,
+                        items: items.map((item) => (item.id === op.id ? { ...item, text: op.text } : item))
+                    };
+                } else if (op.type === 'create_file') {
+                    current = {
+                        base: `base-${pushes.length}`,
+                        items: items.concat(syncItem(100 + pushes.length, op.path, op.text))
+                    };
+                } else if (op.type === 'create_folder') {
+                    current = {
+                        base: `base-${pushes.length}`,
+                        items: items.concat(syncItem(100 + pushes.length, op.path, '', 'folder'))
+                    };
+                } else if (op.type === 'rename') {
+                    current = {
+                        base: `base-${pushes.length}`,
+                        items: items.map((item) => (item.id === op.id ? { ...item, path: op.path } : item))
+                    };
+                } else {
+                    current = {
+                        base: `base-${pushes.length}`,
+                        items: items.filter((item) => item.id !== op.id)
+                    };
+                }
+                return current;
+            }
+        } as unknown as Rest;
+        return {
+            rest,
+            pushes,
+            set(snapshot: SyncPullResponse) {
+                current = snapshot;
+            }
+        };
     };
 
     test('clean when working equals remote', async () => {
@@ -578,6 +659,93 @@ suite('sync/sync-engine', () => {
         await e.pull();
         assert.strictEqual(await readFile('a.js'), 'x\ny\n');
         assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('rest pull - fast-forwards from remote snapshot', async () => {
+        await writeFile('a.js', 'x\n');
+        const api = syncRest({ base: 'base-0', items: [syncItem(10, 'a.js', 'x\n')] });
+        const e = engine();
+        await e.link({
+            folderUri: work,
+            projectManager: pmWith({ text: 'ignored\n' }),
+            projectId: 1,
+            branchId: 'main',
+            rest: api.rest
+        });
+
+        api.set({ base: 'base-1', items: [syncItem(10, 'a.js', 'x\nremote\n')] });
+        await e.pull();
+
+        assert.strictEqual(await readFile('a.js'), 'x\nremote\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+        assert.strictEqual(await e.remoteText('a.js'), 'x\nremote\n');
+    });
+
+    test('rest push - sends update_text with client seq and base', async () => {
+        await writeFile('a.js', 'x\n');
+        const api = syncRest({ base: 'base-0', items: [syncItem(10, 'a.js', 'x\n')] });
+        const e = engine();
+        await e.link({
+            folderUri: work,
+            projectManager: pmWith({ text: 'ignored\n' }),
+            projectId: 1,
+            branchId: 'main',
+            rest: api.rest
+        });
+
+        await writeFile('a.js', 'x\nlocal\n');
+        await e.refresh();
+        await e.push();
+
+        assert.strictEqual(api.pushes.length, 1);
+        assert.strictEqual(api.pushes[0].base, 'base-0');
+        assert.strictEqual(api.pushes[0].seq, 1);
+        assert.strictEqual(typeof api.pushes[0].clientId, 'string');
+        assert.deepStrictEqual(api.pushes[0].ops, [{ type: 'update_text', id: 10, text: 'x\nlocal\n' }]);
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('rest incoming - collaborator event refreshes incoming snapshot', async () => {
+        await writeFile('a.js', 'x\n');
+        const events = new EventEmitter<EventMap>();
+        const api = syncRest({ base: 'base-0', items: [syncItem(10, 'a.js', 'x\n')] });
+        const e = engine(events);
+        await e.link({
+            folderUri: work,
+            projectManager: pmWith({ text: 'ignored\n' }),
+            projectId: 1,
+            branchId: 'main',
+            rest: api.rest
+        });
+
+        api.set({ base: 'base-1', items: [syncItem(10, 'a.js', 'x\nremote\n')] });
+        events.emit('asset:file:update', 'a.js', [], 'x\nremote\n', 'x\n');
+        for (let i = 0; i < 80 && e.status('a.js') !== 'behind'; i++) {
+            await wait(10);
+        }
+
+        assert.strictEqual(e.status('a.js'), 'behind');
+        assert.strictEqual(await e.remoteText('a.js'), 'x\nremote\n');
+    });
+
+    test('rest pull - applies remote rename as one structural change', async () => {
+        await writeFile('a.js', 'x\n');
+        const api = syncRest({ base: 'base-0', items: [syncItem(10, 'a.js', 'x\n')] });
+        const e = engine();
+        await e.link({
+            folderUri: work,
+            projectManager: pmWith({ text: 'ignored\n' }),
+            projectId: 1,
+            branchId: 'main',
+            rest: api.rest
+        });
+
+        api.set({ base: 'base-1', items: [syncItem(10, 'b.js', 'x\n')] });
+        await e.pull();
+
+        assert.strictEqual(await exists('a.js'), false);
+        assert.strictEqual(await readFile('b.js'), 'x\n');
+        assert.strictEqual(e.status('b.js'), 'clean');
     });
 
     test('pull - applies content update through disk apply event', async () => {

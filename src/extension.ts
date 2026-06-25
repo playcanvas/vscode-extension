@@ -895,7 +895,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
         // link native sync engine + source control panel (experimental pullpush mode)
         if (pullPush) {
-            await nativeSync.link({ folderUri, projectManager, projectId: project.id, branchId });
+            await nativeSync.link({ folderUri, projectManager, projectId: project.id, branchId, rest });
             context.subscriptions.push(
                 new vscode.Disposable(() => {
                     void nativeSync.unlink();
