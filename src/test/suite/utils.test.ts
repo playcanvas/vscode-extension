@@ -705,6 +705,57 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('a.js'), 'clean');
     });
 
+    test('rest push - persists seq per op so a mid-batch failure keeps the acked op', async () => {
+        await writeFile('a.js', 'x\n');
+        await writeFile('b.js', 'y\n');
+        const pushes: SyncPushRequest[] = [];
+        let current: SyncPullResponse = {
+            base: 'base-0',
+            items: [syncItem(10, 'a.js', 'x\n'), syncItem(20, 'b.js', 'y\n')]
+        };
+        const rest = {
+            syncPull: async () => current,
+            syncPush: async (_p: number, _b: string, body: SyncPushRequest) => {
+                pushes.push(body);
+                // drop the connection on the second op
+                if (pushes.length === 2) {
+                    throw new Error('network drop mid-batch');
+                }
+                const op = body.ops[0];
+                current = {
+                    base: `base-${pushes.length}`,
+                    items: current.items.map((item) =>
+                        op.type === 'update_text' && item.id === op.id ? { ...item, text: op.text } : item
+                    )
+                };
+                return current;
+            }
+        } as unknown as Rest;
+
+        const e = engine();
+        await e.link({
+            folderUri: work,
+            projectManager: pmWith({ text: 'ignored\n' }),
+            projectId: 1,
+            branchId: 'main',
+            rest
+        });
+
+        await writeFile('a.js', 'x\nlocal\n');
+        await writeFile('b.js', 'y\nlocal\n');
+        await e.refresh();
+
+        const [err] = await tryCatch(() => e.push());
+        assert.ok(err, 'push rejects when an op fails mid-batch');
+        assert.strictEqual(pushes.length, 2);
+
+        // op #1 was acked; its seq must survive on disk so the next push resumes
+        // instead of deadlocking on a stale seq the server already consumed
+        const reloaded = new BaseStore({ storageUri: storage });
+        await reloaded.load(1, 'main', hash(work.toString()));
+        assert.strictEqual(reloaded.seq, 1);
+    });
+
     test('rest incoming - collaborator event refreshes incoming snapshot', async () => {
         await writeFile('a.js', 'x\n');
         const events = new EventEmitter<EventMap>();

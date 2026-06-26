@@ -9,6 +9,7 @@ import { Debouncer } from '../utils/debouncer';
 import { fail } from '../utils/error';
 import type { EventEmitter } from '../utils/event-emitter';
 import { Linker } from '../utils/linker';
+import { Mutex } from '../utils/mutex';
 import { signal } from '../utils/signal';
 import { norm } from '../utils/text';
 import { hash, relativePath, tryCatch, withTimeout } from '../utils/utils';
@@ -69,6 +70,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
     private _promoted = new Set<string>();
 
     private _echoes = new Set<string>();
+
+    // serializes push/pull so concurrent runs never race on seq/base
+    private _mutex = new Mutex<[Error, null] | [null, void]>();
 
     private _ignoring = (_uri: vscode.Uri) => false;
 
@@ -974,11 +978,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     async pull() {
-        if (this._restMode()) {
-            await this._pullRest();
-            return;
+        const [err] =
+            (await this._mutex.atomic(['sync'], () =>
+                tryCatch(() => (this._restMode() ? this._pullRest() : this._pullLive()))
+            )) ?? [];
+        if (err) {
+            throw err;
         }
+    }
 
+    private async _pullLive() {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
@@ -1093,6 +1102,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._base.setSeq(seq);
         this._base.setSnapshot(snapshot);
         this._remoteSnapshot = snapshot;
+        // persist seq+base per op so a crash mid-batch resumes instead of
+        // deadlocking on a stale seq the server already consumed
+        await this._base.flush();
     }
 
     private async _pushRest() {
@@ -1173,11 +1185,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
     // push: submit local edits as OT ops + flush to S3. fast-forward only —
     // rejected if any file is behind/conflicted (no force push; pull first).
     async push() {
-        if (this._restMode()) {
-            await this._pushRest();
-            return;
+        const [err] =
+            (await this._mutex.atomic(['sync'], () =>
+                tryCatch(() => (this._restMode() ? this._pushRest() : this._pushLive()))
+            )) ?? [];
+        if (err) {
+            throw err;
         }
+    }
 
+    private async _pushLive() {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
