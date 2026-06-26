@@ -1,5 +1,3 @@
-import { randomUUID } from 'crypto';
-
 import * as vscode from 'vscode';
 
 import type { SyncItem, SyncPullResponse } from '../connections/rest';
@@ -25,6 +23,13 @@ type BaseFile = {
     entries?: Record<string, BaseEntry>;
 };
 
+// web build's crypto polyfill has no randomUUID; uuid v4 via Math.random (id, not a secret)
+const randomId = () =>
+    'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+    });
+
 // persists the merge base (server snapshot at last pull) per project+branch,
 // in globalStorage so it never enters the user's workspace or git.
 export class BaseStore {
@@ -34,7 +39,7 @@ export class BaseStore {
 
     private _pathIds = new Map<string, number>();
 
-    private _clientId: string = randomUUID();
+    private _clientId: string = randomId();
 
     private _seq = 0;
 
@@ -60,7 +65,7 @@ export class BaseStore {
         this._folderId = folderId;
         this._entries.clear();
         this._pathIds.clear();
-        this._clientId = randomUUID();
+        this._clientId = randomId();
         this._seq = 0;
         this._base = '';
 
