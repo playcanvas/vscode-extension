@@ -33,6 +33,8 @@ class PlayCanvasScm extends Linker<LinkParams> {
 
     private _merge?: vscode.SourceControlResourceGroup;
 
+    private _statusItem?: vscode.StatusBarItem;
+
     error = signal<Error | undefined>(undefined);
 
     private _resource(uri: vscode.Uri, path: string, state: SyncState) {
@@ -129,6 +131,25 @@ class PlayCanvasScm extends Linker<LinkParams> {
         this._incoming.resourceStates = incoming;
         this._merge.resourceStates = merge;
         this._scm.count = changes.length + merge.length;
+
+        // status-bar summary: ↓ incoming, ↑ outgoing, conflicts (disk vs cloud)
+        const item = this._statusItem;
+        if (item) {
+            const parts = ['$(cloud) PlayCanvas'];
+            if (merge.length) {
+                parts.push(`$(warning) ${merge.length}`);
+            }
+            if (incoming.length) {
+                parts.push(`↓${incoming.length}`);
+            }
+            if (changes.length) {
+                parts.push(`↑${changes.length}`);
+            }
+            item.text = parts.join(' ');
+            item.tooltip = `PlayCanvas: ${incoming.length} incoming, ${changes.length} outgoing${
+                merge.length ? `, ${merge.length} conflicted` : ''
+            }`;
+        }
     }
 
     async link({ folderUri, engine }: LinkParams) {
@@ -147,6 +168,11 @@ class PlayCanvasScm extends Linker<LinkParams> {
         changes.hideWhenEmpty = true;
         incoming.hideWhenEmpty = true;
         merge.hideWhenEmpty = true;
+
+        // status-bar sync summary; click reveals the Source Control view
+        const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+        statusItem.command = 'workbench.view.scm';
+        statusItem.show();
 
         // gutter diff: working vs base
         scm.quickDiffProvider = {
@@ -204,6 +230,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
         this._changes = changes;
         this._incoming = incoming;
         this._merge = merge;
+        this._statusItem = statusItem;
 
         // re-render whenever the engine's status changes; invalidate base/remote
         // virtual docs too (only uris with an open editor get re-read by vscode)
@@ -219,6 +246,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
 
         this._cleanup.push(async () => {
             stop();
+            statusItem.dispose();
             debouncer.clear();
             onChange.dispose();
             onSave.dispose();
@@ -249,6 +277,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
         this._changes = undefined;
         this._incoming = undefined;
         this._merge = undefined;
+        this._statusItem = undefined;
         void vscode.commands.executeCommand('setContext', 'playcanvas.pullpush', false);
         this._log.info(`unlinked ${folderUri.toString()}`);
         return { folderUri, engine };
