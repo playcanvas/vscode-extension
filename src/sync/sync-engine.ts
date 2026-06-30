@@ -441,8 +441,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     async acceptIncoming(uri: vscode.Uri) {
-        const [err] =
-            (await this._mutex.atomic(['sync'], () => tryCatch(() => this._acceptIncoming(uri)))) ?? [];
+        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._acceptIncoming(uri)))) ?? [];
         if (err) {
             throw err;
         }
@@ -477,8 +476,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     async keepCurrent(uri: vscode.Uri) {
-        const [err] =
-            (await this._mutex.atomic(['sync'], () => tryCatch(() => this._keepCurrent(uri)))) ?? [];
+        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._keepCurrent(uri)))) ?? [];
         if (err) {
             throw err;
         }
@@ -704,7 +702,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
         if (local) {
             if (local.action === 'deleted' && remote && base && this._remoteText(remote) !== base.text) {
-                this._status.set(path, 'conflicted');
+                // server edited a file you deleted: the edit wins as an incoming restore —
+                // pull brings it back (visible); re-delete + push if you still want it gone
+                const content = remote.type === 'file' ? buffer.from(this._remoteText(remote)) : new Uint8Array();
+                this._setRemote({ action: 'created', path, type: remote.type, content });
                 return;
             }
             this._status.set(path, local.action);
@@ -753,7 +754,13 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
         if (working === undefined) {
             if (this._remoteText(remote) !== base.text) {
-                this._status.set(path, 'conflicted');
+                // server edited a file that's gone locally — restore it on pull, not a blind conflict
+                this._setRemote({
+                    action: 'created',
+                    path,
+                    type: 'file',
+                    content: buffer.from(this._remoteText(remote))
+                });
                 return;
             }
             this._setLocal({ action: 'deleted', path, type: 'file' });
@@ -956,6 +963,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
         for (const op of created) {
             await this._applyCreate(op.path, op.type, await this._content(op));
             this._remote.delete(op.path);
+            // a restore over a path you deleted locally supersedes that delete
+            this._local.delete(op.path);
         }
         for (const op of deleted) {
             await this._applyDelete(op.path);
@@ -1297,8 +1306,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     // revert a file's working copy to the base (git restore). destructive.
     async discard(uri: vscode.Uri) {
-        const [err] =
-            (await this._mutex.atomic(['sync'], () => tryCatch(() => this._discard(uri)))) ?? [];
+        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._discard(uri)))) ?? [];
         if (err) {
             throw err;
         }
