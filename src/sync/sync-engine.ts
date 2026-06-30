@@ -192,15 +192,22 @@ class NativeSyncEngine extends Linker<LinkParams> {
         if (!this._restMode()) {
             return;
         }
-        const [err] = await tryCatch(
+        // serialize with pull/push so a concurrent fetch+refresh can't swap
+        // _remoteSnapshot mid-pull and advance the base past disk
+        await tryCatch(
             this._refreshRemoteDebouncer.debounce('remote', async () => {
-                await this._fetchRemote();
-                await this._refreshAll();
+                const [err] =
+                    (await this._mutex.atomic(['sync'], () =>
+                        tryCatch(async () => {
+                            await this._fetchRemote();
+                            await this._refreshAll();
+                        })
+                    )) ?? [];
+                if (err) {
+                    this.error.set(() => err);
+                }
             })
         );
-        if (err) {
-            this.error.set(() => err);
-        }
     }
 
     private _setLocal(op: LocalOp) {
