@@ -441,6 +441,14 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     async acceptIncoming(uri: vscode.Uri) {
+        const [err] =
+            (await this._mutex.atomic(['sync'], () => tryCatch(() => this._acceptIncoming(uri)))) ?? [];
+        if (err) {
+            throw err;
+        }
+    }
+
+    private async _acceptIncoming(uri: vscode.Uri) {
         const path = this._path(uri);
         const op = this._remote.get(path);
         if (!op) {
@@ -469,6 +477,14 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     async keepCurrent(uri: vscode.Uri) {
+        const [err] =
+            (await this._mutex.atomic(['sync'], () => tryCatch(() => this._keepCurrent(uri)))) ?? [];
+        if (err) {
+            throw err;
+        }
+    }
+
+    private async _keepCurrent(uri: vscode.Uri) {
         const path = this._path(uri);
         const op = this._remote.get(path);
         if (!op) {
@@ -1281,6 +1297,14 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     // revert a file's working copy to the base (git restore). destructive.
     async discard(uri: vscode.Uri) {
+        const [err] =
+            (await this._mutex.atomic(['sync'], () => tryCatch(() => this._discard(uri)))) ?? [];
+        if (err) {
+            throw err;
+        }
+    }
+
+    private async _discard(uri: vscode.Uri) {
         const folderUri = this._folderUri;
         if (!folderUri) {
             return;
