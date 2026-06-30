@@ -1207,7 +1207,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 continue;
             }
             await this._sendRestOp({ type: 'update_text', id: item.id, text });
-            await this._refreshAll();
+            // per-path refresh, not a full rescan — the modified set is a fixed snapshot
+            // and these ops don't touch other paths; one full refresh follows below
+            await this.refresh(path);
         }
 
         await this._base.flush();
