@@ -10,36 +10,6 @@ const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30 * 1000;
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
-export type SyncItem = {
-    kind: 'asset';
-    id: number;
-    path: string;
-    type: 'file' | 'folder';
-    modifiedAt: string;
-    fileHash?: string;
-    docVersion?: number;
-    text?: string;
-};
-
-export type SyncPullResponse = {
-    base: string;
-    items: SyncItem[];
-};
-
-export type SyncPushOp =
-    | { type: 'create_file'; path: string; text: string }
-    | { type: 'create_folder'; path: string }
-    | { type: 'update_text'; id: number; text: string }
-    | { type: 'rename'; id: number; path: string }
-    | { type: 'delete'; id: number };
-
-export type SyncPushRequest = {
-    clientId: string;
-    seq: number;
-    base: string;
-    ops: [SyncPushOp];
-};
-
 class Rest {
     private _log = new Log(this.constructor.name);
 
@@ -225,14 +195,6 @@ class Rest {
     async projectBranches(projectId: number) {
         const { result } = await this._request<{ result: Branch[] }>('GET', `projects/${projectId}/branches`);
         return result;
-    }
-
-    async syncPull(projectId: number, branchId: string) {
-        return this._request<SyncPullResponse>('GET', `projects/${projectId}/branches/${branchId}/pull`);
-    }
-
-    async syncPush(projectId: number, branchId: string, body: SyncPushRequest) {
-        return this._request<SyncPullResponse>('POST', `projects/${projectId}/branches/${branchId}/push`, body);
     }
 
     async id() {

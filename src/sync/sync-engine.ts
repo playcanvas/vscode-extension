@@ -1,11 +1,9 @@
 import * as vscode from 'vscode';
 
-import type { Rest, SyncItem, SyncPullResponse, SyncPushOp } from '../connections/rest';
 import { Disk } from '../disk';
 import type { ProjectManager } from '../project-manager';
 import type { EventMap } from '../typings/event-map';
 import * as buffer from '../utils/buffer';
-import { Debouncer } from '../utils/debouncer';
 import { fail } from '../utils/error';
 import type { EventEmitter } from '../utils/event-emitter';
 import { Linker } from '../utils/linker';
@@ -21,14 +19,12 @@ import { classify } from './status';
 import type { SyncState } from './status';
 
 const SAVE_TIMEOUT_MS = 30_000;
-const REMOTE_REFRESH_DELAY = 500;
 
 type LinkParams = {
     folderUri: vscode.Uri;
     projectManager: ProjectManager;
     projectId: number;
     branchId: string;
-    rest?: Rest;
 };
 type LocalOp =
     | { action: 'added'; path: string; type: 'file' | 'folder'; hash?: string }
@@ -53,12 +49,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
     private _projectId?: number;
 
     private _branchId?: string;
-
-    private _rest?: Rest;
-
-    private _remoteSnapshot?: SyncPullResponse;
-
-    private _refreshRemoteDebouncer = new Debouncer<void>(REMOTE_REFRESH_DELAY);
 
     private _status = new Map<string, SyncState>();
 
@@ -114,9 +104,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     baseText(path: string) {
-        if (this._restMode()) {
-            return this._base.byPath(path)?.text;
-        }
         const file = this._projectManager?.files.get(path);
         if (!file || file.type === 'folder') {
             const op = this._local.get(path);
@@ -137,77 +124,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return target;
         }
         return this._folderUri ? relativePath(target, this._folderUri) : target.path;
-    }
-
-    private _restMode() {
-        return !!this._rest && this._projectId !== undefined && this._branchId !== undefined;
-    }
-
-    private _remoteItem(path: string) {
-        return this._remoteSnapshot?.items.find((item) => item.path === path);
-    }
-
-    private _remoteItemById(id: number) {
-        return this._remoteSnapshot?.items.find((item) => item.id === id);
-    }
-
-    private _remoteText(item: SyncItem) {
-        return norm(item.type === 'file' ? (item.text ?? '') : '');
-    }
-
-    private _allRestPaths() {
-        const paths = new Set<string>();
-        for (const item of this._remoteSnapshot?.items ?? []) {
-            paths.add(item.path);
-        }
-        for (const item of this._base.items()) {
-            if (item.path) {
-                paths.add(item.path);
-                const remote = item.id === undefined ? undefined : this._remoteItemById(item.id);
-                if (remote) {
-                    paths.add(remote.path);
-                }
-            }
-        }
-        for (const op of this._local.values()) {
-            paths.add(op.path);
-            if (op.action === 'renamed') {
-                paths.add(op.from);
-            }
-        }
-        return paths;
-    }
-
-    private async _fetchRemote() {
-        const rest = this._rest;
-        const projectId = this._projectId;
-        const branchId = this._branchId;
-        if (!rest || projectId === undefined || branchId === undefined) {
-            return;
-        }
-        this._remoteSnapshot = await rest.syncPull(projectId, branchId);
-    }
-
-    private async _queueRemoteRefresh() {
-        if (!this._restMode()) {
-            return;
-        }
-        // serialize with pull/push so a concurrent fetch+refresh can't swap
-        // _remoteSnapshot mid-pull and advance the base past disk
-        await tryCatch(
-            this._refreshRemoteDebouncer.debounce('remote', async () => {
-                const [err] =
-                    (await this._mutex.atomic(['sync'], () =>
-                        tryCatch(async () => {
-                            await this._fetchRemote();
-                            await this._refreshAll();
-                        })
-                    )) ?? [];
-                if (err) {
-                    this.error.set(() => err);
-                }
-            })
-        );
     }
 
     private _setLocal(op: LocalOp) {
@@ -406,10 +322,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     // remote content for the incoming diff view; stubs are promoted only while read
     async remoteText(path: string) {
-        if (this._restMode()) {
-            const item = this._remoteItem(path);
-            return item?.type === 'file' ? this._remoteText(item) : undefined;
-        }
         const pm = this._projectManager;
         const file = pm?.files.get(path);
         if (!pm || !file || file.type === 'folder') {
@@ -429,10 +341,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     // base/local/remote inputs for a conflicted file's 3-way merge editor
     mergeInputs(path: string) {
-        if (this._restMode()) {
-            const item = this._base.byPath(path);
-            return item?.id === undefined ? undefined : this._base.conflict(item.id);
-        }
         const file = this._projectManager?.files.get(path);
         if (!file || file.type === 'folder') {
             return undefined;
@@ -544,7 +452,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 continue;
             }
             const text = kind === 'file' ? await this._readDisk(folderUri, path) : undefined;
-            const tracked = this._restMode() ? this._base.byPath(path) || this._remoteItem(path) : pm.files.has(path);
+            const tracked = pm.files.has(path);
             if (!tracked && !this._remote.has(path) && !this._local.has(path)) {
                 this._setLocal({
                     action: 'added',
@@ -671,124 +579,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._base.set(file.uniqueId, working);
     }
 
-    private async _refreshRest(path: string) {
-        const folderUri = this._folderUri;
-        if (!folderUri) {
-            return;
-        }
-
-        const local = this._local.get(path);
-        const base = this._base.byPath(path);
-        const remote = this._remoteItem(path);
-        const moved = base?.id === undefined ? undefined : this._remoteItemById(base.id);
-        const remoteBase = remote ? this._base.get(remote.id) : undefined;
-
-        if (remoteBase?.path && remoteBase.path !== remote?.path) {
-            return;
-        }
-
-        if (moved && base?.path && moved.path !== base.path) {
-            this._status.delete(base.path);
-            const from = await this._readDisk(folderUri, base.path);
-            const to = await this._readDisk(folderUri, moved.path);
-            const conflicted =
-                this._localOpTouches(base.path) ||
-                this._localTouches(moved.path) ||
-                from !== base.text ||
-                to !== undefined;
-            this._setRemote({ action: 'renamed', from: base.path, path: moved.path }, conflicted);
-            return;
-        }
-
-        if (local) {
-            if (local.action === 'deleted' && remote && base && this._remoteText(remote) !== base.text) {
-                // server edited a file you deleted: the edit wins as an incoming restore —
-                // pull brings it back (visible); re-delete + push if you still want it gone
-                const content = remote.type === 'file' ? buffer.from(this._remoteText(remote)) : new Uint8Array();
-                this._setRemote({ action: 'created', path, type: remote.type, content });
-                return;
-            }
-            this._status.set(path, local.action);
-            return;
-        }
-
-        const working = await this._readDisk(folderUri, path);
-        if (!base && !remote) {
-            this._status.delete(path);
-            return;
-        }
-
-        if (remote && !base) {
-            if (remote.type === 'folder') {
-                if (await this._exists(path)) {
-                    this._base.setItem(remote);
-                    this._status.delete(path);
-                } else {
-                    this._setRemote({ action: 'created', path, type: 'folder', content: new Uint8Array() });
-                }
-                return;
-            }
-            const text = this._remoteText(remote);
-            if (working === undefined) {
-                this._setRemote({ action: 'created', path, type: 'file', content: buffer.from(text) });
-                return;
-            }
-            this._base.setItem(remote);
-            this._status.set(path, working === text ? 'clean' : 'modified');
-            return;
-        }
-
-        if (base && !remote) {
-            if (working !== undefined && working !== base.text) {
-                this._status.set(path, 'conflicted');
-            } else {
-                this._setRemote({ action: 'deleted', path });
-            }
-            return;
-        }
-
-        if (!base || !remote || remote.type === 'folder') {
-            this._status.delete(path);
-            return;
-        }
-
-        if (working === undefined) {
-            if (this._remoteText(remote) !== base.text) {
-                // server edited a file that's gone locally — restore it on pull, not a blind conflict
-                this._setRemote({
-                    action: 'created',
-                    path,
-                    type: 'file',
-                    content: buffer.from(this._remoteText(remote))
-                });
-                return;
-            }
-            this._setLocal({ action: 'deleted', path, type: 'file' });
-            return;
-        }
-
-        const conflict = base.id === undefined ? undefined : this._base.conflict(base.id);
-        if (conflict) {
-            if (hasConflictMarkers(working)) {
-                this._status.set(path, 'conflicted');
-                return;
-            }
-            if (base.id !== undefined) {
-                this._base.deleteConflict(base.id);
-            }
-        }
-
-        const remoteText = this._remoteText(remote);
-        const state = classify(base.hash, hash(working), hash(remoteText), working);
-        this._status.set(path, state);
-    }
-
     private async _refresh(path: string) {
-        if (this._restMode()) {
-            await this._refreshRest(path);
-            return;
-        }
-
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
@@ -878,17 +669,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
         if (!pm || !folderUri) {
             return;
         }
-        if (this._restMode()) {
-            this._status.clear();
-            this._remote.clear();
-            for (const path of this._allRestPaths()) {
-                await this._refreshRest(path);
-            }
-            await this._refreshLocalOnly(folderUri);
-            this.changed.set((v) => v + 1);
-            return;
-        }
-
         this._status.clear();
         for (const op of this._local.values()) {
             this._status.set(op.path, op.action);
@@ -931,95 +711,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
         await tryCatch(async () => pm.unsubscribe(path));
     }
 
-    // fetch + 3-way merge: bring remote changes into the working tree.
-    // refuses while a previous merge is unresolved (git-like).
-    private async _pullRest() {
-        const folderUri = this._folderUri;
-        if (!folderUri) {
-            return;
-        }
-
-        await this._fetchRemote();
-        await this._refreshAll();
-        for (const state of this._status.values()) {
-            if (state === 'conflicted') {
-                throw fail`resolve conflicts before pulling`;
-            }
-        }
-
-        const remoteOps = Array.from(this._remote.values());
-        const created = remoteOps
-            .filter((op): op is RemoteOp & { action: 'created' } => op.action === 'created')
-            .sort((a, b) => a.path.split('/').length - b.path.split('/').length);
-        const renamed = remoteOps.filter((op): op is RemoteOp & { action: 'renamed' } => op.action === 'renamed');
-        const deleted = remoteOps
-            .filter((op): op is RemoteOp & { action: 'deleted' } => op.action === 'deleted')
-            .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
-
-        for (const op of renamed) {
-            await this._applyRename(op.from, op.path);
-            this._remote.delete(op.path);
-        }
-        for (const op of created) {
-            await this._applyCreate(op.path, op.type, await this._content(op));
-            this._remote.delete(op.path);
-            // a restore over a path you deleted locally supersedes that delete
-            this._local.delete(op.path);
-        }
-        for (const op of deleted) {
-            await this._applyDelete(op.path);
-            this._remote.delete(op.path);
-        }
-
-        const conflicts: [number, { base: string; local: string; remote: string }][] = [];
-        for (const item of this._remoteSnapshot?.items ?? []) {
-            if (item.type !== 'file') {
-                continue;
-            }
-            const remote = this._remoteText(item);
-            const working = await this._readDisk(folderUri, item.path);
-            const base = this._base.byPath(item.path);
-            if (working === undefined) {
-                continue;
-            }
-            if (!base || working === base.text) {
-                if (remote !== working) {
-                    await this._applyUpdate(item.path, remote);
-                }
-                continue;
-            }
-            if (remote === base.text) {
-                continue;
-            }
-
-            const result = merge(base.text, working, remote);
-            if (result.conflicted) {
-                conflicts.push([item.id, { base: base.text, local: working, remote }]);
-            }
-            await this._applyUpdate(item.path, result.text);
-        }
-
-        if (this._remoteSnapshot) {
-            this._base.setSnapshot(this._remoteSnapshot);
-            for (const [id, conflict] of conflicts) {
-                this._base.setConflict(id, conflict);
-            }
-        }
-        await this._base.flush();
-        await this._refreshAll();
-    }
-
     async pull() {
-        const [err] =
-            (await this._mutex.atomic(['sync'], () =>
-                tryCatch(() => (this._restMode() ? this._pullRest() : this._pullLive()))
-            )) ?? [];
+        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._pull()))) ?? [];
         if (err) {
             throw err;
         }
     }
 
-    private async _pullLive() {
+    // fetch + 3-way merge: bring remote changes into the working tree.
+    // refuses while a previous merge is unresolved (git-like).
+    private async _pull() {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
@@ -1117,118 +818,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
         await this._refreshAll();
     }
 
-    private async _sendRestOp(op: SyncPushOp) {
-        const rest = this._rest;
-        const projectId = this._projectId;
-        const branchId = this._branchId;
-        if (!rest || projectId === undefined || branchId === undefined) {
-            return;
-        }
-        const seq = this._base.seq + 1;
-        const snapshot = await rest.syncPush(projectId, branchId, {
-            clientId: this._base.clientId,
-            seq,
-            base: this._base.base,
-            ops: [op]
-        });
-        this._base.setSeq(seq);
-        this._base.setSnapshot(snapshot);
-        this._remoteSnapshot = snapshot;
-        // persist seq+base per op so a crash mid-batch resumes instead of
-        // deadlocking on a stale seq the server already consumed
-        await this._base.flush();
-    }
-
-    private async _pushRest() {
-        const folderUri = this._folderUri;
-        if (!folderUri) {
-            return;
-        }
-
-        await this._fetchRemote();
-        if (!this._base.base && this._remoteSnapshot) {
-            this._base.setBase(this._remoteSnapshot.base);
-        }
-        await this._refreshAll();
-        for (const state of this._status.values()) {
-            if (state === 'behind' || state === 'both' || state === 'conflicted') {
-                throw fail`remote has changes — pull before pushing`;
-            }
-        }
-
-        const ops = Array.from(this._local.values());
-        const added = ops
-            .filter((op): op is LocalOp & { action: 'added' } => op.action === 'added')
-            .sort((a, b) => a.path.split('/').length - b.path.split('/').length);
-        const renamed = ops.filter((op): op is LocalOp & { action: 'renamed' } => op.action === 'renamed');
-        const deleted = ops
-            .filter((op): op is LocalOp & { action: 'deleted' } => op.action === 'deleted')
-            .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
-
-        for (const op of renamed) {
-            const item = this._base.byPath(op.from);
-            if (item?.id === undefined) {
-                throw fail`missing base item for ${op.from}`;
-            }
-            await this._sendRestOp({ type: 'rename', id: item.id, path: op.path });
-            this._local.delete(op.path);
-            await this._refreshAll();
-        }
-        for (const op of added) {
-            if (op.type === 'folder') {
-                await this._sendRestOp({ type: 'create_folder', path: op.path });
-            } else {
-                await this._sendRestOp({
-                    type: 'create_file',
-                    path: op.path,
-                    text: (await this._readDisk(folderUri, op.path)) ?? ''
-                });
-            }
-            this._local.delete(op.path);
-            await this._refreshAll();
-        }
-        for (const op of deleted) {
-            const item = this._base.byPath(op.path);
-            if (item?.id === undefined) {
-                throw fail`missing base item for ${op.path}`;
-            }
-            await this._sendRestOp({ type: 'delete', id: item.id });
-            this._local.delete(op.path);
-            await this._refreshAll();
-        }
-
-        for (const [path, state] of Array.from(this._status)) {
-            if (state !== 'modified') {
-                continue;
-            }
-            const item = this._base.byPath(path);
-            const text = await this._readDisk(folderUri, path);
-            if (item?.id === undefined || item.type !== 'file' || text === undefined) {
-                continue;
-            }
-            await this._sendRestOp({ type: 'update_text', id: item.id, text });
-            // per-path refresh, not a full rescan — the modified set is a fixed snapshot
-            // and these ops don't touch other paths; one full refresh follows below
-            await this.refresh(path);
-        }
-
-        await this._base.flush();
-        await this._refreshAll();
-    }
-
     // push: submit local edits as OT ops + flush to S3. fast-forward only —
     // rejected if any file is behind/conflicted (no force push; pull first).
     async push() {
-        const [err] =
-            (await this._mutex.atomic(['sync'], () =>
-                tryCatch(() => (this._restMode() ? this._pushRest() : this._pushLive()))
-            )) ?? [];
+        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._push()))) ?? [];
         if (err) {
             throw err;
         }
     }
 
-    private async _pushLive() {
+    private async _push() {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
@@ -1362,7 +961,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         await this._refreshAll();
     }
 
-    async link({ folderUri, projectManager, projectId, branchId, rest }: LinkParams) {
+    async link({ folderUri, projectManager, projectId, branchId }: LinkParams) {
         if (this._folderUri !== undefined) {
             throw this.error.set(() => fail`already linked`);
         }
@@ -1374,32 +973,18 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._projectManager = projectManager;
         this._projectId = projectId;
         this._branchId = branchId;
-        this._rest = rest;
         this._ignoring = Disk.ignoreMatcher(await this._ignoreText(folderUri), folderUri);
-        if (rest) {
-            await this._fetchRemote();
-            if (!this._base.base && this._remoteSnapshot) {
-                this._base.setBase(this._remoteSnapshot.base);
-            }
-        }
 
         await this._refreshAll();
 
         const recompute = (path: string) => void this.refresh(path);
-        const refreshRemote = () => void this._queueRemoteRefresh();
-        const onUpdate = this._events.on('asset:file:update', rest ? refreshRemote : recompute);
+        const onUpdate = this._events.on('asset:file:update', recompute);
         const onCreate = this._events.on(
             'asset:file:create',
-            rest ? refreshRemote : (path, type, content) => void this._remoteCreate(path, type, content)
+            (path, type, content) => void this._remoteCreate(path, type, content)
         );
-        const onDelete = this._events.on(
-            'asset:file:delete',
-            rest ? refreshRemote : (path) => this._remoteDelete(path)
-        );
-        const onRename = this._events.on(
-            'asset:file:rename',
-            rest ? refreshRemote : (from, to) => void this._remoteRename(from, to)
-        );
+        const onDelete = this._events.on('asset:file:delete', (path) => this._remoteDelete(path));
+        const onRename = this._events.on('asset:file:rename', (from, to) => void this._remoteRename(from, to));
         const onLocalCreate = this._events.on('sync:file:create', (path, type) => this._localCreate(path, type));
         const onLocalUpdate = this._events.on('sync:file:update', recompute);
         const onLocalDelete = this._events.on('sync:file:delete', (path, type) => this._localDelete(path, type));
@@ -1438,7 +1023,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
         const projectManager = this._projectManager;
         const projectId = this._projectId;
         const branchId = this._branchId;
-        const rest = this._rest;
         if (!folderUri || !projectManager || projectId === undefined || branchId === undefined) {
             throw this.error.set(() => fail`unlink called before link`);
         }
@@ -1450,18 +1034,15 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._projectManager = undefined;
         this._projectId = undefined;
         this._branchId = undefined;
-        this._rest = undefined;
-        this._remoteSnapshot = undefined;
         this._status.clear();
         this._local.clear();
         this._remote.clear();
         this._promoted.clear();
         this._echoes.clear();
         this._ignoring = (_uri: vscode.Uri) => false;
-        this._refreshRemoteDebouncer.clear();
 
         this._log.info(`unlinked ${folderUri.toString()}`);
-        return { folderUri, projectManager, projectId, branchId, rest };
+        return { folderUri, projectManager, projectId, branchId };
     }
 }
 
