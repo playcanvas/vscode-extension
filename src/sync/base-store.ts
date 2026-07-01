@@ -8,6 +8,7 @@ type ConflictEntry = { base: string; local: string; remote: string };
 export type BaseEntry = {
     text: string;
     hash: string;
+    savedHash?: string;
     conflict?: ConflictEntry;
 };
 type BaseFile = {
@@ -65,9 +66,15 @@ export class BaseStore {
         return this._entries.get(uniqueId);
     }
 
-    set(uniqueId: number, text: string) {
+    set(uniqueId: number, text: string, savedHash?: string) {
         const value = norm(text);
-        this._entries.set(uniqueId, { ...this._entries.get(uniqueId), text: value, hash: hash(value) });
+        const existing = this._entries.get(uniqueId);
+        this._entries.set(uniqueId, {
+            ...existing,
+            text: value,
+            hash: hash(value),
+            savedHash: savedHash ?? existing?.savedHash
+        });
     }
 
     conflict(uniqueId: number) {

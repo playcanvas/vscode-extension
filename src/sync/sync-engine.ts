@@ -318,7 +318,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         return text === undefined ? op.content : buffer.from(text);
     }
 
-    // remote content for the incoming diff view; stubs are promoted only while read
+    // remote content for the incoming diff view: realtime doc if open, saved (S3) if closed
     async remoteText(path: string) {
         const pm = this._projectManager;
         const file = pm?.files.get(path);
@@ -328,13 +328,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
         if (file.type === 'file') {
             return norm(file.doc.text);
         }
-        const [err, promoted] = await tryCatch(async () => pm.subscribe(path));
-        if (err || !promoted || promoted.type !== 'file') {
-            return undefined;
-        }
-        const text = norm(promoted.doc.text);
-        await this._release(path);
-        return text;
+        // closed file — saved content, matching what pull applies; no subscription
+        return pm.savedContent?.(path);
     }
 
     // base/local/remote inputs for a conflicted file's 3-way merge editor
@@ -629,9 +624,12 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
 
         if (file.type === 'stub') {
+            const savedHash = pm.savedHash?.(path);
             let base = this._base.get(file.uniqueId);
             if (!base) {
-                this._base.set(file.uniqueId, working);
+                // first sight: adopt current disk as the in-sync baseline (fetch-free);
+                // a later local edit makes ahead true, so pull can't blind-clobber
+                this._base.set(file.uniqueId, working, savedHash);
                 base = this._base.get(file.uniqueId);
             }
             if (!base) {
@@ -645,14 +643,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 }
                 this._base.deleteConflict(file.uniqueId);
             }
-            const state = classify(base.hash, hash(working), base.hash, working);
-            this._status.set(path, state);
+            // closed file — saved granularity: ahead vs base content, behind vs base savedHash
+            const ahead = hash(working) !== base.hash;
+            const behind = savedHash !== undefined && base.savedHash !== undefined && savedHash !== base.savedHash;
+            this._status.set(path, ahead && behind ? 'both' : ahead ? 'modified' : behind ? 'behind' : 'clean');
             return;
         }
 
         let base = this._base.get(file.uniqueId);
         if (!base) {
-            this._base.set(file.uniqueId, norm(file.doc.text));
+            this._base.set(file.uniqueId, norm(file.doc.text), pm.savedHash?.(path));
             base = this._base.get(file.uniqueId);
         }
         if (!base) {
@@ -762,37 +762,38 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._remote.delete(op.path);
         }
 
-        const pulled: string[] = [];
         for (const [path, f] of pm.files) {
             if (f.type === 'folder') {
-                continue;
-            }
-            // pull is an exact remote operation: promote unloaded stubs so R is realtime doc.text
-            let file = f;
-            if (file.type === 'stub') {
-                const promoted = await pm.subscribe(path);
-                if (!promoted) {
-                    continue;
-                }
-                file = promoted;
-                pulled.push(path);
-            }
-            if (file.type !== 'file') {
                 continue;
             }
             const working = await this._readDisk(folderUri, path);
             if (working === undefined) {
                 continue;
             }
-            const remote = norm(file.doc.text);
-            const base = this._base.get(file.uniqueId);
+            const base = this._base.get(f.uniqueId);
+            const savedHash = pm.savedHash?.(path);
+
+            // remote content: realtime doc if open, saved (S3) content if closed — no subscribe
+            let remote: string | undefined;
+            if (f.type === 'file') {
+                remote = norm(f.doc.text);
+            } else {
+                // closed & saved unchanged since base -> nothing to pull, no fetch
+                if (base && savedHash === base.savedHash) {
+                    continue;
+                }
+                remote = await pm.savedContent?.(path);
+            }
+            if (remote === undefined) {
+                continue;
+            }
 
             // unseen, or no local divergence -> fast-forward to remote
             if (!base || working === base.text) {
                 if (remote !== working) {
                     await this._applyUpdate(path, remote);
                 }
-                this._base.set(file.uniqueId, remote);
+                this._base.set(f.uniqueId, remote, savedHash);
                 continue;
             }
 
@@ -802,22 +803,14 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
 
             // both diverged -> 3-way merge into the working tree. advance base to
-            // remote even on conflict: the merge incorporated remote, so the working
-            // tree (markers until resolved) is now our local-ahead work. markers keep
-            // status 'conflicted' (push-blocked); once resolved it becomes 'modified'
-            // and is pushable — otherwise the file is stuck both behind and ahead.
+            // remote even on conflict; markers keep status conflicted (push-blocked)
+            // until resolved, then it becomes modified and pushable
             const result = merge(base.text, working, remote);
             if (result.conflicted) {
-                // stash the three sides for the merge editor (base advances below)
-                this._base.setConflict(file.uniqueId, { base: base.text, local: working, remote });
+                this._base.setConflict(f.uniqueId, { base: base.text, local: working, remote });
             }
             await this._applyUpdate(path, result.text);
-            this._base.set(file.uniqueId, remote);
-        }
-
-        // pull never leaves ops pending — release promoted docs right away
-        for (const path of pulled) {
-            await this._release(path);
+            this._base.set(f.uniqueId, remote, savedHash);
         }
 
         await this._base.flush();
@@ -991,8 +984,11 @@ class NativeSyncEngine extends Linker<LinkParams> {
         const onLocalRename = this._events.on('sync:file:rename', (from, to, type) =>
             this._localRename(from, to, type)
         );
-        // restatus on promote: remote upgrades from stub base to live doc
+        // restatus on open (promote to live doc) / close (demote to stub)
         const onSubscribed = this._events.on('asset:file:subscribed', recompute);
+        const onUnsubscribed = this._events.on('asset:file:unsubscribed', recompute);
+        // closed-file remote change: asset saved hash moved (no subscription)
+        const onHash = this._events.on('asset:file:hash', recompute);
         const onSave = this._events.on('asset:file:save', (path: string) => {
             void this.refresh(path);
             // flush landed — release a push-promoted doc
@@ -1010,6 +1006,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._events.off('sync:file:delete', onLocalDelete);
             this._events.off('sync:file:rename', onLocalRename);
             this._events.off('asset:file:subscribed', onSubscribed);
+            this._events.off('asset:file:unsubscribed', onUnsubscribed);
+            this._events.off('asset:file:hash', onHash);
             this._events.off('asset:file:save', onSave);
         });
 

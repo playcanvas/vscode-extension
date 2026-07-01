@@ -13,6 +13,8 @@ export type EventMap = {
     'asset:file:dirty': [string, boolean];
     'asset:file:failed': [string];
     'asset:file:subscribed': [string, string, boolean];
+    'asset:file:unsubscribed': [string];
+    'asset:file:hash': [string];
 
     'sync:file:create': [string, 'file' | 'folder'];
     'sync:file:update': [string];

@@ -1122,65 +1122,102 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(await e.remoteText('missing.js'), undefined);
     });
 
-    test('remoteText subscribes stub to read realtime doc', async () => {
+    test('remoteText returns saved content for a closed file (no subscribe)', async () => {
         await writeFile('a.js', 'x\n');
         let subscribed = 0;
-        const file = { type: 'file', uniqueId: 1, doc: { text: 'x\nremote\n' }, dirty: false };
         const files = new Map<string, unknown>([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
         const pm = {
             files,
-            subscribe: async (p: string) => {
+            savedHash: () => hash('x\n'),
+            savedContent: async () => 'x\nremote\n',
+            subscribe: async () => {
                 subscribed++;
-                files.set(p, file);
-                return file;
-            },
-            unsubscribe: async (p: string) => {
-                files.set(p, { type: 'stub', uniqueId: 1, dirty: false });
+                return undefined;
             }
         } as unknown as ProjectManager;
         const e = engine();
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
         assert.strictEqual(await e.remoteText('a.js'), 'x\nremote\n');
-        assert.strictEqual(subscribed, 1);
+        assert.strictEqual(subscribed, 0, 'closed file read without subscribing');
         assert.strictEqual((files.get('a.js') as { type: string }).type, 'stub');
     });
 
-    test('stub - ignores s3 hash until realtime doc is subscribed', async () => {
+    test('stub - shows behind when the saved hash advances', async () => {
         await writeFile('a.js', 'x\n');
-        let remoteHash = hash('x\n');
+        let savedHash = hash('x\n');
         const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
-        const pm = { files, fileHash: () => remoteHash } as unknown as ProjectManager;
+        const pm = { files, savedHash: () => savedHash, savedContent: async () => 'x\n' } as unknown as ProjectManager;
         const e = engine();
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
         assert.strictEqual(e.status('a.js'), 'clean');
-        remoteHash = hash('x\nremote\n');
+        savedHash = hash('x\nremote\n');
         await e.refresh();
-        assert.strictEqual(e.status('a.js'), 'clean');
+        assert.strictEqual(e.status('a.js'), 'behind');
     });
 
-    test('pull - subscribes an unloaded stub and fast-forwards from realtime doc', async () => {
+    test('pull - fetches saved content for a closed file (no subscribe)', async () => {
         await writeFile('a.js', 'x\n');
-        const doc = { text: 'x\nremote\n' };
+        let subscribed = 0;
+        let savedHash = hash('x\n');
         const files = new Map<string, unknown>([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
         const pm = {
             files,
-            // mirrors ProjectManager.subscribe: promotes the stub in place
-            subscribe: async (p: string) => {
-                const promoted = { type: 'file', uniqueId: 1, doc, dirty: false };
-                files.set(p, promoted);
-                return promoted;
-            },
-            // mirrors ProjectManager.unsubscribe: demotes back to a stub
-            unsubscribe: async (p: string) => {
-                files.set(p, { type: 'stub', uniqueId: 1, dirty: false });
+            savedHash: () => savedHash,
+            savedContent: async () => 'x\nremote\n',
+            subscribe: async () => {
+                subscribed++;
+                return undefined;
+            }
+        } as unknown as ProjectManager;
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        savedHash = hash('x\nremote\n');
+        await e.pull();
+        assert.strictEqual(await readFile('a.js'), 'x\nremote\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+        assert.strictEqual(subscribed, 0, 'pulled without subscribing');
+        assert.strictEqual((files.get('a.js') as { type: string }).type, 'stub', 'still a stub after pull');
+    });
+
+    test('pull - skips a closed file whose saved hash is unchanged (no fetch)', async () => {
+        await writeFile('a.js', 'x\n');
+        let fetched = 0;
+        const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            savedHash: () => hash('x\n'),
+            savedContent: async () => {
+                fetched++;
+                return 'x\n';
             }
         } as unknown as ProjectManager;
         const e = engine();
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
         await e.pull();
-        assert.strictEqual(await readFile('a.js'), 'x\nremote\n');
+        assert.strictEqual(fetched, 0, 'unchanged closed file not fetched');
         assert.strictEqual(e.status('a.js'), 'clean');
-        assert.strictEqual((files.get('a.js') as { type: string }).type, 'stub', 'released after pull');
+    });
+
+    test('close - no phantom behind when disk is ahead of the saved hash', async () => {
+        await writeFile('a.js', 'x\nlive\n');
+        const events = new EventEmitter<EventMap>();
+        const doc = { text: 'x\nlive\n' };
+        const files = new Map<string, unknown>([['a.js', { type: 'file', uniqueId: 1, doc, dirty: false }]]);
+        const pm = {
+            files,
+            savedHash: () => hash('x\n'), // saved lags the realtime/disk content
+            savedContent: async () => 'x\n',
+            unsubscribe: async (p: string) => {
+                files.set(p, { type: 'stub', uniqueId: 1, dirty: false });
+                events.emit('asset:file:unsubscribed', p);
+            }
+        } as unknown as ProjectManager;
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.status('a.js'), 'clean');
+        await pm.unsubscribe('a.js');
+        await e.refresh('a.js');
+        assert.strictEqual(e.status('a.js'), 'clean', 'closed view compares saved-vs-saved, not vs realtime base');
     });
 
     test('subscribe upgrades stub status to the live doc', async () => {
