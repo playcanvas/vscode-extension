@@ -26,13 +26,15 @@ import { ProjectManager } from './project-manager';
 import { CollabProvider } from './providers/collab-provider';
 import { DecorationProvider } from './providers/decoration-provider';
 import { closeSentry, setSentryCollaborators, setSentryProject, setSentryUser } from './sentry';
+import { PlayCanvasScm } from './sync/scm';
+import { NativeSyncEngine } from './sync/sync-engine';
 import { TypeInstaller } from './type-installer';
 import type { EventMap } from './typings/event-map';
 import type { Project } from './typings/models';
 import { fail } from './utils/error';
 import { EventEmitter } from './utils/event-emitter';
 import { computed, effect, signal } from './utils/signal';
-import { projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
+import { parsePath, projectToName, tryCatch, uriStartsWith, wait } from './utils/utils';
 
 const HEARTBEAT_MS = 5 * 60 * 1000;
 const PING_SAMPLE_MS = 60 * 1000;
@@ -88,6 +90,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const rootUri = ROOT_FOLDER
         ? vscode.Uri.parse(`${ROOT_FOLDER}/${ENV}`)
         : vscode.Uri.parse(config.get<string>('rootDir') || `${context.globalStorageUri.path}/${ENV}`);
+
+    // experimental git-style pull/push sync (native only; off by default)
+    const pullPush = !WEB && config.get<string>('syncMode') === 'pullpush';
 
     // auth
     const auth = new Auth(context);
@@ -261,12 +266,124 @@ export const activate = async (context: vscode.ExtensionContext) => {
     const typeInstaller = new TypeInstaller({ context });
 
     const disk = new Disk({
-        events
+        events,
+        pullPush
     });
     effect(() => {
         const err = disk.error.get();
         if (err) {
             failure.set(() => ({ err, source: 'disk' }));
+        }
+    });
+
+    // native sync engine (experimental; only linked in pullpush mode)
+    const nativeSync = new NativeSyncEngine({ events, storageUri: context.globalStorageUri });
+    effect(() => {
+        const err = nativeSync.error.get();
+        if (err) {
+            failure.set(() => ({ err, source: 'native-sync' }));
+        }
+    });
+
+    // experimental pull/push commands (native pullpush mode)
+    if (pullPush) {
+        context.subscriptions.push(
+            vscode.commands.registerCommand(`${NAME}.pull`, async () => {
+                const [err] = await tryCatch(() => nativeSync.pull());
+                if (err) {
+                    void vscode.window.showWarningMessage(`PlayCanvas Pull: ${err.message}`);
+                } else {
+                    void vscode.window.showInformationMessage('PlayCanvas: pulled latest changes');
+                }
+            }),
+            vscode.commands.registerCommand(`${NAME}.push`, async () => {
+                const [err] = await tryCatch(() => nativeSync.push());
+                if (err) {
+                    void vscode.window.showWarningMessage(`PlayCanvas Push: ${err.message}`);
+                } else {
+                    void vscode.window.showInformationMessage('PlayCanvas: pushed local changes');
+                }
+            }),
+            vscode.commands.registerCommand(`${NAME}.discard`, async (resource?: vscode.SourceControlResourceState) => {
+                const uri = resource?.resourceUri;
+                if (!uri) {
+                    return;
+                }
+                const [, name] = parsePath(uri.path);
+                const choice = await vscode.window.showWarningMessage(
+                    `Discard local changes to ${name}? This cannot be undone.`,
+                    { modal: true },
+                    'Discard'
+                );
+                if (choice !== 'Discard') {
+                    return;
+                }
+                const [err] = await tryCatch(() => nativeSync.discard(uri));
+                if (err) {
+                    void vscode.window.showWarningMessage(`PlayCanvas Discard: ${err.message}`);
+                }
+            }),
+            vscode.commands.registerCommand(
+                `${NAME}.resolveMerge`,
+                async (arg?: vscode.Uri | vscode.SourceControlResourceState) => {
+                    const uri = arg instanceof vscode.Uri ? arg : arg?.resourceUri;
+                    if (!uri) {
+                        return;
+                    }
+                    const input = (scheme: string) => uri.with({ scheme });
+                    const [err] = await tryCatch(async () =>
+                        vscode.commands.executeCommand('_open.mergeEditor', {
+                            base: input('playcanvas-merge-base'),
+                            input1: { uri: input('playcanvas-merge-local'), title: 'Working (your changes)' },
+                            input2: { uri: input('playcanvas-merge-remote'), title: 'Server (incoming)' },
+                            output: uri
+                        })
+                    );
+                    if (err) {
+                        // fallback: open the file with inline conflict markers
+                        await vscode.window.showTextDocument(uri);
+                    }
+                }
+            ),
+            vscode.commands.registerCommand(
+                `${NAME}.resolveStructuralConflict`,
+                async (arg?: vscode.Uri | vscode.SourceControlResourceState) => {
+                    const uri = arg instanceof vscode.Uri ? arg : arg?.resourceUri;
+                    if (!uri || !nativeSync.structuralConflict(uri)) {
+                        return;
+                    }
+                    const choice = await vscode.window.showQuickPick(
+                        [
+                            { label: 'Accept Incoming', action: 'incoming' },
+                            { label: 'Keep Current', action: 'current' },
+                            { label: 'Mark Resolved', action: 'resolved' }
+                        ],
+                        { placeHolder: 'Resolve PlayCanvas structural conflict' }
+                    );
+                    if (!choice) {
+                        return;
+                    }
+                    const [err] = await tryCatch(async () => {
+                        if (choice.action === 'incoming') {
+                            await nativeSync.acceptIncoming(uri);
+                        } else {
+                            await nativeSync.keepCurrent(uri);
+                        }
+                    });
+                    if (err) {
+                        void vscode.window.showWarningMessage(`PlayCanvas Resolve: ${err.message}`);
+                    }
+                }
+            )
+        );
+    }
+
+    // native source control panel (experimental; only linked in pullpush mode)
+    const scm = new PlayCanvasScm();
+    effect(() => {
+        const err = scm.error.get();
+        if (err) {
+            failure.set(() => ({ err, source: 'native-scm' }));
         }
     });
 
@@ -287,6 +404,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const uriState = await uriHandler.unlink();
             const collabState = await collabProvider.unlink();
             const dirtyState = await decorationProvider.unlink();
+            const scmState = pullPush ? await scm.unlink() : undefined;
+            const nativeSyncState = pullPush ? await nativeSync.unlink() : undefined;
             const diskState = await disk.unlink();
             const projectState = await projectManager.unlink();
 
@@ -301,6 +420,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 version: config.engineVersion
             });
             await disk.link({ ...diskState, types });
+            if (pullPush && nativeSyncState) {
+                await nativeSync.link(nativeSyncState);
+            }
+            if (pullPush && scmState) {
+                await scm.link(scmState);
+            }
             await decorationProvider.link(dirtyState);
             await collabProvider.link(collabState);
             await uriHandler.link(uriState);
@@ -347,7 +472,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
     relay.on('room:leave', updateCollabTags);
 
     // dirty decoration provider
-    const decorationProvider = new DecorationProvider({ events });
+    const decorationProvider = new DecorationProvider({ events, syncEngine: pullPush ? nativeSync : undefined });
     effect(() => {
         const err = decorationProvider.error.get();
         if (err) {
@@ -765,6 +890,22 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 void decorationProvider.unlink();
             })
         );
+
+        // link native sync engine + source control panel (experimental pullpush mode)
+        if (pullPush) {
+            await nativeSync.link({ folderUri, projectManager, projectId: project.id, branchId });
+            context.subscriptions.push(
+                new vscode.Disposable(() => {
+                    void nativeSync.unlink();
+                })
+            );
+            await scm.link({ folderUri, engine: nativeSync });
+            context.subscriptions.push(
+                new vscode.Disposable(() => {
+                    void scm.unlink();
+                })
+            );
+        }
 
         // desync surfaces — sticky status-bar item + one-shot toast per
         // false→true transition. signal resets to false on project unlink.

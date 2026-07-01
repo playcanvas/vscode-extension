@@ -246,6 +246,11 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     object[key].splice(parseInt(o.p[o.p.length - 1], 10), 1);
                     this._events.emit('asset:update', uniqueId, key, before, object[key]);
                 }
+
+                // closed-file remote signal: asset file metadata (incl. hash) changed
+                if (o.p[0] === 'file') {
+                    this._events.emit('asset:file:hash', this._assetPath(uniqueId));
+                }
             }
         });
     }
@@ -1487,7 +1492,23 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         await this._sharedb.unsubscribe('documents', `${uniqueId}`);
         this._sharedb.sendRaw(`close:document:${uniqueId}`);
         this._files.set(path, { type: 'stub', uniqueId, dirty: file.dirty });
+        this._events.emit('asset:file:unsubscribed', path);
         this._log.debug(`unsubscribed ${path}`);
+    }
+
+    // saved (S3) hash for a file, from always-live asset metadata — no subscription
+    savedHash(path: string) {
+        const file = this._files.get(path);
+        return file ? this._assets.get(file.uniqueId)?.file?.hash : undefined;
+    }
+
+    // saved (S3) content for a closed file — normalized to LF, no subscription
+    async savedContent(path: string) {
+        const file = this._files.get(path);
+        if (!file) {
+            return undefined;
+        }
+        return norm(buffer.toString(await this.fetchContent(file.uniqueId)));
     }
 
     async fetchContent(uniqueId: number) {

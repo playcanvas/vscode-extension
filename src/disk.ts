@@ -84,6 +84,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     // .cursor is Cursor's equivalent editor-local config dir.
     static VCS_IGNORE = '.git\n.hg\n.svn\n.vscode\n.cursor\n';
 
+    static ignoreMatcher(text: string, folderUri: vscode.Uri) {
+        const ig = ignore().add(`${Disk.VCS_IGNORE}${text}`);
+        return (uri: vscode.Uri) => {
+            const path = relativePath(uri, folderUri);
+            return !!path && path !== Disk.IGNORE_FILE && ig.ignores(path);
+        };
+    }
+
     private _events: EventEmitter<EventMap>;
 
     private _folderUri?: vscode.Uri;
@@ -131,10 +139,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _types?: TypeFiles;
 
-    constructor({ events }: { events: EventEmitter<EventMap> }) {
+    private _pullPush = false;
+
+    constructor({ events, pullPush = false }: { events: EventEmitter<EventMap>; pullPush?: boolean }) {
         super();
 
         this._events = events;
+        this._pullPush = pullPush;
     }
 
     private _checkIgnoreUpdated(uri: vscode.Uri, deleted = false) {
@@ -169,24 +180,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _parseIgnoreText(text: string, folderUri: vscode.Uri, h = hash(text)) {
         this._ignoreHash = h;
-
-        // prepend vcs rules so .git/.hg/.svn are always excluded (prevents binary round-trip corruption)
-        const ig = ignore().add(`${Disk.VCS_IGNORE}${text}`);
-        this._ignoring = (uri: vscode.Uri) => {
-            const path = relativePath(uri, folderUri);
-
-            // skip root
-            if (!path) {
-                return false;
-            }
-
-            // skip ignore file itself
-            if (path === Disk.IGNORE_FILE) {
-                return false;
-            }
-
-            return ig.ignores(path);
-        };
+        this._ignoring = Disk.ignoreMatcher(text, folderUri);
         if (text) {
             this._log.debug(`parsed ignore file ${vscode.Uri.joinPath(folderUri, Disk.IGNORE_FILE)}`);
         }
@@ -261,6 +255,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const contentText = norm(buffer.toString(content));
                 if (existingText === contentText) {
                     this._diskHash.set(uri.path, hash(contentText));
+                    return;
+                }
+
+                // pullpush: never clobber divergent local content — the sync
+                // engine classifies it; remote lands only via explicit pull
+                if (this._pullPush) {
                     return;
                 }
 
@@ -549,6 +549,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private async _subscribed(uri: vscode.Uri, path: string, content: string, dirty: boolean) {
+        // pullpush: subscribe never mutates buffer or disk — keep the dirty
+        // indicator, leave reconciliation to the sync engine
+        if (this._pullPush) {
+            if (dirty) {
+                this._events.emit('asset:file:dirty', path, true);
+            }
+            return;
+        }
+
         // undo inverses reference pre-reload OT history — clear so undo can't resurrect missing content
         this._undos.get(uri.path)?.clear();
 
@@ -768,12 +777,19 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _watchEvents(folderUri: vscode.Uri) {
         const assetFileCreate = this._events.on('asset:file:create', async (path, type, content) => {
+            if (this._pullPush) {
+                return;
+            }
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri);
             await this._create(uri, type, content);
             await this._reconcile(uri, path, type);
         });
         const assetFileUpdate = this._events.on('asset:file:update', async (path, op, content, prev) => {
+            // pullpush mode: the sync engine tracks remote changes; never auto-write to disk
+            if (this._pullPush) {
+                return;
+            }
             const uri = vscode.Uri.joinPath(folderUri, path);
             const key = `${uri}`;
             this._opLocks.set(key, (this._opLocks.get(key) ?? 0) + 1);
@@ -787,16 +803,63 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
         });
         const assetFileDelete = this._events.on('asset:file:delete', async (path) => {
+            if (this._pullPush) {
+                return;
+            }
             const uri = vscode.Uri.joinPath(folderUri, path);
             this._checkIgnoreUpdated(uri, true);
             await this._delete(uri);
         });
         const assetFileRename = this._events.on('asset:file:rename', async (oldPath, newPath) => {
+            if (this._pullPush) {
+                return;
+            }
             const oldUri = vscode.Uri.joinPath(folderUri, oldPath);
             const newUri = vscode.Uri.joinPath(folderUri, newPath);
             this._checkIgnoreUpdated(oldUri);
             this._checkIgnoreUpdated(newUri);
             await this._rename(oldUri, newUri);
+        });
+        const syncFileApplyCreate = this._events.on('sync:file:apply:create', (path, type, content, done) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            void tryCatch(async () => {
+                this._checkIgnoreUpdated(uri);
+                await this._create(uri, type, content);
+                await this._reconcile(uri, path, type);
+            }).then(([err]) => done(err ?? undefined));
+        });
+        const syncFileApplyUpdate = this._events.on('sync:file:apply:update', (path, content, done) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            void tryCatch(async () => {
+                await this._writeMutex.atomic([`${uri}`], async () => {
+                    this._checkIgnoreUpdated(uri);
+                    this._debouncer.cancel(`${uri}`);
+                    const h = hash(content);
+                    this._echo.set(`${uri}:change`, h);
+                    await vscode.workspace.fs.writeFile(uri, content);
+                    this._diskHash.set(uri.path, h);
+                    const [, st] = await tryCatch(Promise.resolve(vscode.workspace.fs.stat(uri)));
+                    if (st) {
+                        this._diskStat.set(uri.path, { mtime: st.mtime, size: st.size });
+                    }
+                });
+            }).then(([err]) => done(err ?? undefined));
+        });
+        const syncFileApplyDelete = this._events.on('sync:file:apply:delete', (path, done) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            void tryCatch(async () => {
+                this._checkIgnoreUpdated(uri, true);
+                await this._delete(uri);
+            }).then(([err]) => done(err ?? undefined));
+        });
+        const syncFileApplyRename = this._events.on('sync:file:apply:rename', (oldPath, newPath, done) => {
+            const oldUri = vscode.Uri.joinPath(folderUri, oldPath);
+            const newUri = vscode.Uri.joinPath(folderUri, newPath);
+            void tryCatch(async () => {
+                this._checkIgnoreUpdated(oldUri);
+                this._checkIgnoreUpdated(newUri);
+                await this._rename(oldUri, newUri);
+            }).then(([err]) => done(err ?? undefined));
         });
         const assetFileSave = this._events.on('asset:file:save', async (path) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
@@ -820,6 +883,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._events.off('asset:file:update', assetFileUpdate);
             this._events.off('asset:file:rename', assetFileRename);
             this._events.off('asset:file:delete', assetFileDelete);
+            this._events.off('sync:file:apply:create', syncFileApplyCreate);
+            this._events.off('sync:file:apply:update', syncFileApplyUpdate);
+            this._events.off('sync:file:apply:delete', syncFileApplyDelete);
+            this._events.off('sync:file:apply:rename', syncFileApplyRename);
             this._events.off('asset:file:save', assetFileSave);
             this._events.off('asset:file:failed', assetFileFailed);
             this._events.off('asset:file:subscribed', assetFileSubscribed);
@@ -832,10 +899,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // just active-editor changes — a stale context lets Ctrl+Z fall through to
         // native undo, which bypasses OT sync. (the native-undo handler stays as a
         // safety net for Edit-menu / palette undo, which keybindings can't gate.)
+        // in pullpush mode editing is local, so keep playcanvas.active false —
+        // let native undo/redo handle cmd+z
         let active: boolean | undefined;
         const updateCtx = () => {
             const e = vscode.window.activeTextEditor;
-            const next = !!(e && uriStartsWith(e.document.uri, folderUri));
+            const next = !!(!this._pullPush && e && uriStartsWith(e.document.uri, folderUri));
             if (next === active) {
                 return;
             }
@@ -1070,6 +1139,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            // pullpush mode: edits are local-only; never submit keystrokes upstream
+            if (this._pullPush) {
+                return;
+            }
+
             // check if there are changes
             if (contentChanges.length === 0) {
                 return;
@@ -1182,6 +1256,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             );
         });
         const onsave = vscode.workspace.onWillSaveTextDocument((e) => {
+            // pullpush mode: saving is local-only — no server save on cmd+s
+            if (this._pullPush) {
+                return;
+            }
             const { document } = e;
 
             // check if file is in memory
@@ -1213,6 +1291,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             }
         });
         const ondidsave = vscode.workspace.onDidSaveTextDocument((document) => {
+            // pullpush mode: saving is local-only — server save happens on Push
+            if (this._pullPush) {
+                return;
+            }
             if (!uriStartsWith(document.uri, folderUri)) {
                 return;
             }
@@ -1316,6 +1398,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         }
 
                                         this._log.debug(`rename.local ${op2.uri} -> ${op1.uri}`);
+                                        if (this._pullPush) {
+                                            this._events.emit('sync:file:rename', path2, path1, type2);
+                                            return;
+                                        }
                                         return projectManager.rename(path2, path1);
                                     });
                                     i++;
@@ -1357,6 +1443,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                             return;
                                         }
                                         this._log.debug(`change.local (atomic) ${op.uri}`);
+                                        if (this._pullPush) {
+                                            this._events.emit('sync:file:update', path);
+                                            return;
+                                        }
                                         await projectManager.write(path, content);
                                         // dirtify if the file is open in an editor
                                         const doc = vscode.workspace.textDocuments.find(
@@ -1365,6 +1455,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         if (doc) {
                                             this._dirty(doc);
                                         }
+                                        return;
+                                    }
+
+                                    if (this._pullPush) {
+                                        this._log.debug(`create.local ${type} ${op.uri}`);
+                                        this._events.emit('sync:file:create', path, type);
                                         return;
                                     }
 
@@ -1427,6 +1523,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     }
 
                                     this._log.debug(`change.local ${op.uri}`);
+                                    if (this._pullPush) {
+                                        this._events.emit('sync:file:update', path);
+                                        return;
+                                    }
                                     await projectManager.write(path, content);
 
                                     // dirtify if file was opened while change was deferred
@@ -1449,6 +1549,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     }
 
                                     this._log.debug(`delete.local ${type} ${op.uri}`);
+                                    if (this._pullPush) {
+                                        this._events.emit('sync:file:delete', path, type);
+                                        return;
+                                    }
                                     return projectManager.delete(path, type);
                                 });
                                 break;
@@ -1538,6 +1642,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
 
+            // pullpush mode: closed-file edits stay local; never submit upstream
+            if (this._pullPush) {
+                this._events.emit('sync:file:update', path);
+                return;
+            }
+
             const type = Promise.resolve('file' as const);
             defer({
                 action: 'change',
@@ -1613,6 +1723,14 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // install baseline vcs-aware ignore filter before any disk writes —
         // .pcignore content is parsed later once stubs are on disk
         this._parseIgnoreText('', folderUri);
+        let bootstrap = true;
+        if (this._pullPush && (await fileExists(folderUri))) {
+            const existing = await readDirRecursive(folderUri);
+            bootstrap = !existing.some((uri) => {
+                const path = relativePath(uri, folderUri);
+                return path === Disk.TYPE_DIR || path.startsWith(`${Disk.TYPE_DIR}/`) || !this._ignoring(uri);
+            });
+        }
 
         // sort into hierarchy
         // TODO: store as tree instead of flat map and sorting
@@ -1654,6 +1772,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const writeAll = (entries: typeof ordered, type: 'file' | 'folder') =>
             pool(entries, WRITE_CONCURRENCY, async ([path, file]) => {
                 const uri = vscode.Uri.joinPath(folderUri, path);
+                if (!bootstrap && !(await fileExists(uri))) {
+                    updatingDiskNext();
+                    return;
+                }
                 let content: Uint8Array;
                 if (file.type === 'file') {
                     content = buffer.from(file.doc.text);
@@ -1683,27 +1805,29 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // write type definition files to .pc/
         await this._writeTypeFiles(folderUri, types);
 
-        // remove old files deepest-first — siblings at each level parallelize
-        const levels = new Map<number, vscode.Uri[]>();
-        for (const uri of await readDirRecursive(folderUri)) {
-            const path = relativePath(uri, folderUri);
-            if (
-                !projectManager.files.has(path) &&
-                path !== Disk.TYPE_DIR &&
-                !path.startsWith(`${Disk.TYPE_DIR}/`) &&
-                !this._ignoring(uri)
-            ) {
-                const depth = path.split('/').length;
-                const bucket = levels.get(depth);
-                if (bucket) {
-                    bucket.push(uri);
-                } else {
-                    levels.set(depth, [uri]);
+        if (bootstrap) {
+            // remove old files deepest-first — siblings at each level parallelize
+            const levels = new Map<number, vscode.Uri[]>();
+            for (const uri of await readDirRecursive(folderUri)) {
+                const path = relativePath(uri, folderUri);
+                if (
+                    !projectManager.files.has(path) &&
+                    path !== Disk.TYPE_DIR &&
+                    !path.startsWith(`${Disk.TYPE_DIR}/`) &&
+                    !this._ignoring(uri)
+                ) {
+                    const depth = path.split('/').length;
+                    const bucket = levels.get(depth);
+                    if (bucket) {
+                        bucket.push(uri);
+                    } else {
+                        levels.set(depth, [uri]);
+                    }
                 }
             }
-        }
-        for (const depth of [...levels.keys()].sort((a, b) => b - a)) {
-            await pool(levels.get(depth)!, WRITE_CONCURRENCY, (uri) => this._delete(uri));
+            for (const depth of [...levels.keys()].sort((a, b) => b - a)) {
+                await pool(levels.get(depth)!, WRITE_CONCURRENCY, (uri) => this._delete(uri));
+            }
         }
 
         // watchers
