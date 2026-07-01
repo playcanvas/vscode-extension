@@ -366,10 +366,8 @@ export const activate = async (context: vscode.ExtensionContext) => {
                     const [err] = await tryCatch(async () => {
                         if (choice.action === 'incoming') {
                             await nativeSync.acceptIncoming(uri);
-                        } else if (choice.action === 'current') {
-                            await nativeSync.keepCurrent(uri);
                         } else {
-                            await nativeSync.markResolved(uri);
+                            await nativeSync.keepCurrent(uri);
                         }
                     });
                     if (err) {

@@ -152,10 +152,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private _localTouches(path: string) {
-        for (const op of this._local.values()) {
-            if (this._touches(op.path, path) || (op.action === 'renamed' && this._touches(op.from, path))) {
-                return true;
-            }
+        if (this._localOpTouches(path)) {
+            return true;
         }
         for (const [p, state] of this._status) {
             if (this._touches(p, path) && (state === 'modified' || state === 'both' || state === 'conflicted')) {
@@ -348,11 +346,15 @@ class NativeSyncEngine extends Linker<LinkParams> {
         return this._base.conflict(file.uniqueId);
     }
 
-    async acceptIncoming(uri: vscode.Uri) {
-        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._acceptIncoming(uri)))) ?? [];
+    private async _locked(fn: () => Promise<void>) {
+        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(fn))) ?? [];
         if (err) {
             throw err;
         }
+    }
+
+    async acceptIncoming(uri: vscode.Uri) {
+        return this._locked(() => this._acceptIncoming(uri));
     }
 
     private async _acceptIncoming(uri: vscode.Uri) {
@@ -384,10 +386,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     async keepCurrent(uri: vscode.Uri) {
-        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._keepCurrent(uri)))) ?? [];
-        if (err) {
-            throw err;
-        }
+        return this._locked(() => this._keepCurrent(uri));
     }
 
     private async _keepCurrent(uri: vscode.Uri) {
@@ -410,10 +409,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
         }
         await this._refreshAll();
-    }
-
-    async markResolved(uri: vscode.Uri) {
-        await this.keepCurrent(uri);
     }
 
     private async _readDisk(folderUri: vscode.Uri, path: string) {
@@ -712,10 +707,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     async pull() {
-        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._pull()))) ?? [];
-        if (err) {
-            throw err;
-        }
+        return this._locked(() => this._pull());
     }
 
     // fetch + 3-way merge: bring remote changes into the working tree.
@@ -821,10 +813,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
     // push: submit local edits as OT ops + flush to S3. fast-forward only —
     // rejected if any file is behind/conflicted (no force push; pull first).
     async push() {
-        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._push()))) ?? [];
-        if (err) {
-            throw err;
-        }
+        return this._locked(() => this._push());
     }
 
     private async _push() {
@@ -907,10 +896,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     // revert a file's working copy to the base (git restore). destructive.
     async discard(uri: vscode.Uri) {
-        const [err] = (await this._mutex.atomic(['sync'], () => tryCatch(() => this._discard(uri)))) ?? [];
-        if (err) {
-            throw err;
-        }
+        return this._locked(() => this._discard(uri));
     }
 
     private async _discard(uri: vscode.Uri) {
