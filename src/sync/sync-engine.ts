@@ -551,26 +551,40 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._promoted.add(path);
             fresh = true;
         }
+        // release a freshly-promoted stub on any exit that won't flush; the happy
+        // path leaves it for the save ack (releasing before flush races the save)
+        const releaseFresh = async () => {
+            if (fresh) {
+                this._promoted.delete(path);
+                await this._release(path);
+            }
+        };
         if (file.type !== 'file') {
+            await releaseFresh();
             return;
         }
         const base = this._base.get(file.uniqueId);
         // re-check remote is still unchanged, synchronous with write()'s apply
         // so a remote op can't interleave — went behind mid-push, leave for pull
         if (base && norm(file.doc.text) !== base.text) {
-            if (fresh) {
-                this._promoted.delete(path);
-                await this._release(path);
-            }
+            await releaseFresh();
             throw fail`remote has changes — pull before pushing`;
         }
         if (norm(file.doc.text) === working) {
             this._base.set(file.uniqueId, working);
+            await releaseFresh();
             return;
         }
-        // write() diffs against the live doc and marks dirty so save() flushes
-        await pm.write(path, buffer.from(working));
-        await this._save(path);
+        // write() diffs against the live doc and marks dirty so save() flushes;
+        // release on failure too — base isn't advanced, so the next push redoes it
+        const [err] = await tryCatch(async () => {
+            await pm.write(path, buffer.from(working));
+            await this._save(path);
+        });
+        if (err) {
+            await releaseFresh();
+            throw err;
+        }
         this._base.set(file.uniqueId, working);
     }
 

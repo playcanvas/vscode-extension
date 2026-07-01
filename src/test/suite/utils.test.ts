@@ -1243,6 +1243,49 @@ suite('sync/sync-engine', () => {
         assert.strictEqual((files.get('a.js') as { type: string }).type, 'stub', 'released after flush ack');
     });
 
+    test('push - releases a promoted stub when the flush fails', async () => {
+        await writeFile('a.js', 'x\n');
+        const doc = {
+            text: 'x\n',
+            apply(op: ShareDbTextOp) {
+                doc.text = ottext.apply(doc.text, op) as string;
+            }
+        };
+        const file = { type: 'file', uniqueId: 1, doc, dirty: false };
+        const files = new Map<string, unknown>([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            subscribe: async (p: string) => {
+                files.set(p, file);
+                return file;
+            },
+            write: async (_p: string, content: Uint8Array) => {
+                const op = delta(doc.text, norm(buffer.toString(content)));
+                if (op) {
+                    doc.apply(op);
+                }
+            },
+            save: () => {
+                throw new Error('flush failed');
+            },
+            unsubscribe: async (p: string) => {
+                files.set(p, { type: 'stub', uniqueId: 1, dirty: file.dirty });
+            }
+        } as unknown as ProjectManager;
+        const events = new EventEmitter<EventMap>();
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\nlocal\n');
+        await e.refresh();
+        const [err] = await tryCatch(() => e.push());
+        assert.ok(err, 'push rejects when the flush fails');
+        assert.strictEqual(
+            (files.get('a.js') as { type: string }).type,
+            'stub',
+            'promoted stub released after a failed flush, not leaked'
+        );
+    });
+
     test('push - subscribes a modified stub and submits', async () => {
         await writeFile('a.js', 'x\n');
         const events = new EventEmitter<EventMap>();
