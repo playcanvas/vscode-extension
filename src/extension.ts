@@ -42,10 +42,12 @@ const SESSION_DIMENSIONS = {
     version: `v${VERSION.replace(/[^a-z0-9]/gi, '_')}`,
     os: WEB ? 'web' : process.platform
 };
+// theme git-decoration palette — keep in step with the pullpush status
+// segments (scm.ts) so status bar greens/oranges match
 const COLORS = {
-    success: '#2ecc71',
-    warning: '#e67e22',
-    error: '#e74c3c'
+    success: new vscode.ThemeColor('gitDecoration.addedResourceForeground'),
+    warning: new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'),
+    error: new vscode.ThemeColor('gitDecoration.deletedResourceForeground')
 };
 
 export const activate = async (context: vscode.ExtensionContext) => {
