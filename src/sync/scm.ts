@@ -14,6 +14,9 @@ const REMOTE_SCHEME = 'playcanvas-remote';
 const MERGE_SCHEME = 'playcanvas-merge';
 const SCM_SCHEME = 'playcanvas-scm';
 const REFRESH_DELAY = 200;
+const CONFLICT_BG = new vscode.ThemeColor('statusBarItem.errorBackground');
+const INCOMING_FG = new vscode.ThemeColor('gitDecoration.addedResourceForeground');
+const OUTGOING_FG = new vscode.ThemeColor('gitDecoration.modifiedResourceForeground');
 
 type LinkParams = { folderUri: vscode.Uri; engine: NativeSyncEngine };
 
@@ -33,7 +36,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
 
     private _merge?: vscode.SourceControlResourceGroup;
 
-    private _statusItem?: vscode.StatusBarItem;
+    private _statusItems?: vscode.StatusBarItem[];
 
     error = signal<Error | undefined>(undefined);
 
@@ -132,23 +135,20 @@ class PlayCanvasScm extends Linker<LinkParams> {
         this._merge.resourceStates = merge;
         this._scm.count = changes.length + merge.length;
 
-        // status-bar summary: ↓ incoming, ↑ outgoing, conflicts (disk vs cloud)
-        const item = this._statusItem;
-        if (item) {
-            const parts = ['$(cloud) PlayCanvas'];
-            if (merge.length) {
-                parts.push(`$(warning) ${merge.length}`);
-            }
-            if (incoming.length) {
-                parts.push(`↓${incoming.length}`);
-            }
-            if (changes.length) {
-                parts.push(`↑${changes.length}`);
-            }
-            item.text = parts.join(' ');
-            item.tooltip = `PlayCanvas: ${incoming.length} incoming, ${changes.length} outgoing${
-                merge.length ? `, ${merge.length} conflicted` : ''
-            }`;
+        // status-bar summary: colored segments (red conflicts, green incoming,
+        // orange outgoing) that hide at zero
+        const [, conflictItem, incomingItem, outgoingItem] = this._statusItems ?? [];
+        if (conflictItem && incomingItem && outgoingItem) {
+            const toggle = (i: vscode.StatusBarItem, count: number) => (count ? i.show() : i.hide());
+            conflictItem.text = `$(warning) ${merge.length}`;
+            conflictItem.tooltip = `${merge.length} conflicted — resolve in Source Control`;
+            toggle(conflictItem, merge.length);
+            incomingItem.text = `$(arrow-down) ${incoming.length}`;
+            incomingItem.tooltip = `${incoming.length} incoming — click to pull`;
+            toggle(incomingItem, incoming.length);
+            outgoingItem.text = `$(arrow-up) ${changes.length}`;
+            outgoingItem.tooltip = `${changes.length} outgoing — click to push`;
+            toggle(outgoingItem, changes.length);
         }
     }
 
@@ -169,10 +169,23 @@ class PlayCanvasScm extends Linker<LinkParams> {
         incoming.hideWhenEmpty = true;
         merge.hideWhenEmpty = true;
 
-        // status-bar sync summary; click reveals the Source Control view
-        const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-        statusItem.command = 'workbench.view.scm';
-        statusItem.show();
+        // status-bar sync summary: adjacent items render as one segment group —
+        // a single item cannot color parts of its text. fractional priorities
+        // keep the group contiguous, right of the branch item (10001)
+        const statusItems = [10000.4, 10000.3, 10000.2, 10000.1].map((p) =>
+            vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, p)
+        );
+        const [mainItem, conflictItem, incomingItem, outgoingItem] = statusItems;
+        mainItem.text = '$(cloud) PlayCanvas';
+        mainItem.tooltip = 'Open Source Control';
+        mainItem.command = 'workbench.view.scm';
+        mainItem.show();
+        conflictItem.backgroundColor = CONFLICT_BG;
+        conflictItem.command = 'workbench.view.scm';
+        incomingItem.color = INCOMING_FG;
+        incomingItem.command = 'playcanvas.pull';
+        outgoingItem.color = OUTGOING_FG;
+        outgoingItem.command = 'playcanvas.push';
 
         // gutter diff: working vs base
         scm.quickDiffProvider = {
@@ -230,7 +243,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
         this._changes = changes;
         this._incoming = incoming;
         this._merge = merge;
-        this._statusItem = statusItem;
+        this._statusItems = statusItems;
 
         // re-render whenever the engine's status changes; invalidate base/remote
         // virtual docs too (only uris with an open editor get re-read by vscode)
@@ -246,7 +259,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
 
         this._cleanup.push(async () => {
             stop();
-            statusItem.dispose();
+            statusItems.forEach((i) => i.dispose());
             debouncer.clear();
             onChange.dispose();
             onSave.dispose();
@@ -277,7 +290,7 @@ class PlayCanvasScm extends Linker<LinkParams> {
         this._changes = undefined;
         this._incoming = undefined;
         this._merge = undefined;
-        this._statusItem = undefined;
+        this._statusItems = undefined;
         void vscode.commands.executeCommand('setContext', 'playcanvas.pullpush', false);
         this._log.info(`unlinked ${folderUri.toString()}`);
         return { folderUri, engine };
