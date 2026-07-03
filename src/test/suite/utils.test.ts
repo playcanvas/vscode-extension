@@ -574,6 +574,34 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.statuses().has('ignored_file.js'), false);
     });
 
+    test('link sees a subscribe that lands during the initial refresh', async () => {
+        await writeFile('a.js', 'x\n');
+        const events = new EventEmitter<EventMap>();
+        const files = new Map<string, unknown>([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        // subscribe round-trip completes mid-link: promote the stub during the
+        // local-only walk, after a.js was already refreshed at stub granularity
+        let promoted = false;
+        files.has = (key: string) => {
+            if (!promoted) {
+                promoted = true;
+                files.set('a.js', { type: 'file', uniqueId: 1, doc: { text: 'x\nremote\n' }, dirty: false });
+                events.emit('asset:file:subscribed', 'a.js', 'x\nremote\n', false);
+            }
+            return Map.prototype.has.call(files, key);
+        };
+        const e = engine(events);
+        await e.link({
+            folderUri: work,
+            projectManager: { files } as unknown as ProjectManager,
+            projectId: 1,
+            branchId: 'main'
+        });
+        for (let i = 0; i < 20 && e.status('a.js') !== 'behind'; i++) {
+            await wait(10);
+        }
+        assert.strictEqual(e.status('a.js'), 'behind');
+    });
+
     test('pull - fast-forward when no local edits', async () => {
         await writeFile('a.js', 'x\n');
         const doc = { text: 'x\n' };
