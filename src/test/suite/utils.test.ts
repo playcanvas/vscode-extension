@@ -198,9 +198,10 @@ suite('sync/scm', () => {
 suite('decoration-provider', () => {
     const dir = vscode.Uri.joinPath(vscode.Uri.file(os.tmpdir()), 'pc-decoration-provider-test');
 
-    test('badges pullpush scm uris without decorating real files', async () => {
+    test('badges pullpush scm uris and explorer files', async () => {
         const sync = {
             changed: { get: () => 0 },
+            status: (path: string) => (path === 'new.js' ? 'added' : 'clean'),
             decorationStatus: (path: string) => (path === 'new.js' ? 'added' : 'clean')
         } as unknown as NativeSyncEngine;
         const provider = new DecorationProvider({ events: new EventEmitter<EventMap>(), syncEngine: sync });
@@ -208,7 +209,11 @@ suite('decoration-provider', () => {
 
         const real = vscode.Uri.joinPath(dir, 'new.js');
         assert.strictEqual(provider.provideFileDecoration(scmUri(real))?.badge, 'A');
-        assert.strictEqual(provider.provideFileDecoration(real), undefined);
+        // explorer: arrow badge, no color — git's filename tint must survive
+        const explorer = provider.provideFileDecoration(real);
+        assert.strictEqual(explorer?.badge, '↑');
+        assert.strictEqual(explorer?.color, undefined);
+        assert.strictEqual(provider.provideFileDecoration(vscode.Uri.joinPath(dir, 'clean.js')), undefined);
 
         await provider.unlink();
     });
