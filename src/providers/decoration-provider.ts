@@ -31,6 +31,17 @@ const SYNC_DECORATION: Record<
     renamed: { badge: 'R', color: 'gitDecoration.renamedResourceForeground', tooltip: 'Renamed' }
 };
 
+// explorer badges compose with git's (badges merge across providers); no
+// color so the filename tint stays with git's decorations
+const EXPLORER_BADGE: Partial<Record<SyncState, vscode.FileDecoration>> = {
+    behind: { badge: '↓', tooltip: 'Incoming — pull to apply' },
+    modified: { badge: '↑', tooltip: 'Outgoing — push to share' },
+    both: { badge: '↓↑', tooltip: 'Incoming and outgoing' },
+    conflicted: { badge: '!', tooltip: 'Conflict — resolve' },
+    added: { badge: '↑', tooltip: 'Added — push to share' },
+    renamed: { badge: '↑', tooltip: 'Renamed — push to share' }
+};
+
 const syncDecoration = (state: SyncState) => {
     if (state === 'clean') {
         return undefined;
@@ -92,11 +103,12 @@ class DecorationProvider
         }
 
         const file = pm.files.get(path);
-        if (!file || file.type !== 'file' || !file.dirty) {
-            return undefined;
+        const dirty = file?.type === 'file' && file.dirty;
+        const sync = EXPLORER_BADGE[this._syncEngine?.status(path) ?? 'clean'];
+        if (sync) {
+            return dirty ? { ...sync, color: DIRTY_COLOR } : sync;
         }
-
-        return { color: DIRTY_COLOR };
+        return dirty ? { color: DIRTY_COLOR } : undefined;
     }
 
     private _fire(path: string) {
