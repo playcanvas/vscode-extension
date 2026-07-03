@@ -968,8 +968,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._branchId = branchId;
         this._ignoring = Disk.ignoreMatcher(await this._ignoreText(folderUri), folderUri);
 
-        await this._refreshAll();
-
+        // listeners before the initial refresh — a subscribe or remote op
+        // landing mid-refresh must recompute its file, not vanish
         const recompute = (path: string) => void this.refresh(path);
         const onUpdate = this._events.on('asset:file:update', recompute);
         const onCreate = this._events.on(
@@ -1010,6 +1010,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._events.off('asset:file:hash', onHash);
             this._events.off('asset:file:save', onSave);
         });
+
+        await this._refreshAll();
 
         await this._base.flush();
 
