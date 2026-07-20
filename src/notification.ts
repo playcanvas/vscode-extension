@@ -20,7 +20,7 @@ export const simpleNotification = (message: string) => {
 };
 
 export const progressNotification = (message: string, total: number) => {
-    return new Promise<() => void>((resolve) => {
+    return new Promise<[() => void, () => void]>((resolve) => {
         vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
@@ -29,7 +29,7 @@ export const progressNotification = (message: string, total: number) => {
             },
             (progress) => {
                 const deferred = new Deferred<void>();
-                const increment = 100 / total;
+                const increment = total ? 100 / total : 0;
                 let i = 0;
 
                 progress.report({ message: `${i}/${total}` });
@@ -40,7 +40,7 @@ export const progressNotification = (message: string, total: number) => {
                         deferred.resolve();
                     }
                 };
-                resolve(next);
+                resolve([next, deferred.resolve]);
 
                 if (total === 0) {
                     deferred.resolve();

@@ -101,6 +101,10 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
 
     desync = signal<boolean>(false);
 
+    saving = signal<boolean>(false);
+
+    saveFailure = signal<number>(0);
+
     constructor({
         events,
         sharedb,
@@ -320,6 +324,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // exactly the failure mode we need to alarm on; a genuine offline stretch is
         // also worth surfacing so users don't assume their edits are syncing.
         otdoc.on('stuck', () => {
+            this._failWaitingSave(uniqueId);
             this.desync.set(() => true);
         });
 
@@ -395,11 +400,16 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         return this._assetPath(uniqueId);
     }
 
+    private _updateSaving() {
+        this.saving.set(() => this._saveInflight.size > 0 || this._savePending.size > 0 || this._saveAttempts.size > 0);
+    }
+
     private _clearSaveAttempt(uniqueId: number) {
         const entry = this._saveAttempts.get(uniqueId);
         clearTimeout(entry?.ack);
         clearTimeout(entry?.retry);
         this._saveAttempts.delete(uniqueId);
+        this._updateSaving();
     }
 
     private _clearSaveFailure(uniqueId: number) {
@@ -420,7 +430,17 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
         }
         this._saveFailed.add(uniqueId);
+        this.saveFailure.set((count) => count + 1);
         this.desync.set(() => true);
+    }
+
+    private _failWaitingSave(uniqueId: number) {
+        if (!this._saveInflight.delete(uniqueId) && !this._saveAttempts.has(uniqueId)) {
+            return;
+        }
+        this._savePending.delete(uniqueId);
+        this._clearSaveAttempt(uniqueId);
+        this._failSave(uniqueId);
     }
 
     private _sendSave(uniqueId: number) {
@@ -433,6 +453,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
             current.ack = undefined;
             this._saveInflight.delete(uniqueId);
+            this._updateSaving();
             this._verifySave('error', uniqueId);
         }, ProjectManager.SAVE_ACK_TIMEOUT_MS);
         entry.ack = ack;
@@ -448,6 +469,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 current.ack = undefined;
             }
             this._saveInflight.delete(uniqueId);
+            this._updateSaving();
             this._log.warn(`failed to send save for document ${uniqueId}: ${err.message}`);
             this._verifySave('error', uniqueId);
         });
@@ -473,8 +495,9 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const attempt = (entry?.attempt ?? 0) + 1;
         if (attempt > ProjectManager.SAVE_MAX_RETRIES) {
             this._log.error(`giving up saving document ${uniqueId} after ${ProjectManager.SAVE_MAX_RETRIES} retries`);
-            this._clearSaveAttempt(uniqueId);
             this._savePending.delete(uniqueId);
+            this._saveInflight.delete(uniqueId);
+            this._clearSaveAttempt(uniqueId);
             this._failSave(uniqueId);
             return false;
         }
@@ -505,6 +528,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             }
 
             this._saveInflight.add(uniqueId);
+            this._updateSaving();
             this._sendSave(uniqueId);
             this._log.debug(`retried save for document ${uniqueId} (attempt ${attempt})`);
         }, ProjectManager.SAVE_RETRY_DELAY_MS);
@@ -512,6 +536,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         entry.retry = retry;
         entry.attempt = attempt;
         this._saveAttempts.set(uniqueId, entry);
+        this._updateSaving();
         return false;
     }
 
@@ -521,6 +546,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         }
         this._savePending.delete(uniqueId);
         this.save(path);
+        this._updateSaving();
     }
 
     private _finishSave(uniqueId: number, path: string) {
@@ -1297,19 +1323,33 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // ack drive the follow-up (Code Editor save.ts:159-162)
         if (this._saveInflight.has(file.uniqueId) || this._saveAttempts.has(file.uniqueId)) {
             this._savePending.add(file.uniqueId);
+            this._updateSaving();
             return;
         }
+
+        if (file.doc.pending && file.doc.stuck) {
+            this._failSave(file.uniqueId);
+            return;
+        }
+
+        const entry = { attempt: 0 };
+        this._saveAttempts.set(file.uniqueId, entry);
         this._saveInflight.add(file.uniqueId);
+        this._updateSaving();
 
         // wait for pending ops to be acknowledged before saving,
         // matching the Code Editor's behavior (save.ts:144-150).
         // prevents saving stale content while ops are in-flight.
         file.doc.whenNothingPending(() => {
+            if (this._saveAttempts.get(file.uniqueId) !== entry) {
+                return;
+            }
             // re-check after pending drains: a remote op may have brought the
             // doc back in line with S3 (file.dirty is kept live in the 'op' and
             // 'reload' handlers), in which case skip the server round-trip
             if (!file.dirty) {
                 this._saveInflight.delete(file.uniqueId);
+                this._clearSaveAttempt(file.uniqueId);
                 this._events.emit('asset:file:save', path);
                 this._drainSaves(file.uniqueId, path);
                 return;
@@ -1464,6 +1504,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         // local ops unacked past the stuck threshold — surface desync unconditionally
         // (see _addFile for rationale). 'drained' clears desync when the queue recovers.
         otdoc.on('stuck', () => {
+            this._failWaitingSave(uniqueId);
             this.desync.set(() => true);
         });
         otdoc.on('drained', () => {
@@ -1546,34 +1587,40 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             uniqueId: 0
         });
 
-        const loadAssetNext = await progressNotification('Loading Assets', assets.length);
+        const [loadAssetNext, loadAssetDone] = await progressNotification('Loading Assets', assets.length);
 
         // subscribe to all assets in batches
         const ordered: { uniqueId: number; data: Record<string, unknown> }[] = [];
-        for (let i = 0; i < assets.length; i += BATCH_SIZE) {
-            const batch = assets.slice(i, i + BATCH_SIZE);
-            const subscriptions: [string, string][] = batch.map((asset) => ['assets', `${asset.uniqueId}`]);
-            const docs = await this._sharedb.bulkSubscribe(subscriptions);
-            this._cleanup.push(async () => {
-                await this._sharedb.bulkUnsubscribe(subscriptions);
-            });
-            for (let j = 0; j < docs.length; j++) {
-                const doc = docs[j];
-                const uniqueId = batch[j].uniqueId;
-                if (!doc) {
-                    this._log.error(fail`failed to subscribe to asset ${uniqueId}`);
+        const [assetErr] = await tryCatch(async () => {
+            for (let i = 0; i < assets.length; i += BATCH_SIZE) {
+                const batch = assets.slice(i, i + BATCH_SIZE);
+                const subscriptions: [string, string][] = batch.map((asset) => ['assets', `${asset.uniqueId}`]);
+                const docs = await this._sharedb.bulkSubscribe(subscriptions);
+                this._cleanup.push(async () => {
+                    await this._sharedb.bulkUnsubscribe(subscriptions);
+                });
+                for (let j = 0; j < docs.length; j++) {
+                    const doc = docs[j];
+                    const uniqueId = batch[j].uniqueId;
+                    if (!doc) {
+                        this._log.error(fail`failed to subscribe to asset ${uniqueId}`);
+                        loadAssetNext();
+                        continue;
+                    }
+
+                    // add asset
+                    this._addAsset(uniqueId, doc);
+
+                    // store in list for ordered processing
+                    ordered.push({ uniqueId, data: doc.data });
+
                     loadAssetNext();
-                    continue;
                 }
-
-                // add asset
-                this._addAsset(uniqueId, doc);
-
-                // store in list for ordered processing
-                ordered.push({ uniqueId, data: doc.data });
-
-                loadAssetNext();
             }
+        });
+        loadAssetDone();
+        if (assetErr) {
+            throw assetErr;
         }
 
         // split folder and files
@@ -1649,28 +1696,34 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
         const folders = folders0.filter(reachable);
         const files = files0.filter(reachable);
 
-        const loadFileNext = await progressNotification('Loading Files', folders.length + files.length);
+        const [loadFileNext, loadFileDone] = await progressNotification('Loading Files', folders.length + files.length);
         let skipsDirty = false;
 
-        // add all folders first
-        for (const asset of folders) {
-            if (this._addFolder(asset.uniqueId).changed) {
-                skipsDirty = true;
+        const [fileErr] = await tryCatch(async () => {
+            // add all folders first
+            for (const asset of folders) {
+                if (this._addFolder(asset.uniqueId).changed) {
+                    skipsDirty = true;
+                }
+                loadFileNext();
             }
-            loadFileNext();
-        }
 
-        // add file stubs (lazy — document subscribed on open)
-        for (const asset of files) {
-            if (this._addStub(asset.uniqueId).changed) {
-                skipsDirty = true;
+            // add file stubs (lazy — document subscribed on open)
+            for (const asset of files) {
+                if (this._addStub(asset.uniqueId).changed) {
+                    skipsDirty = true;
+                }
+                loadFileNext();
             }
-            loadFileNext();
-        }
 
-        // show collisions if dirty
-        if (skipsDirty) {
-            this.collisions.refresh();
+            // show collisions if dirty
+            if (skipsDirty) {
+                this.collisions.refresh();
+            }
+        });
+        loadFileDone();
+        if (fileErr) {
+            throw fileErr;
         }
 
         // watchers
@@ -1694,6 +1747,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
             this._saveInflight.clear();
             this._savePending.clear();
             this._saveFailed.clear();
+            this._updateSaving();
 
             this._files.clear();
             this._assets.clear();

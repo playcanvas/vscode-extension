@@ -205,6 +205,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         if (h === this._diskHash.get(uri.path) || h === this._echo.get(`${uri}:change`)) {
             return;
         }
+        if (this._warnedExternal) {
+            return;
+        }
         this._warnedExternal = true;
         this._log.info(`external edit ignored ${uri}`);
         const res = await vscode.window.showWarningMessage(
@@ -339,6 +342,52 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         return vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString());
     }
 
+    private _recover(path: string, base: string, observed: string) {
+        const file = this._projectManager?.files.get(path);
+        if (!file || file.type !== 'file') {
+            return;
+        }
+        const op = delta(base, observed);
+        if (!op) {
+            return;
+        }
+        const adv = delta(base, file.doc.text);
+        file.doc.apply(adv ? (ottext.transform(op, adv, 'left') as ShareDbTextOp) : op);
+        const dirty = file.dirty;
+        file.dirty = true;
+        if (!dirty) {
+            this._events.emit('asset:file:dirty', path, true);
+        }
+        this._log.info(`sync.recovered ${path} ${stat(op)}`);
+    }
+
+    private async _resetCanonical(document: vscode.TextDocument, uri: vscode.Uri, path: string) {
+        const pm = this._projectManager;
+        const file = pm?.files.get(path);
+        if (!pm || !file || file.type !== 'file') {
+            return false;
+        }
+
+        const raw = document.getText();
+        const before = norm(raw);
+        const target = file.doc.text;
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(raw.length)), target);
+        const [err, applied] = await tryCatch(Promise.resolve(vscode.workspace.applyEdit(edit)));
+        const observed = norm(document.getText());
+        if (err || !applied) {
+            this._recover(path, before, observed);
+            this._blocked.add(`${uri}`);
+            pm.desync.set(() => true);
+            this._log.warn(`sync.resync failed ${uri}`);
+            return false;
+        }
+
+        this._recover(path, target, observed);
+        this._blocked.delete(`${uri}`);
+        return true;
+    }
+
     private _update(uri: vscode.Uri, op: ShareDbTextOp, content: string, prev: string) {
         const snapshot = norm(content);
         return this._writeMutex.atomic([`${uri}`], async () => {
@@ -410,7 +459,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 // transform remote op into buffer-space so positions align
                 const bufferOp = fullUserOp ? (ottext.transform(op, fullUserOp, 'right') as ShareDbTextOp) : op;
                 const edit = sharedb2vscode(document, uri, [bufferOp], bufferText);
-                const applied = await vscode.workspace.applyEdit(edit);
+                const [editErr, applied] = await tryCatch(Promise.resolve(vscode.workspace.applyEdit(edit)));
 
                 if (this._projectManager && this._folderUri) {
                     const path = relativePath(uri, this._folderUri);
@@ -427,13 +476,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                             }
                         }
 
-                        // applyEdit failed — force-reset to canonical state
-                        if (!applied) {
-                            const curRaw = document.getText();
-                            const reset = new vscode.WorkspaceEdit();
-                            const range = new vscode.Range(document.positionAt(0), document.positionAt(curRaw.length));
-                            reset.replace(uri, range, file.doc.text);
-                            await vscode.workspace.applyEdit(reset);
+                        // applyEdit failed — preserve concurrent typing, then reset to canonical state
+                        if (editErr || !applied) {
+                            this._recover(path, bufferText, norm(document.getText()));
+                            await this._resetCanonical(document, uri, path);
                             this._log.warn(`sync.remote.resync ${uri} applied=false`);
                             return;
                         }
@@ -444,21 +490,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         const postText = norm(postRaw);
                         const expected = ottext.apply(bufferText, bufferOp) as string;
 
-                        const late = delta(expected, postText);
-                        if (late) {
-                            // transform recovered keystrokes against canonical advancement
-                            // (queued remote ops that OTDocument processed but _update hasn't applied yet)
-                            const adv = delta(expected, file.doc.text);
-                            const adjusted = adv ? (ottext.transform(late, adv, 'left') as ShareDbTextOp) : late;
-                            file.doc.apply(adjusted);
-                            const wasDirty = file.dirty;
-                            file.dirty = true;
-                            if (!wasDirty) {
-                                this._events.emit('asset:file:dirty', path, true);
-                            }
-                            this._log.info(`sync.remote.recovered ${uri} ${stat(op)} recovered=${stat(late)}`);
-                            return;
-                        }
+                        this._recover(path, expected, postText);
+                        this._blocked.delete(`${uri}`);
                     }
                 }
             });
@@ -589,18 +622,26 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                     // server is authoritative — apply live ShareDB doc to buffer on any divergence
                     if (file.doc.text !== bufferText) {
-                        const { prefix, suffix } = diff(bufferText, file.doc.text);
+                        const target = file.doc.text;
+                        const { prefix, suffix } = diff(bufferText, target);
                         const edit = new vscode.WorkspaceEdit();
                         edit.replace(
                             uri,
                             new vscode.Range(doc.positionAt(prefix), doc.positionAt(bufferText.length - suffix)),
-                            file.doc.text.substring(prefix, file.doc.text.length - suffix)
+                            target.substring(prefix, target.length - suffix)
                         );
-                        const applied = await vscode.workspace.applyEdit(edit);
-                        if (!applied) {
+                        const [err, applied] = await tryCatch(Promise.resolve(vscode.workspace.applyEdit(edit)));
+                        if (err || !applied) {
+                            this._recover(path, bufferText, norm(doc.getText()));
+                            await this._resetCanonical(doc, uri, path);
                             this._log.warn(`subscribe.resync applyEdit failed for ${uri}`);
+                        } else {
+                            this._recover(path, target, norm(doc.getText()));
+                            this._blocked.delete(`${uri}`);
                         }
                         this._log.info(`subscribe.resync ${uri}`);
+                    } else {
+                        this._blocked.delete(`${uri}`);
                     }
                 });
                 this._locks.delete(`${uri}`);
@@ -677,7 +718,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             this._locks.add(`${doc.uri}`);
             await tryCatch(async () => {
-                const current = doc.getText();
+                const current = norm(doc.getText());
                 const expected = file.doc.text;
                 if (current !== expected) {
                     // buffer has stale content -- apply minimal diff
@@ -688,18 +729,28 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                         new vscode.Range(doc.positionAt(prefix), doc.positionAt(current.length - suffix)),
                         expected.substring(prefix, expected.length - suffix)
                     );
-                    if (!(await vscode.workspace.applyEdit(edit))) {
+                    const [err, applied] = await tryCatch(Promise.resolve(vscode.workspace.applyEdit(edit)));
+                    if (err || !applied) {
+                        this._recover(path, current, norm(doc.getText()));
+                        await this._resetCanonical(doc, doc.uri, path);
                         this._log.warn(`dirty applyEdit failed for ${doc.uri}`);
+                    } else {
+                        this._recover(path, expected, norm(doc.getText()));
+                        this._blocked.delete(`${doc.uri}`);
                     }
                 } else {
-                    // content matches -- make a reversible edit to mark dirty without final text change
-                    const pos = doc.positionAt(0);
+                    // content matches -- append a marker, recover concurrent edits, then reset
+                    const target = `${expected} `;
                     const add = new vscode.WorkspaceEdit();
-                    add.insert(doc.uri, pos, ' ');
-                    if (await vscode.workspace.applyEdit(add)) {
-                        const remove = new vscode.WorkspaceEdit();
-                        remove.delete(doc.uri, new vscode.Range(pos, doc.positionAt(1)));
-                        await vscode.workspace.applyEdit(remove);
+                    add.insert(doc.uri, doc.positionAt(doc.getText().length), ' ');
+                    const [err, applied] = await tryCatch(Promise.resolve(vscode.workspace.applyEdit(add)));
+                    if (err || !applied) {
+                        this._recover(path, current, norm(doc.getText()));
+                        await this._resetCanonical(doc, doc.uri, path);
+                        this._log.warn(`dirty marker applyEdit failed for ${doc.uri}`);
+                    } else {
+                        this._recover(path, target, norm(doc.getText()));
+                        await this._resetCanonical(doc, doc.uri, path);
                     }
                 }
             });
@@ -1166,7 +1217,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             // check if locked (from remote update) or remote op pending in
             // the sync-to-microtask gap before _update's mutex body runs
             const lockKey = `${document.uri}`;
-            if (this._locks.has(lockKey) || this._opLocks.has(lockKey)) {
+            if (this._locks.has(lockKey) || this._opLocks.has(lockKey) || this._blocked.has(lockKey)) {
                 return;
             }
 
@@ -1672,38 +1723,47 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // show progress notification early so users see feedback during REST prefetch
         const folders = ordered.filter(([, f]) => f.type === 'folder');
         const files = ordered.filter(([, f]) => f.type !== 'folder');
-        const updatingDiskNext = await progressNotification('Updating Disk', folders.length + files.length);
+        const [updatingDiskNext, updatingDiskDone] = await progressNotification(
+            'Updating Disk',
+            folders.length + files.length
+        );
 
-        // prefetch REST content for stubs (pooled — continuous worker saturation under concurrency cap)
-        const stubs = ordered.filter(([, f]) => f.type === 'stub');
-        const fetched = new Map<number, Uint8Array>();
-        await pool(stubs, FETCH_CONCURRENCY, async ([, f]) => {
-            const [err, buf] = await tryCatch(projectManager.fetchContent(f.uniqueId));
-            // normalize REST content to LF — S3 may hold CRLF from pre-fix uploads
-            fetched.set(f.uniqueId, err ? new Uint8Array() : buffer.from(norm(buffer.toString(buf))));
-        });
-
-        // write files to disk — folders first (parents before descendants), then files, via worker pool
-        const writeAll = (entries: typeof ordered, type: 'file' | 'folder') =>
-            pool(entries, WRITE_CONCURRENCY, async ([path, file]) => {
-                const uri = vscode.Uri.joinPath(folderUri, path);
-                if (!bootstrap && !(await fileExists(uri))) {
-                    updatingDiskNext();
-                    return;
-                }
-                let content: Uint8Array;
-                if (file.type === 'file') {
-                    content = buffer.from(file.doc.text);
-                } else if (file.type === 'stub') {
-                    content = fetched.get(file.uniqueId) ?? new Uint8Array();
-                } else {
-                    content = new Uint8Array();
-                }
-                await this._create(uri, type, content);
-                updatingDiskNext();
+        const [writeErr] = await tryCatch(async () => {
+            // prefetch REST content for stubs (pooled — continuous worker saturation under concurrency cap)
+            const stubs = ordered.filter(([, f]) => f.type === 'stub');
+            const fetched = new Map<number, Uint8Array>();
+            await pool(stubs, FETCH_CONCURRENCY, async ([, f]) => {
+                const [err, buf] = await tryCatch(projectManager.fetchContent(f.uniqueId));
+                // normalize REST content to LF — S3 may hold CRLF from pre-fix uploads
+                fetched.set(f.uniqueId, err ? new Uint8Array() : buffer.from(norm(buffer.toString(buf))));
             });
-        await writeAll(folders, 'folder');
-        await writeAll(files, 'file');
+
+            // write files to disk — folders first (parents before descendants), then files, via worker pool
+            const writeAll = (entries: typeof ordered, type: 'file' | 'folder') =>
+                pool(entries, WRITE_CONCURRENCY, async ([path, file]) => {
+                    const uri = vscode.Uri.joinPath(folderUri, path);
+                    if (!bootstrap && !(await fileExists(uri))) {
+                        updatingDiskNext();
+                        return;
+                    }
+                    let content: Uint8Array;
+                    if (file.type === 'file') {
+                        content = buffer.from(file.doc.text);
+                    } else if (file.type === 'stub') {
+                        content = fetched.get(file.uniqueId) ?? new Uint8Array();
+                    } else {
+                        content = new Uint8Array();
+                    }
+                    await this._create(uri, type, content);
+                    updatingDiskNext();
+                });
+            await writeAll(folders, 'folder');
+            await writeAll(files, 'file');
+        });
+        updatingDiskDone();
+        if (writeErr) {
+            throw writeErr;
+        }
 
         // parse ignore file (after disk write so stub content is available)
         const ignoreFile = projectManager.files.get(Disk.IGNORE_FILE);

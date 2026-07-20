@@ -909,32 +909,29 @@ export const activate = async (context: vscode.ExtensionContext) => {
             );
         }
 
-        // desync surfaces — sticky status-bar item + one-shot toast per
-        // false→true transition. signal resets to false on project unlink.
+        // save/desync status surfaces
         effect(() => {
             const desynced = projectManager.desync.get();
-            if (desynced) {
+            const saving = projectManager.saving.get();
+            if (!desynced && saving) {
+                desyncStatusItem.color = undefined;
+                desyncStatusItem.command = undefined;
+                desyncStatusItem.text = '$(sync~spin) Saving…';
+                desyncStatusItem.tooltip = 'Saving PlayCanvas changes';
                 desyncStatusItem.show();
-            } else {
+                return;
+            }
+            if (!desynced) {
                 desyncStatusItem.hide();
-                desyncStatusItem.command = `${NAME}.reloadProject`;
-                desyncStatusItem.tooltip = 'PlayCanvas project is out of sync — click to reload';
                 return;
             }
 
+            desyncStatusItem.color = COLORS.warning;
+            desyncStatusItem.text = '$(warning) Out of Sync';
+            desyncStatusItem.show();
             if (projectManager.saveFailed()) {
                 desyncStatusItem.command = `${NAME}.reportIssue`;
                 desyncStatusItem.tooltip = 'PlayCanvas could not save changes — click to report';
-                void vscode.window
-                    .showWarningMessage('PlayCanvas could not save changes.', 'Report Issue')
-                    .then((choice) => {
-                        if (choice === 'Report Issue') {
-                            void vscode.commands.executeCommand(
-                                `${NAME}.reportIssue`,
-                                'PlayCanvas could not save changes'
-                            );
-                        }
-                    });
                 return;
             }
 
@@ -956,6 +953,22 @@ export const activate = async (context: vscode.ExtensionContext) => {
                             void vscode.commands.executeCommand(`${NAME}.reportIssue`, 'Out of sync');
                             break;
                         }
+                    }
+                });
+        });
+
+        let saveFailure = projectManager.saveFailure.get();
+        effect(() => {
+            const count = projectManager.saveFailure.get();
+            if (count === saveFailure) {
+                return;
+            }
+            saveFailure = count;
+            void vscode.window
+                .showWarningMessage('PlayCanvas could not save changes.', 'Report Issue')
+                .then((choice) => {
+                    if (choice === 'Report Issue') {
+                        void vscode.commands.executeCommand(`${NAME}.reportIssue`, 'PlayCanvas could not save changes');
                     }
                 });
         });
