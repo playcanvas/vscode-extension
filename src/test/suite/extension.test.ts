@@ -293,6 +293,17 @@ const waitForFileContent = async (uri: vscode.Uri, content: string, name: string
     assert.fail(`${name} content did not match within ${timeout}ms`);
 };
 
+const waitForWarning = async (re: RegExp, name: string, timeout = RETRY_TIMEOUT) => {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+        if (warningMessageStub.getCalls().some((c) => re.test(`${c.args[0]}`))) {
+            return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.fail(`${name} not shown within ${timeout}ms`);
+};
+
 // mock connection classes
 const auth = new MockAuth(sandbox);
 const messenger = new MockMessenger(sandbox);
@@ -1479,31 +1490,38 @@ suite('extension', () => {
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
 
-        // create asset
-        const asset = await assetCreate({ name: 'change_closed_local_remote.js', content: '// SAMPLE CONTENT' });
-        assert.ok(asset, 'asset should be created');
+        // create two closed assets — one to edit, one to prove the toast is one-shot
+        const assetA = await assetCreate({ name: 'change_closed_local_remote.js', content: '// SAMPLE CONTENT' });
+        assert.ok(assetA, 'asset A should be created');
+        const assetB = await assetCreate({ name: 'change_closed_local_remote_b.js', content: '// SAMPLE CONTENT' });
+        assert.ok(assetB, 'asset B should be created');
 
-        // get document content
-        const document = documents.get(asset.uniqueId);
-        assert.ok(document, 'document should exist');
+        const uriA = vscode.Uri.joinPath(folderUri, assetA.name);
+        const uriB = vscode.Uri.joinPath(folderUri, assetB.name);
 
-        // get file uri
-        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        // realtime ignores external closed-file edits: no OT op, one-shot warning
+        const docA = sharedb.subscriptions.get(`documents:${assetA.uniqueId}`);
+        assert.ok(docA, 'sharedb document A should exist');
+        docA.submitOp.resetHistory();
+        warningMessageStub.resetHistory();
 
-        // create update promise
-        const newContent = `// CLOSED LOCAL TEST COMMENT\n${document}`;
-        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [3, 'CLOSED LOCAL TEST COMMENT\n// '] // minimal diff insert at offset 3 (after common prefix "// ")
-        ]);
+        const warnings = () =>
+            warningMessageStub.getCalls().filter((c) => /do not sync in realtime/i.test(`${c.args[0]}`)).length;
 
-        // make local change by writing to the file directly
-        await vscode.workspace.fs.writeFile(uri, buffer.from(newContent));
+        // external edit to closed file A
+        await vscode.workspace.fs.writeFile(uriA, buffer.from('// EXTERNAL EDIT A\n'));
+        await waitForWarning(/do not sync in realtime/i, 'external edit warning');
 
-        // wait for remote update to be detected
-        await assertResolves(updated, 'sharedb.op');
+        assert.strictEqual(docA.submitOp.callCount, 0, 'external closed edit should not submit an OT op');
+        assert.strictEqual(warnings(), 1, 'warning should be shown exactly once');
+
+        // second external edit to a different closed file — one-shot, no second toast
+        await vscode.workspace.fs.writeFile(uriB, buffer.from('// EXTERNAL EDIT B\n'));
+        await waitForIdle('second external edit settle');
+        assert.strictEqual(warnings(), 1, 'warning should not be shown a second time');
     });
 
-    test('file change - atomic write local to remote', async () => {
+    test('file change - atomic write does not sync or duplicate', async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
         assert.ok(folderUri, 'workspace folder should exist');
@@ -1511,31 +1529,30 @@ suite('extension', () => {
         // create asset
         const asset = await assetCreate({ name: 'atomic_write_closed.js', content: '// SAMPLE CONTENT' });
         assert.ok(asset, 'asset should be created');
-        const document = documents.get(asset.uniqueId);
-        assert.ok(document, 'document should exist');
 
         // get file uri
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
 
+        // get sharedb doc to check submitOp
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+        doc.submitOp.resetHistory();
+
         // snapshot assetCreate call count after setup
         const createsBefore = rest.assetCreate.callCount;
 
-        // create update promise — minimal diff: "SAMPLE CONTENT" -> "ATOMIC CONTENT"
-        const newContent = '// ATOMIC CONTENT';
-        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [3, 'ATOMIC', { d: 6 }] // replace "SAMPLE" with "ATOMIC" at offset 3
-        ]);
-
         // simulate atomic write: write temp file outside workspace, then rename over existing
+        const newContent = '// ATOMIC CONTENT';
         const tmpUri = vscode.Uri.file(`/tmp/claude/atomic_write_closed.js`);
         await vscode.workspace.fs.createDirectory(vscode.Uri.file('/tmp/claude'));
         await vscode.workspace.fs.writeFile(tmpUri, buffer.from(newContent));
         await vscode.workspace.fs.rename(tmpUri, uri, { overwrite: true });
+        await waitForFileContent(uri, newContent, 'atomic write');
+        await waitForIdle('atomic write settle');
 
-        // wait for remote update to be detected
-        await assertResolves(updated, 'sharedb.op');
-
-        // verify no new asset was created (atomic write, not new asset)
+        // realtime ignores external edits: no OT op submitted...
+        assert.strictEqual(doc.submitOp.callCount, 0, 'atomic write should not submit an OT op');
+        // ...and the temp+rename over an existing asset must never be mistaken for a new asset
         assert.strictEqual(rest.assetCreate.callCount, createsBefore, 'should not call assetCreate for atomic write');
     });
 
@@ -1555,6 +1572,7 @@ suite('extension', () => {
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
         assert.ok(doc, 'sharedb document should exist');
         doc.submitOp.resetHistory();
+        warningMessageStub.resetHistory();
 
         // snapshot assetCreate call count after setup
         const createsBefore = rest.assetCreate.callCount;
@@ -1563,16 +1581,18 @@ suite('extension', () => {
         const tmpUri = vscode.Uri.file(`/tmp/claude/atomic_write_noop.js`);
         await vscode.workspace.fs.createDirectory(vscode.Uri.file('/tmp/claude'));
         await vscode.workspace.fs.writeFile(tmpUri, buffer.from('// SAME CONTENT'));
-        const processed = waitForMutex((keys) => keys.includes(asset.name), 'atomic write noop');
         await vscode.workspace.fs.rename(tmpUri, uri, { overwrite: true });
-
-        await processed;
+        await waitForIdle('atomic write noop settle');
 
         // verify no ops submitted (content unchanged)
         assert.strictEqual(doc.submitOp.callCount, 0, 'should not submit ops for identical content');
 
         // verify no new asset was created
         assert.strictEqual(rest.assetCreate.callCount, createsBefore, 'should not call assetCreate for atomic write');
+
+        // identical content must not trigger the external-edit warning (echo/diskHash match)
+        const warnings = warningMessageStub.getCalls().filter((c) => /do not sync in realtime/i.test(`${c.args[0]}`));
+        assert.strictEqual(warnings.length, 0, 'identical content should not warn');
     });
 
     test('file change - no auto-save on external', async () => {
@@ -1589,22 +1609,22 @@ suite('extension', () => {
         // get file uri
         const uri = vscode.Uri.joinPath(folderUri, asset.name);
 
-        // create update promise
-        const newContent = `// CLOSED NO SAVE\n${document}`;
-        const updated = assertOpsPromise(`documents:${asset.uniqueId}`, [
-            [3, 'CLOSED NO SAVE\n// '] // minimal diff insert at offset 3 (after common prefix "// ")
-        ]);
+        // get sharedb doc to check submitOp
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb document should exist');
+        doc.submitOp.resetHistory();
 
         // reset sendRaw history
         sharedb.sendRaw.resetHistory();
 
-        // make external change by writing to file directly
-        const processed = waitForMutex((keys) => keys.includes(asset.name), 'external closed file change');
+        // make external change by writing to closed file — realtime leaves it on disk, no sync
+        const newContent = `// CLOSED NO SAVE\n${document}`;
         await vscode.workspace.fs.writeFile(uri, buffer.from(newContent));
+        await waitForFileContent(uri, newContent, 'external closed file change');
+        await waitForIdle('external closed change settle');
 
-        // wait for remote update to be detected
-        await assertResolves(updated, 'sharedb.op');
-        await processed;
+        // verify no OT op submitted (external closed edit does not sync)
+        assert.strictEqual(doc.submitOp.callCount, 0, 'should not submit ops for external closed file change');
 
         // verify no doc:save was sent (no auto-save on external change)
         const saveCalls = sharedb.sendRaw.getCalls().filter((c) => `${c.args[0]}`.startsWith('doc:save:'));
