@@ -69,6 +69,7 @@ Good to know:
 
 - Push is **fast-forward only** — if the server moved ahead, Push is blocked; Pull first.
 - Opening a file gives you its most current state.
+- External tools (compilers, formatters, AI agents) that write to **closed** files require Pull/Push mode; realtime mode ignores those edits and shows a one-time warning.
 - Switch back anytime: set `syncMode` to `realtime` and reload.
 
 ## Architecture
@@ -94,12 +95,6 @@ sequenceDiagram
     Note over D, S: Realtime Edit — Remote (open file)
     S ->> OT: ShareDB op event
     OT ->> B: sharedb2vscode → applyEdit
-    end
-
-    rect rgba(50, 120, 200, 0.15)
-    Note over D, S: Realtime Edit — Local (closed file)
-    D ->> OT: file watcher → projectManager.write()
-    OT ->> S: doc.submitOp()
     end
 
     rect rgba(50, 120, 200, 0.15)
