@@ -909,10 +909,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
             );
         }
 
-        // save/desync status surfaces
+        // save/desync status surfaces — desync toast is one-shot per false→true transition
+        let wasDesynced = projectManager.desync.get();
         effect(() => {
             const desynced = projectManager.desync.get();
             const saving = projectManager.saving.get();
+            const toast = desynced && !wasDesynced;
+            wasDesynced = desynced;
             if (!desynced && saving) {
                 desyncStatusItem.color = undefined;
                 desyncStatusItem.command = undefined;
@@ -937,6 +940,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
             desyncStatusItem.command = `${NAME}.reloadProject`;
             desyncStatusItem.tooltip = 'PlayCanvas project is out of sync — click to reload';
+            if (!toast) {
+                return;
+            }
             void vscode.window
                 .showWarningMessage(
                     'PlayCanvas project is out of sync. Reload to recover.',
