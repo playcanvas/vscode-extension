@@ -100,6 +100,7 @@ const debounces = createRecordChannel<{ settled: Promise<void> }>();
 const originalAtomic = Mutex.prototype.atomic;
 const originalDebounce = Debouncer.prototype.debounce;
 const originalApplyEdit = vscode.workspace.applyEdit.bind(vscode.workspace);
+let applyEditOverride: typeof originalApplyEdit | undefined;
 
 guardSandbox.stub(EventEmitter.prototype, 'emit').callsFake(function (
     this: unknown,
@@ -157,7 +158,7 @@ guardSandbox.stub(Debouncer.prototype, 'debounce').callsFake(function (
 });
 
 guardSandbox.stub(vscode.workspace, 'applyEdit').callsFake((edit, metadata) => {
-    const result = Promise.resolve(originalApplyEdit(edit, metadata));
+    const result = Promise.resolve((applyEditOverride ?? originalApplyEdit)(edit, metadata));
     const settled = result.then(() => undefined);
     edits.push({
         uris: edit.entries().map(([uri]) => uri.toString()),
@@ -519,6 +520,7 @@ suite('extension', () => {
         // clear per-doc test-injection flags (_latency, _rejectNext) so a stuck/desync
         // test in one slot doesn't bleed into the next test's first submit.
         sharedb.resetAdversarial();
+        applyEditOverride = undefined;
         // clear per-method REST failure queues so a failNext from one test doesn't
         // get consumed by the next test's first call.
         rest.resetFailures();
@@ -1508,17 +1510,24 @@ suite('extension', () => {
         const warnings = () =>
             warningMessageStub.getCalls().filter((c) => /do not sync in realtime/i.test(`${c.args[0]}`)).length;
 
-        // external edit to closed file A
-        await vscode.workspace.fs.writeFile(uriA, buffer.from('// EXTERNAL EDIT A\n'));
+        // an identical atomic replacement must not consume the one-shot warning
+        const tmp = vscode.Uri.file('/tmp/claude/change_closed_local_remote.js');
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file('/tmp/claude'));
+        await vscode.workspace.fs.writeFile(tmp, buffer.from('// SAMPLE CONTENT'));
+        await vscode.workspace.fs.rename(tmp, uriA, { overwrite: true });
+        await waitForIdle('identical atomic write settle');
+        assert.strictEqual(warnings(), 0, 'identical content should not warn');
+
+        // concurrent external edits race through the async hash check but still warn once
+        await Promise.all([
+            vscode.workspace.fs.writeFile(uriA, buffer.from('// EXTERNAL EDIT A\n')),
+            vscode.workspace.fs.writeFile(uriB, buffer.from('// EXTERNAL EDIT B\n'))
+        ]);
         await waitForWarning(/do not sync in realtime/i, 'external edit warning');
+        await waitForIdle('concurrent external edits settle');
 
         assert.strictEqual(docA.submitOp.callCount, 0, 'external closed edit should not submit an OT op');
         assert.strictEqual(warnings(), 1, 'warning should be shown exactly once');
-
-        // second external edit to a different closed file — one-shot, no second toast
-        await vscode.workspace.fs.writeFile(uriB, buffer.from('// EXTERNAL EDIT B\n'));
-        await waitForIdle('second external edit settle');
-        assert.strictEqual(warnings(), 1, 'warning should not be shown a second time');
     });
 
     test('file change - atomic write does not sync or duplicate', async () => {
@@ -1572,7 +1581,6 @@ suite('extension', () => {
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
         assert.ok(doc, 'sharedb document should exist');
         doc.submitOp.resetHistory();
-        warningMessageStub.resetHistory();
 
         // snapshot assetCreate call count after setup
         const createsBefore = rest.assetCreate.callCount;
@@ -1589,10 +1597,6 @@ suite('extension', () => {
 
         // verify no new asset was created
         assert.strictEqual(rest.assetCreate.callCount, createsBefore, 'should not call assetCreate for atomic write');
-
-        // identical content must not trigger the external-edit warning (echo/diskHash match)
-        const warnings = warningMessageStub.getCalls().filter((c) => /do not sync in realtime/i.test(`${c.args[0]}`));
-        assert.strictEqual(warnings.length, 0, 'identical content should not warn');
     });
 
     test('file change - no auto-save on external', async () => {
@@ -1689,6 +1693,50 @@ suite('extension', () => {
         assert.strictEqual(tdoc.getText(), original, 'blocked edit should be reverted to disk content');
         assert.strictEqual(doc.submitOp.callCount, 0, 'blocked edit should not submit OT');
         assert.ok(warningMessageStub.calledWith(sinon.match(/still loading/i)), 'loading warning should be shown');
+    });
+
+    test('file open - subscribe reconciliation preserves concurrent typing', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const original = '// ORIG\n';
+        const replaced = '// SERVER REPLACED\n';
+        const asset = await assetCreate({ name: 'subscribe_reconcile_typing.js', content: original });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb doc should exist');
+
+        let injected = '';
+        applyEditOverride = async (edit, metadata) => {
+            if (!edit.entries().some(([entry]) => entry.toString() === uri.toString())) {
+                return originalApplyEdit(edit, metadata);
+            }
+            applyEditOverride = undefined;
+            const applied = await originalApplyEdit(edit, metadata);
+            const user = new vscode.WorkspaceEdit();
+            user.insert(uri, new vscode.Position(0, 0), '// USER\n');
+            await originalApplyEdit(user);
+            injected = (await vscode.workspace.openTextDocument(uri)).getText();
+            return applied;
+        };
+
+        const subscribed = waitForEmit(
+            'asset:file:subscribed',
+            (args) => args[0] === asset.name,
+            'reconcile subscribe',
+            RETRY_TIMEOUT
+        );
+        documents.set(asset.uniqueId, replaced);
+        doc.reload(replaced);
+        await subscribed;
+        await waitForIdle('reconcile typing settle');
+
+        const expected = `// USER\n${replaced}`;
+        assert.strictEqual(injected, expected, 'test hook should inject typing during subscribe applyEdit');
+        assert.strictEqual(tdoc.getText(), expected, 'buffer should retain typing during subscribe applyEdit');
+        assert.strictEqual(documents.get(asset.uniqueId), expected, 'recovered typing should reach ShareDB');
     });
 
     test('file close - discard after first-keystroke does not roll back doc', async () => {
@@ -3584,6 +3632,45 @@ suite('extension', () => {
         assert.ok(
             warningMessageStub.calledWith(sinon.match(/out of sync/i)),
             'desync toast must fire after submit rejection'
+        );
+    });
+
+    test('save waiting on a rejected op fails instead of hanging', async () => {
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        assert.ok(folderUri, 'workspace folder should exist');
+
+        const asset = await assetCreate({ name: 'save_rejected_pending.js', content: '// ORIG\n' });
+        const uri = vscode.Uri.joinPath(folderUri, asset.name);
+        const tdoc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(tdoc);
+
+        const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
+        assert.ok(doc, 'sharedb doc should exist');
+        doc._latency = 50;
+        doc._rejectNext = 'forbidden(5)';
+        sharedb.sendRaw.resetHistory();
+        warningMessageStub.resetHistory();
+
+        const failed = waitForEmit(
+            'asset:file:failed',
+            (args) => args[0] === asset.name,
+            'pending save failure',
+            RETRY_TIMEOUT
+        );
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, new vscode.Position(0, 0), '// REJECTED\n');
+        await vscode.workspace.applyEdit(edit);
+        await tdoc.save();
+        await failed;
+
+        assert.ok(
+            warningMessageStub.calledWith(sinon.match(/could not save/i)),
+            'save failure should be reported even after desync'
+        );
+        assert.strictEqual(
+            sharedb.sendRaw.getCalls().filter((call) => `${call.args[0]}` === `doc:save:${asset.uniqueId}`).length,
+            0,
+            'save should not send while the op queue is stuck'
         );
     });
 

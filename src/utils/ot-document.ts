@@ -102,6 +102,10 @@ class OTDocument extends EventEmitter<OTDocumentEvents> {
         return this._doc.hasPending();
     }
 
+    get stuck() {
+        return this._stuck;
+    }
+
     whenNothingPending(fn: () => void) {
         this._doc.whenNothingPending(fn);
     }
