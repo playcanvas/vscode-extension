@@ -123,6 +123,11 @@
                 "icon": "$(discard)"
             },
             {
+                "command": "playcanvas.discardAll",
+                "title": "PlayCanvas: Discard All Local Changes",
+                "icon": "$(discard)"
+            },
+            {
                 "command": "playcanvas.resolveMerge",
                 "title": "PlayCanvas: Resolve in Merge Editor",
                 "icon": "$(git-merge)"
@@ -139,6 +144,11 @@
                     "command": "playcanvas.push",
                     "when": "scmProvider == playcanvas",
                     "group": "navigation"
+                },
+                {
+                    "command": "playcanvas.discardAll",
+                    "when": "scmProvider == playcanvas",
+                    "group": "navigation@9"
                 }
             ],
             "scm/resourceState/context": [

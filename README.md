@@ -63,6 +63,7 @@ A Git-style alternative: edit locally and Pull/Push on demand instead of syncing
 - **Push** (local → server): `Ctrl/Cmd + Alt + Up`, or the up-arrow button in the PlayCanvas SCM header.
 - **Pull** (server → local): `Ctrl/Cmd + Alt + Down`, or the down-arrow button. Incoming edits show under **Incoming Changes** — for files you don't have open too.
 - **Discard** a file back to its last-synced state via the discard action on it (it confirms first).
+- **Discard All Local Changes** reverts every outgoing change at once — command palette or the discard button in the PlayCanvas SCM header (confirms first).
 - **Conflicts** (same lines changed on both sides) land under **Merge Changes** — open the file, resolve in the merge editor or via the `<<<<<<< / >>>>>>>` markers, save, then Push.
 
 Good to know:

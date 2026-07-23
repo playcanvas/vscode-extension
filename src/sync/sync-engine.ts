@@ -903,15 +903,40 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     // revert a file's working copy to the base (git restore). destructive.
     async discard(uri: vscode.Uri) {
-        return this._locked(() => this._discard(uri));
+        return this._locked(async () => {
+            await this._discardOne(this._path(uri));
+            await this._refreshAll();
+        });
     }
 
-    private async _discard(uri: vscode.Uri) {
-        const folderUri = this._folderUri;
-        if (!folderUri) {
-            return;
-        }
-        const path = relativePath(uri, folderUri);
+    // revert every outgoing local change (git restore .). destructive.
+    async discardAll() {
+        return this._locked(async () => {
+            const paths = this._outgoingPaths();
+            for (const path of paths) {
+                await this._discardOne(path);
+            }
+            if (paths.length) {
+                await this._refreshAll();
+            }
+        });
+    }
+
+    private _outgoingPaths() {
+        const outgoing = (state: SyncState) =>
+            state === 'modified' ||
+            state === 'both' ||
+            state === 'added' ||
+            state === 'deleted' ||
+            state === 'renamed' ||
+            state === 'conflicted';
+        return [...this._status]
+            .filter(([, state]) => outgoing(state))
+            .map(([path]) => path)
+            .sort((a, b) => b.split('/').length - a.split('/').length);
+    }
+
+    private async _discardOne(path: string) {
         const op = this._local.get(path);
         const base = this.baseText(path);
 
@@ -919,7 +944,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
             await this._applyDelete(path);
             this._local.delete(path);
             this._status.delete(path);
-            await this._refreshAll();
             return;
         }
 
@@ -931,7 +955,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
             this._local.delete(path);
             this._status.delete(path);
-            await this._refreshAll();
             return;
         }
 
@@ -943,7 +966,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
             if (op.type === 'file' && base !== undefined) {
                 await this._applyUpdate(op.from, base);
             }
-            await this._refreshAll();
             return;
         }
 
@@ -951,7 +973,6 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
         await this._applyUpdate(path, base);
-        await this._refreshAll();
     }
 
     async link({ folderUri, projectManager, projectId, branchId }: LinkParams) {

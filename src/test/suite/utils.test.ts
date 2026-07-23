@@ -1845,6 +1845,39 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('a.js'), 'clean');
     });
 
+    test('discardAll discards every outgoing local change', async () => {
+        const events = new EventEmitter<EventMap>();
+        await writeFile('a.js', 'x\n');
+        await writeFile('b.js', 'y\n');
+        const pm = {
+            files: new Map([
+                ['a.js', { type: 'file', uniqueId: 1, doc: { text: 'x\n' }, dirty: false }],
+                ['b.js', { type: 'file', uniqueId: 2, doc: { text: 'y\n' }, dirty: false }]
+            ])
+        } as unknown as ProjectManager;
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await writeFile('a.js', 'x\nlocal\n');
+        await writeFile('new.js', 'new\n');
+        events.emit('sync:file:create', 'new.js', 'file');
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'b.js'), { recursive: false, useTrash: false });
+        events.emit('sync:file:delete', 'b.js', 'file');
+        await e.refresh();
+
+        assert.strictEqual(e.status('a.js'), 'modified');
+        assert.strictEqual(e.status('new.js'), 'added');
+        assert.strictEqual(e.status('b.js'), 'deleted');
+
+        await e.discardAll();
+
+        assert.strictEqual(await readFile('a.js'), 'x\n');
+        assert.strictEqual(await exists('new.js'), false);
+        assert.strictEqual(await readFile('b.js'), 'y\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+        assert.strictEqual(e.status('new.js'), 'clean');
+        assert.strictEqual(e.status('b.js'), 'clean');
+    });
+
     test('resolve after conflict makes the file pushable (not stuck)', async () => {
         const { events, pm, doc, applied } = pushPm();
         await writeFile('a.js', 'a\nb\nc\n');
