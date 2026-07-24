@@ -325,6 +325,27 @@ export const activate = async (context: vscode.ExtensionContext) => {
                     void vscode.window.showWarningMessage(`PlayCanvas Discard: ${err.message}`);
                 }
             }),
+            vscode.commands.registerCommand(`${NAME}.discardAll`, async () => {
+                const count = [...nativeSync.statuses()].filter(([, s]) => s !== 'clean' && s !== 'behind').length;
+                if (!count) {
+                    void vscode.window.showInformationMessage('PlayCanvas: no local changes to discard');
+                    return;
+                }
+                const choice = await vscode.window.showWarningMessage(
+                    `Discard all ${count} local change${count === 1 ? '' : 's'}? This cannot be undone.`,
+                    { modal: true },
+                    'Discard All'
+                );
+                if (choice !== 'Discard All') {
+                    return;
+                }
+                const [err] = await tryCatch(() => nativeSync.discardAll());
+                if (err) {
+                    void vscode.window.showWarningMessage(`PlayCanvas Discard All: ${err.message}`);
+                } else {
+                    void vscode.window.showInformationMessage('PlayCanvas: discarded all local changes');
+                }
+            }),
             vscode.commands.registerCommand(
                 `${NAME}.resolveMerge`,
                 async (arg?: vscode.Uri | vscode.SourceControlResourceState) => {

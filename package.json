@@ -123,6 +123,11 @@
                 "icon": "$(discard)"
             },
             {
+                "command": "playcanvas.discardAll",
+                "title": "PlayCanvas: Discard All Changes",
+                "icon": "$(discard)"
+            },
+            {
                 "command": "playcanvas.resolveMerge",
                 "title": "PlayCanvas: Resolve in Merge Editor",
                 "icon": "$(git-merge)"
@@ -145,6 +150,13 @@
                 {
                     "command": "playcanvas.discard",
                     "when": "scmProvider == playcanvas",
+                    "group": "inline"
+                }
+            ],
+            "scm/resourceGroup/context": [
+                {
+                    "command": "playcanvas.discardAll",
+                    "when": "scmProvider == playcanvas && scmResourceGroup == changes",
                     "group": "inline"
                 }
             ]
