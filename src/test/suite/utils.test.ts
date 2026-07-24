@@ -1845,6 +1845,50 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('a.js'), 'clean');
     });
 
+    test('discardAll reverts every outgoing change, leaves incoming alone', async () => {
+        const events = new EventEmitter<EventMap>();
+        await writeFile('a.js', 'x\n');
+        await writeFile('b.js', 'y\n');
+        await writeFile('c.js', 'z\n');
+        const cdoc = { text: 'z\n' };
+        const files = new Map<string, unknown>([
+            ['a.js', { type: 'file', uniqueId: 1, doc: { text: 'x\n' }, dirty: false }],
+            ['b.js', { type: 'file', uniqueId: 2, doc: { text: 'y\n' }, dirty: false }],
+            ['c.js', { type: 'file', uniqueId: 3, doc: cdoc, dirty: false }]
+        ]);
+        const e = engine(events);
+        await e.link({
+            folderUri: work,
+            projectManager: { files } as unknown as ProjectManager,
+            projectId: 1,
+            branchId: 'main'
+        });
+
+        await writeFile('a.js', 'x\nlocal\n'); // modified
+        await writeFile('new.js', 'new\n'); // added
+        events.emit('sync:file:create', 'new.js', 'file');
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'b.js'), { recursive: false, useTrash: false });
+        events.emit('sync:file:delete', 'b.js', 'file'); // deleted
+        cdoc.text = 'z\nremote\n'; // remote advances past base -> incoming only
+        await e.refresh();
+
+        assert.strictEqual(e.status('a.js'), 'modified');
+        assert.strictEqual(e.status('new.js'), 'added');
+        assert.strictEqual(e.status('b.js'), 'deleted');
+        assert.strictEqual(e.status('c.js'), 'behind');
+
+        await e.discardAll();
+
+        assert.strictEqual(await readFile('a.js'), 'x\n');
+        assert.strictEqual(await exists('new.js'), false);
+        assert.strictEqual(await readFile('b.js'), 'y\n');
+        assert.strictEqual(await readFile('c.js'), 'z\n'); // incoming not pulled
+        assert.strictEqual(e.status('a.js'), 'clean');
+        assert.strictEqual(e.status('new.js'), 'clean');
+        assert.strictEqual(e.status('b.js'), 'clean');
+        assert.strictEqual(e.status('c.js'), 'behind'); // incoming untouched
+    });
+
     test('resolve after conflict makes the file pushable (not stuck)', async () => {
         const { events, pm, doc, applied } = pushPm();
         await writeFile('a.js', 'a\nb\nc\n');
