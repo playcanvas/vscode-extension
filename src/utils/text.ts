@@ -117,35 +117,17 @@ export const sharedb2vscode = (document: vscode.TextDocument, uri: vscode.Uri, o
             }
         };
 
-        // normalize sharedb ops: [data], [index, data], or [skip, data, ...]
+        // offsets count characters in the original document, including deletes
         for (const op of ops) {
-            switch (op.length) {
-                case 1: {
-                    const [data] = op as [string | { d: number }];
-                    add([0, data]);
-                    break;
-                }
-                case 2: {
-                    const [index, data] = op as [number, string | { d: number }];
-                    add([index, data]);
-                    break;
-                }
-                default: {
-                    // walk components with a cursor tracking position in the
-                    // original doc. handles atomic replaces, line moves, and any
-                    // multi-component ot-text op regardless of element ordering.
-                    let cursor = 0;
-                    for (const component of op) {
-                        if (typeof component === 'number') {
-                            cursor += component;
-                        } else if (typeof component === 'string') {
-                            add([cursor, component]);
-                        } else {
-                            add([cursor, component]);
-                            cursor += component.d;
-                        }
-                    }
-                    break;
+            let cursor = 0;
+            for (const component of op) {
+                if (typeof component === 'number') {
+                    cursor += component;
+                } else if (typeof component === 'string') {
+                    add([cursor, component]);
+                } else {
+                    add([cursor, component]);
+                    cursor += component.d;
                 }
             }
         }

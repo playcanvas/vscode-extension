@@ -6,7 +6,7 @@ import { WebSocketServer } from 'ws';
 
 import * as authModule from '../../auth';
 import { NAME, PUBLISHER } from '../../config';
-import { RESUME_GAP_MS } from '../../connections/constants';
+import { PING_INTERVAL_MS, RESUME_GAP_MS } from '../../connections/constants';
 import * as messengerModule from '../../connections/messenger';
 import * as relayModule from '../../connections/relay';
 import * as restModule from '../../connections/rest';
@@ -16,8 +16,10 @@ import { Log } from '../../log';
 import * as sentryModule from '../../sentry';
 import * as typesModule from '../../type-installer';
 import type { Asset } from '../../typings/models';
+import type { ShareDbTextOp } from '../../typings/sharedb';
 import * as buffer from '../../utils/buffer';
 import { Debouncer } from '../../utils/debouncer';
+import { Deferred } from '../../utils/deferred';
 import { EventEmitter } from '../../utils/event-emitter';
 import { Mutex } from '../../utils/mutex';
 import { norm } from '../../utils/text';
@@ -282,15 +284,25 @@ const watchFile = (folderUri: vscode.Uri, file: string, action: 'create' | 'chan
 };
 
 const waitForFileContent = async (uri: vscode.Uri, content: string, name: string, timeout = RETRY_TIMEOUT) => {
-    const start = Date.now();
-    while (Date.now() - start < timeout) {
-        const [err, file] = await tryCatch(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
-        if (!err && buffer.toString(file) === content) {
+    const matched = new Deferred<void>();
+    const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(vscode.Uri.joinPath(uri, '..'), '*')
+    );
+    const check = async (changed: vscode.Uri) => {
+        if (changed.toString() !== uri.toString()) {
             return;
         }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    assert.fail(`${name} content did not match within ${timeout}ms`);
+        const [err, file] = await tryCatch(vscode.workspace.fs.readFile(uri) as Promise<Uint8Array>);
+        if (!err && buffer.toString(file) === content) {
+            matched.resolve();
+        }
+    };
+    watcher.onDidCreate(check);
+    watcher.onDidChange(check);
+    void check(uri);
+    const [err] = await tryCatch(assertResolves(matched.promise, `${name} content`, timeout));
+    watcher.dispose();
+    assert.ifError(err);
 };
 
 // mock connection classes
@@ -505,7 +517,7 @@ suite('extension', () => {
     teardown(async () => {
         sandbox.resetHistory();
         resetWindowStubs();
-        // clear per-doc test-injection flags (_latency, _rejectNext) so a stuck/desync
+        // clear per-doc test-injection flags so a stuck/desync
         // test in one slot doesn't bleed into the next test's first submit.
         sharedb.resetAdversarial();
         // clear per-method REST failure queues so a failNext from one test doesn't
@@ -1347,6 +1359,40 @@ suite('extension', () => {
         assert.strictEqual(tdoc.getText(), newDocument, 'text document content should match');
     });
 
+    for (const eol of [vscode.EndOfLine.LF, vscode.EndOfLine.CRLF]) {
+        for (const reverse of [false, true]) {
+            test(`remote replacement at zero preserves content (eol=${eol}, reverse=${reverse})`, async () => {
+                const folder = vscode.workspace.workspaceFolders![0].uri;
+                const asset = await assetCreate({ name: `replace-zero-${eol}-${reverse}.json`, content: 'c' });
+                const uri = vscode.Uri.joinPath(folder, asset.name);
+                const document = await vscode.workspace.openTextDocument(uri);
+                const editor = await vscode.window.showTextDocument(document);
+                assert.ok(await editor.edit((edit) => edit.setEndOfLine(eol)));
+                await waitForIdle('replacement document open');
+                assert.strictEqual(document.eol, eol);
+
+                const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`)!;
+                doc.submitOp.resetHistory();
+                const text = '{\n    "value": 1\n}';
+                const op: ShareDbTextOp = reverse ? [{ d: 1 }, text] : [text, { d: 1 }];
+                doc.submitOp(op, { source: 'remote' });
+                await waitForIdle('remote replacement');
+
+                assert.strictEqual(documents.get(asset.uniqueId), text, 'remote content must not be rolled back');
+                assert.strictEqual(norm(document.getText()), text, 'buffer must match the remote replacement');
+                assert.strictEqual(doc.submitOp.callCount, 1, 'remote replacement must not submit local edits');
+
+                const next: ShareDbTextOp = [text.indexOf('1'), '2', { d: 1 }];
+                doc.submitOp(next, { source: 'remote' });
+                await waitForIdle('remote edit after replacement');
+
+                assert.strictEqual(documents.get(asset.uniqueId), text.replace('1', '2'));
+                assert.strictEqual(norm(document.getText()), text.replace('1', '2'));
+                assert.strictEqual(doc.submitOp.callCount, 2, 'subsequent remote edits must not echo upstream');
+            });
+        }
+    }
+
     test('file change - sharedb reload resyncs buffer', async () => {
         // sharedb ingestSnapshot (hard rollback / version mismatch / stale resume)
         // silently replaces doc.data and emits 'load' without any 'op' events.
@@ -1626,7 +1672,8 @@ suite('extension', () => {
         await waitForIdle('blocked subscribe reload settle');
         await waitForFileContent(uri, original, 'blocked subscribe file');
 
-        sharedb.documentSubscribeDelay = 1000;
+        const loading = new Deferred<void>();
+        sharedb.documentSubscribe = loading;
         warningMessageStub.resetHistory();
         const subscribed = waitForEmit(
             'asset:file:subscribed',
@@ -1660,12 +1707,13 @@ suite('extension', () => {
         edit.insert(uri, new vscode.Position(0, 0), 'X');
         assert.strictEqual(await vscode.workspace.applyEdit(edit), true, 'blocked edit should apply before revert');
         await assertResolves(reverted, 'blocked edit revert');
+        loading.resolve();
         await vscode.window.showTextDocument(tdoc);
         await subscribed;
         await waitForIdle('blocked edit settle');
 
         const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`);
-        assert.ok(doc, 'document should be subscribed after delay');
+        assert.ok(doc, 'document should be subscribed after release');
         assert.strictEqual(tdoc.getText(), original, 'blocked edit should be reverted to disk content');
         assert.strictEqual(doc.submitOp.callCount, 0, 'blocked edit should not submit OT');
         assert.ok(warningMessageStub.calledWith(sinon.match(/still loading/i)), 'loading warning should be shown');
@@ -3778,7 +3826,6 @@ suite('connections - suspend recovery', () => {
     let server: WebSocketServer;
     let port = 0;
     let connections = 0;
-    let keepalives: NodeJS.Timeout[] = [];
     let sb: InstanceType<typeof sharedbModule.ShareDb> | undefined;
 
     suiteSetup(async () => {
@@ -3794,9 +3841,6 @@ suite('connections - suspend recovery', () => {
                 const str = raw.toString();
                 if (str.startsWith('auth')) {
                     ws.send(`auth${JSON.stringify({ id: 1 })}`);
-                    // simulate buffered server traffic delivered on resume — any inbound
-                    // message refreshes ShareDb._lastPong, masking the dead socket
-                    keepalives.push(setInterval(() => ws.readyState === ws.OPEN && ws.send('hb:0'), 200));
                     return;
                 }
                 // complete the sharedb protocol handshake so Connection.ping() can send
@@ -3809,40 +3853,44 @@ suite('connections - suspend recovery', () => {
     });
 
     suiteTeardown(async () => {
-        keepalives.forEach(clearInterval);
         await new Promise<void>((resolve) => server.close(() => resolve()));
     });
 
     setup(() => {
         connections = 0;
-        keepalives = [];
     });
 
     teardown(() => {
-        clock.restore();
-        keepalives.forEach(clearInterval);
         sb?.disconnect();
+        clock.restore();
         sb = undefined;
     });
 
     test('forces a reconnect on wall-clock jump even while traffic keeps the socket alive', async function () {
         this.timeout(20000);
 
+        const timers = clock.useFakeTimers({
+            toFake: ['setInterval', 'clearInterval'],
+            shouldClearNativeTimers: true
+        });
         sb = new RealShareDb({ url: `ws://127.0.0.1:${port}`, origin: 'http://localhost' });
         await sb.connect(async () => 'token');
         assert.strictEqual(connections, 1, 'should connect once');
 
-        // simulate resume from suspend: wall-clock jumps past the resume gap while the
-        // server keeps sending traffic, so the pong-timeout never trips on its own.
-        // compute target before stubbing — Date.now() in the arg would hit the new stub
+        // refresh the pong timestamp after the clock jump, before the heartbeat
         const jumped = Date.now() + RESUME_GAP_MS + 5000;
         clock.stub(Date, 'now').returns(jumped);
+        const traffic = new Deferred<void>();
+        sb.on('doc:save', () => traffic.resolve());
+        const socket = server.clients.values().next().value;
+        assert.ok(socket);
+        socket.send('doc:save:success:1');
+        await assertResolves(traffic.promise, 'buffered traffic');
 
-        // the next heartbeat tick should detect the gap and force-close → reconnect.
-        // poll on iteration count, not Date.now (stubbed) — ~15s real ceiling
-        for (let i = 0; i < 150 && connections < 2; i++) {
-            await new Promise((r) => setTimeout(r, 100));
-        }
+        const reconnected = new Deferred<void>();
+        server.once('connection', () => reconnected.resolve());
+        await timers.tickAsync(PING_INTERVAL_MS);
+        await assertResolves(reconnected.promise, 'resume reconnect');
         assert.strictEqual(connections, 2, 'resume guard should force exactly one reconnect');
     });
 });
