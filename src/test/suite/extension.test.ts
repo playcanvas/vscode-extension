@@ -16,6 +16,7 @@ import { Log } from '../../log';
 import * as sentryModule from '../../sentry';
 import * as typesModule from '../../type-installer';
 import type { Asset } from '../../typings/models';
+import type { ShareDbTextOp } from '../../typings/sharedb';
 import * as buffer from '../../utils/buffer';
 import { Debouncer } from '../../utils/debouncer';
 import { EventEmitter } from '../../utils/event-emitter';
@@ -1346,6 +1347,40 @@ suite('extension', () => {
         await assertResolves(changed, 'vscode.onDidChangeTextDocument');
         assert.strictEqual(tdoc.getText(), newDocument, 'text document content should match');
     });
+
+    for (const eol of [vscode.EndOfLine.LF, vscode.EndOfLine.CRLF]) {
+        for (const reverse of [false, true]) {
+            test(`remote replacement at zero preserves content (eol=${eol}, reverse=${reverse})`, async () => {
+                const folder = vscode.workspace.workspaceFolders![0].uri;
+                const asset = await assetCreate({ name: `replace-zero-${eol}-${reverse}.json`, content: 'c' });
+                const uri = vscode.Uri.joinPath(folder, asset.name);
+                const document = await vscode.workspace.openTextDocument(uri);
+                const editor = await vscode.window.showTextDocument(document);
+                assert.ok(await editor.edit((edit) => edit.setEndOfLine(eol)));
+                await waitForIdle('replacement document open');
+                assert.strictEqual(document.eol, eol);
+
+                const doc = sharedb.subscriptions.get(`documents:${asset.uniqueId}`)!;
+                doc.submitOp.resetHistory();
+                const text = '{\n    "value": 1\n}';
+                const op: ShareDbTextOp = reverse ? [{ d: 1 }, text] : [text, { d: 1 }];
+                doc.submitOp(op, { source: 'remote' });
+                await waitForIdle('remote replacement');
+
+                assert.strictEqual(documents.get(asset.uniqueId), text, 'remote content must not be rolled back');
+                assert.strictEqual(norm(document.getText()), text, 'buffer must match the remote replacement');
+                assert.strictEqual(doc.submitOp.callCount, 1, 'remote replacement must not submit local edits');
+
+                const next: ShareDbTextOp = [text.indexOf('1'), '2', { d: 1 }];
+                doc.submitOp(next, { source: 'remote' });
+                await waitForIdle('remote edit after replacement');
+
+                assert.strictEqual(documents.get(asset.uniqueId), text.replace('1', '2'));
+                assert.strictEqual(norm(document.getText()), text.replace('1', '2'));
+                assert.strictEqual(doc.submitOp.callCount, 2, 'subsequent remote edits must not echo upstream');
+            });
+        }
+    }
 
     test('file change - sharedb reload resyncs buffer', async () => {
         // sharedb ingestSnapshot (hard rollback / version mismatch / stale resume)
