@@ -8,6 +8,7 @@ import type sinon from 'sinon';
 import { ShareDb } from '../../connections/sharedb';
 import type { Asset } from '../../typings/models';
 import type { ShareDbOp, ShareDbTextOp } from '../../typings/sharedb';
+import type { Deferred } from '../../utils/deferred';
 import { hash } from '../../utils/utils';
 
 import type { MockMessenger } from './messenger';
@@ -206,13 +207,10 @@ class MockDoc extends Doc {
     // simulates sharedb's ingestSnapshot: replaces data wholesale and emits 'load'
     reload!: (data: unknown) => void;
 
-    // adversarial test hooks. _latency > 0 delays the submitOp callback (and its 'op'
-    // emit) by the given ms — production has a network round-trip, the mock had none,
-    // so _locks reconciliation and the 30s queue-age stuck timer were unreachable from
-    // tests. _rejectNext queues a single error string the next submit will surface via
-    // the callback, mirroring the server's `forbidden(N)` / `invalid:*` rejections.
-    _latency = 0;
+    // holds ops until the test releases the simulated network response
+    _gate?: Deferred<void>;
 
+    // mirrors a server rejection on the next submit
     _rejectNext: string | null = null;
 
     private _pending = 0;
@@ -301,10 +299,8 @@ class MockDoc extends Doc {
                     events.emit('no write pending');
                 }
             };
-            // default: synchronous to preserve existing tests that assert state right
-            // after submitOp. _latency > 0 opts into async timing for race tests.
-            if (this._latency > 0) {
-                setTimeout(apply, this._latency);
+            if (this._gate) {
+                void this._gate.promise.then(apply);
             } else {
                 apply();
             }
@@ -337,7 +333,7 @@ class MockShareDb extends ShareDb {
 
     closedDocuments = new Set<number>();
 
-    documentSubscribeDelay = 0;
+    documentSubscribe?: Deferred<void>;
 
     // FIFO of save responses to inject per uniqueId. empty queue → emit 'success'
     // (today's default). drives ProjectManager._verifySave's retry path
@@ -413,8 +409,8 @@ class MockShareDb extends ShareDb {
             this.connected.set(() => false);
         });
         this.subscribe = sandbox.spy(async (type: string, key: string) => {
-            if (type === 'documents' && this.documentSubscribeDelay > 0) {
-                await new Promise((resolve) => setTimeout(resolve, this.documentSubscribeDelay));
+            if (type === 'documents' && this.documentSubscribe) {
+                await this.documentSubscribe.promise;
             }
             const doc = new MockDoc(sandbox, type, key);
             this.subscriptions.set(`${type}:${key}`, doc);
@@ -430,19 +426,19 @@ class MockShareDb extends ShareDb {
         this.bulkUnsubscribe = sandbox.spy(async (subscriptions: [string, string][]) => {
             await Promise.all(subscriptions.map(([type, key]) => this.unsubscribe(type, key)));
         });
-        // clears per-doc adversarial flags (_latency, _rejectNext) at test boundaries.
-        // tests own these directly on the MockDoc; without a sweep, a leftover
-        // _rejectNext from one test would surface as a stuck timer in the next.
+        // release pending work and clear injected failures between tests
         this.resetAdversarial = () => {
             for (const doc of this.subscriptions.values()) {
-                doc._latency = 0;
+                doc._gate?.resolve();
+                doc._gate = undefined;
                 doc._rejectNext = null;
             }
             this.saveResponses.clear();
             this.fsCascadeDeletes = false;
             this.fsProductionMoveOps = false;
             this.closedDocuments.clear();
-            this.documentSubscribeDelay = 0;
+            this.documentSubscribe?.resolve();
+            this.documentSubscribe = undefined;
         };
         this.sendRaw = sandbox.spy(async (data: Parameters<WebSocket['send']>[0]) => {
             // check for fs operations

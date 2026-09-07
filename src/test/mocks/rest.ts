@@ -4,6 +4,7 @@ import type sinon from 'sinon';
 
 import { Rest } from '../../connections/rest';
 import type { Asset, Branch, Project, User } from '../../typings/models';
+import type { Deferred } from '../../utils/deferred';
 import { hash } from '../../utils/utils';
 
 import type { MockMessenger } from './messenger';
@@ -43,13 +44,9 @@ class MockRest extends Rest {
 
     assetFile: sinon.SinonSpy<[number, string, string], Promise<ArrayBuffer>>;
 
-    delayAssetFiles = false;
+    assetFiles?: Deferred<void>;
 
-    assetFileDelay = 0;
-
-    emitBranchSwitch = false;
-
-    branchSwitchDelay = 0;
+    branchSwitch?: Deferred<void>;
 
     distinctAssetIds = false;
 
@@ -81,10 +78,10 @@ class MockRest extends Rest {
 
     resetFailures() {
         this._failures.clear();
-        this.delayAssetFiles = false;
-        this.assetFileDelay = 0;
-        this.emitBranchSwitch = false;
-        this.branchSwitchDelay = 0;
+        this.assetFiles?.resolve();
+        this.assetFiles = undefined;
+        this.branchSwitch?.resolve();
+        this.branchSwitch = undefined;
         this.distinctAssetIds = false;
         this.assetEndpointsUseItemIds = false;
     }
@@ -137,9 +134,9 @@ class MockRest extends Rest {
         this.branchCheckout = sandbox.spy(async (branchId: string) => {
             this._maybeFail('branchCheckout');
             const branch = branches.get(branchId)!;
-            if (this.emitBranchSwitch) {
+            if (this.branchSwitch) {
                 projectSettings.branch = branch.id;
-                setTimeout(() => {
+                void this.branchSwitch.promise.then(() => {
                     messenger.emit('branch.switch', {
                         data: {
                             branch_id: branch.id,
@@ -147,7 +144,7 @@ class MockRest extends Rest {
                             name: branch.name
                         }
                     });
-                }, this.branchSwitchDelay);
+                });
             }
             return branch;
         });
@@ -188,7 +185,7 @@ class MockRest extends Rest {
                 const asset: Asset = {
                     uniqueId: ids.uniqueId,
                     item_id: `${ids.itemId}`,
-                    file: this.delayAssetFiles ? undefined : file,
+                    file: this.assetFiles ? undefined : file,
                     type: data.type,
                     path,
                     name: data.name
@@ -196,7 +193,7 @@ class MockRest extends Rest {
                 assets.set(asset.uniqueId, asset);
 
                 // add document to documents map
-                if (!this.delayAssetFiles) {
+                if (!this.assetFiles) {
                     documents.set(asset.uniqueId, document);
                 }
 
@@ -213,8 +210,8 @@ class MockRest extends Rest {
                     }
                 });
 
-                if (this.delayAssetFiles && file) {
-                    setTimeout(() => {
+                if (this.assetFiles && file) {
+                    void this.assetFiles.promise.then(() => {
                         documents.set(asset.uniqueId, document);
                         const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
                         if (doc) {
@@ -222,7 +219,7 @@ class MockRest extends Rest {
                         } else {
                             asset.file = file;
                         }
-                    }, this.assetFileDelay);
+                    });
                 }
 
                 return asset;

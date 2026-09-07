@@ -17,9 +17,26 @@ import type { EventMap } from '../../typings/event-map';
 import type { Project } from '../../typings/models';
 import type { ShareDbTextOp } from '../../typings/sharedb';
 import * as buffer from '../../utils/buffer';
+import { Deferred } from '../../utils/deferred';
 import { EventEmitter } from '../../utils/event-emitter';
+import { effect } from '../../utils/signal';
 import { delta, norm } from '../../utils/text';
-import { sanitizeName, projectToName, hash, tryCatch, wait } from '../../utils/utils';
+import { sanitizeName, projectToName, hash, tryCatch, withTimeout } from '../../utils/utils';
+
+const STATUS_TIMEOUT = 2500;
+
+const waitForStatus = async (e: NativeSyncEngine, path: string, status: ReturnType<NativeSyncEngine['status']>) => {
+    const changed = new Deferred<void>();
+    const dispose = effect(() => {
+        e.changed.get();
+        if (e.status(path) === status) {
+            changed.resolve();
+        }
+    });
+    const [err] = await tryCatch(withTimeout(changed.promise, STATUS_TIMEOUT, `${path} did not become ${status}`));
+    dispose();
+    assert.ifError(err);
+};
 
 suite('utils', () => {
     test('sanitize name - preserves spaces', () => {
@@ -596,9 +613,7 @@ suite('sync/sync-engine', () => {
             projectId: 1,
             branchId: 'main'
         });
-        for (let i = 0; i < 20 && e.status('a.js') !== 'behind'; i++) {
-            await wait(10);
-        }
+        await waitForStatus(e, 'a.js', 'behind');
         assert.strictEqual(e.status('a.js'), 'behind');
     });
 
@@ -969,9 +984,7 @@ suite('sync/sync-engine', () => {
 
         files.set('empty.js', { type: 'file', uniqueId: 10, doc: { text: '' }, dirty: false });
         events.emit('asset:file:create', 'empty.js', 'file', new Uint8Array());
-        for (let i = 0; i < 50 && e.status('empty.js') === 'clean'; i++) {
-            await wait(10);
-        }
+        await waitForStatus(e, 'empty.js', 'behind');
 
         assert.strictEqual(e.status('empty.js'), 'behind');
         assert.strictEqual(e.structuralConflict('empty.js'), false);
@@ -1089,6 +1102,7 @@ suite('sync/sync-engine', () => {
         };
         const file = { type: 'file', uniqueId: 1, doc, dirty: false };
         const saves: string[] = [];
+        const saved = new Deferred<void>();
         const pm = {
             files: new Map([['a.js', file]]),
             write: async (_p: string, content: Uint8Array) => {
@@ -1100,20 +1114,23 @@ suite('sync/sync-engine', () => {
             },
             save: (path: string) => {
                 saves.push(path);
+                saved.resolve();
             }
         } as unknown as ProjectManager;
         const e = new NativeSyncEngine({ events, storageUri: storage });
         await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
 
         const pushed = e.push();
-        await wait(25);
-
-        assert.deepStrictEqual(saves, ['a.js']);
-        assert.strictEqual(e.status('a.js'), 'modified');
-
+        await saved.promise;
+        const status = e.status('a.js');
+        const base = e.baseText('a.js');
         events.emit('asset:file:save', 'a.js');
         await pushed;
+        assert.deepStrictEqual(saves, ['a.js']);
+        assert.strictEqual(status, 'modified');
+        assert.strictEqual(base, 'x\n');
         assert.strictEqual(e.status('a.js'), 'clean');
+        assert.strictEqual(e.baseText('a.js'), 'x\nlocal\n');
     });
 
     test('push - no-op when nothing modified', async () => {
@@ -1264,14 +1281,14 @@ suite('sync/sync-engine', () => {
         // editor open promotes the stub; the doc carries unflushed remote edits
         files.set('a.js', { type: 'file', uniqueId: 1, doc: { text: 'x\nremote\n' }, dirty: true });
         events.emit('asset:file:subscribed', 'a.js', 'x\nremote\n', true);
-        for (let i = 0; i < 50 && e.status('a.js') !== 'behind'; i++) {
-            await new Promise((resolve) => setTimeout(resolve, 10));
-        }
+        await waitForStatus(e, 'a.js', 'behind');
         assert.strictEqual(e.status('a.js'), 'behind');
     });
 
     test('push - releases the promoted doc once the flush lands', async () => {
         await writeFile('a.js', 'x\n');
+        const saved = new Deferred<void>();
+        const released = new Deferred<void>();
         const doc = {
             text: 'x\n',
             apply(op: ShareDbTextOp) {
@@ -1292,9 +1309,10 @@ suite('sync/sync-engine', () => {
                     doc.apply(op);
                 }
             },
-            save: () => undefined,
+            save: () => saved.resolve(),
             unsubscribe: async (p: string) => {
                 files.set(p, { type: 'stub', uniqueId: 1, dirty: file.dirty });
+                released.resolve();
             }
         } as unknown as ProjectManager;
         const events = new EventEmitter<EventMap>();
@@ -1303,13 +1321,12 @@ suite('sync/sync-engine', () => {
         await writeFile('a.js', 'x\nlocal\n');
         await e.refresh();
         const pushed = e.push();
-        await wait(25);
-        assert.strictEqual((files.get('a.js') as { type: string }).type, 'file', 'subscribed until flush ack');
+        await saved.promise;
+        const type = (files.get('a.js') as { type: string }).type;
         events.emit('asset:file:save', 'a.js');
         await pushed;
-        for (let i = 0; i < 50 && (files.get('a.js') as { type: string }).type !== 'stub'; i++) {
-            await new Promise((resolve) => setTimeout(resolve, 10));
-        }
+        await released.promise;
+        assert.strictEqual(type, 'file', 'subscribed until flush ack');
         assert.strictEqual((files.get('a.js') as { type: string }).type, 'stub', 'released after flush ack');
     });
 
@@ -1767,9 +1784,7 @@ suite('sync/sync-engine', () => {
         });
 
         events.emit('asset:file:create', 'new.js', 'file', buffer.from('remote\n'));
-        for (let i = 0; i < 50 && e.status('new.js') !== 'behind'; i++) {
-            await new Promise((resolve) => setTimeout(resolve, 10));
-        }
+        await waitForStatus(e, 'new.js', 'behind');
         assert.strictEqual(e.status('new.js'), 'behind');
         assert.strictEqual(e.decorationStatus('new.js'), 'added');
 
