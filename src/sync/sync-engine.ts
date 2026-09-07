@@ -305,7 +305,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
         const op = { action: 'renamed' as const, from, path };
         const conflicted = this._localOpTouches(from) || this._localTouches(path);
         this._setRemote(op, conflicted);
-        if (!conflicted && (await this._exists(path))) {
+        const moving = Array.from(this._remote.values()).some(
+            (op) => op.action === 'renamed' && op.from === path && !op.conflicted
+        );
+        if (!conflicted && !moving && (await this._exists(path))) {
             this._setRemote(op, true);
         }
     }
@@ -1038,6 +1041,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._events.off('asset:file:save', onSave);
         });
 
+        const renamed = new Map<string, string>();
         for (const [path, file] of projectManager.files) {
             const from = this._base.get(file.uniqueId)?.path;
             if (typeof from !== 'string' || !from || from === path) {
@@ -1053,16 +1057,37 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 continue;
             }
             if (await this._exists(from)) {
-                await this._remoteRename(from, path);
-                const source = projectManager.files.get(from);
-                if (source) {
-                    this._setRemote({
-                        action: 'created',
-                        path: from,
-                        type: source.type === 'folder' ? 'folder' : 'file',
-                        content: source.type === 'file' ? buffer.from(norm(source.doc.text)) : new Uint8Array()
-                    });
-                }
+                renamed.set(from, path);
+            }
+        }
+
+        // queue each chain from its end so destinations are vacated first
+        for (const from of renamed.keys()) {
+            const chain = new Map<string, string>();
+            let next = from;
+            while (renamed.has(next) && !chain.has(next)) {
+                const path = renamed.get(next)!;
+                chain.set(next, path);
+                next = path;
+            }
+            for (const [source, path] of Array.from(chain).reverse()) {
+                await this._remoteRename(source, path);
+                renamed.delete(source);
+            }
+        }
+
+        for (const op of Array.from(this._remote.values())) {
+            if (op.action !== 'renamed' || this._remote.has(op.from)) {
+                continue;
+            }
+            const source = projectManager.files.get(op.from);
+            if (source) {
+                this._setRemote({
+                    action: 'created',
+                    path: op.from,
+                    type: source.type === 'folder' ? 'folder' : 'file',
+                    content: source.type === 'file' ? buffer.from(norm(source.doc.text)) : new Uint8Array()
+                });
             }
         }
 

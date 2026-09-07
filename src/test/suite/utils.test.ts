@@ -699,6 +699,104 @@ suite('sync/sync-engine', () => {
         await second.unlink();
     });
 
+    for (const type of ['file', 'stub']) {
+        for (const reversed of [false, true]) {
+            test(`#337 offline rename chain - ${type}, reversed order: ${reversed}`, async () => {
+                const files = new Map(
+                    ['a.js', 'b.js', 'c.js'].map((path, i) => [
+                        path,
+                        { type, uniqueId: i + 1, doc: { text: `${path}\n` }, dirty: false }
+                    ])
+                );
+                const pm = {
+                    files,
+                    savedHash: (path: string) => hash(files.get(path)!.doc.text),
+                    savedContent: async (path: string) => files.get(path)!.doc.text
+                } as unknown as ProjectManager;
+                for (const [path, file] of files) {
+                    await writeFile(path, file.doc.text);
+                }
+                const first = engine();
+                await first.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+                await first.unlink();
+
+                const entries = Array.from(files.values()).map(
+                    (file, i) => [['b.js', 'c.js', 'd.js'][i], file] as const
+                );
+                files.clear();
+                for (const [path, file] of reversed ? entries.reverse() : entries) {
+                    files.set(path, file);
+                }
+                for (const path of ['a.js', 'b.js', 'c.js']) {
+                    await writeFile(path, `local ${path}\n`);
+                }
+
+                const second = engine();
+                await second.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+                assert.strictEqual(second.status('a.js'), 'clean');
+                for (const path of ['b.js', 'c.js', 'd.js']) {
+                    assert.strictEqual(second.decorationStatus(path), 'renamed');
+                }
+                await second.unlink();
+
+                const third = engine();
+                await third.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+                await third.pull();
+                assert.strictEqual(await exists('a.js'), false);
+                for (const [i, path] of ['b.js', 'c.js', 'd.js'].entries()) {
+                    const from = ['a.js', 'b.js', 'c.js'][i];
+                    assert.strictEqual(await readFile(path), `local ${from}\n`);
+                    assert.strictEqual(third.baseText(path), `${from}\n`);
+                    assert.strictEqual(third.status(path), 'modified');
+                    assert.strictEqual(files.get(path)?.uniqueId, i + 1);
+                }
+                await third.unlink();
+
+                const fourth = engine();
+                await fourth.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+                assert.strictEqual(fourth.status('a.js'), 'clean');
+                for (const path of ['b.js', 'c.js', 'd.js']) {
+                    assert.strictEqual(fourth.status(path), 'modified');
+                }
+                await fourth.unlink();
+            });
+        }
+    }
+
+    for (const target of ['a.js', 'occupied.js']) {
+        test(`#337 offline rename chain preserves collisions at ${target}`, async () => {
+            const a = { type: 'file', uniqueId: 1, doc: { text: 'a\n' }, dirty: false };
+            const b = { type: 'file', uniqueId: 2, doc: { text: 'b\n' }, dirty: false };
+            const files = new Map([
+                ['a.js', a],
+                ['b.js', b]
+            ]);
+            const pm = { files } as unknown as ProjectManager;
+            await writeFile('a.js', a.doc.text);
+            await writeFile('b.js', b.doc.text);
+            const first = engine();
+            await first.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+            await first.unlink();
+
+            await writeFile('a.js', 'local a\n');
+            await writeFile('b.js', 'local b\n');
+            await writeFile('occupied.js', 'unrelated\n');
+            files.clear();
+            files.set('b.js', a);
+            files.set(target, b);
+            const second = engine();
+            await second.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+            assert.strictEqual(second.structuralConflict('b.js'), true);
+            assert.strictEqual(second.structuralConflict(target), true);
+            const [err] = await tryCatch(() => second.pull());
+            assert.ok(err);
+            assert.strictEqual(await readFile('a.js'), 'local a\n');
+            assert.strictEqual(await readFile('b.js'), 'local b\n');
+            assert.strictEqual(await readFile('occupied.js'), 'unrelated\n');
+            await second.unlink();
+        });
+    }
+
     test('link keeps missing unbased files as incoming adds', async () => {
         await vscode.workspace.fs.createDirectory(work);
         const e = engine();
