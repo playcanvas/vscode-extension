@@ -8,6 +8,7 @@ type ConflictEntry = { base: string; local: string; remote: string };
 export type BaseEntry = {
     text: string;
     hash: string;
+    path?: string;
     savedHash?: string;
     conflict?: ConflictEntry;
 };
@@ -64,6 +65,14 @@ export class BaseStore {
 
     get(uniqueId: number) {
         return this._entries.get(uniqueId);
+    }
+
+    rename(from: string, path: string) {
+        for (const entry of this._entries.values()) {
+            if (entry.path === from || entry.path?.startsWith(`${from}/`)) {
+                entry.path = path + entry.path.slice(from.length);
+            }
+        }
     }
 
     set(uniqueId: number, text: string, savedHash?: string) {

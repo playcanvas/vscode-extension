@@ -10,7 +10,7 @@ import { Linker } from '../utils/linker';
 import { Mutex } from '../utils/mutex';
 import { signal } from '../utils/signal';
 import { norm } from '../utils/text';
-import { hash, relativePath, tryCatch, withTimeout } from '../utils/utils';
+import { hash, parsePath, relativePath, tryCatch, withTimeout } from '../utils/utils';
 
 import { BaseStore } from './base-store';
 import { hasConflictMarkers } from './markers';
@@ -430,9 +430,15 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
         const dir = base ? vscode.Uri.joinPath(folderUri, base) : folderUri;
+        const renamed = new Set(
+            Array.from(this._remote.values()).flatMap((op) => (op.action === 'renamed' ? [op.from] : []))
+        );
         const [, entries] = await tryCatch(async () => vscode.workspace.fs.readDirectory(dir));
         for (const [name, type] of entries ?? []) {
             const path = base ? `${base}/${name}` : name;
+            if (renamed.has(path)) {
+                continue;
+            }
             const uri = vscode.Uri.joinPath(folderUri, path);
             if (this._ignoring(uri) || path === Disk.TYPE_DIR || path.startsWith(`${Disk.TYPE_DIR}/`)) {
                 continue;
@@ -484,13 +490,18 @@ class NativeSyncEngine extends Linker<LinkParams> {
         });
     }
 
-    private _applyRename(from: string, path: string) {
-        return new Promise<void>((resolve, reject) => {
+    private async _applyRename(from: string, path: string) {
+        const [parent] = parsePath(path);
+        if (parent && !(await this._exists(parent))) {
+            await this._applyCreate(parent, 'folder', new Uint8Array());
+        }
+        await new Promise<void>((resolve, reject) => {
             const done = (err?: Error) => (err ? reject(err) : resolve());
             if (!this._events.emit('sync:file:apply:rename', from, path, done)) {
                 resolve();
             }
         });
+        this._base.rename(from, path);
     }
 
     private async _save(path: string) {
@@ -635,6 +646,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             if (!base) {
                 return;
             }
+            base.path = path;
             const conflict = this._base.conflict(file.uniqueId);
             if (conflict) {
                 if (hasConflictMarkers(working)) {
@@ -658,6 +670,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         if (!base) {
             return;
         }
+        base.path = path;
 
         const conflict = this._base.conflict(file.uniqueId);
         if (conflict) {
@@ -813,8 +826,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._base.set(f.uniqueId, remote, savedHash);
         }
 
-        await this._base.flush();
         await this._refreshAll();
+        await this._base.flush();
     }
 
     // push: submit local edits as OT ops + flush to S3. fast-forward only —
@@ -857,6 +870,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             if (err) {
                 throw err;
             }
+            this._base.rename(op.from, op.path);
             this._local.delete(op.path);
             this._status.delete(op.path);
             if (op.type === 'file') {
@@ -897,8 +911,8 @@ class NativeSyncEngine extends Linker<LinkParams> {
             await this._pushContent(path);
         }
 
-        await this._base.flush();
         await this._refreshAll();
+        await this._base.flush();
     }
 
     // revert a file's working copy to the base (git restore). destructive.
@@ -1023,6 +1037,34 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._events.off('asset:file:hash', onHash);
             this._events.off('asset:file:save', onSave);
         });
+
+        for (const [path, file] of projectManager.files) {
+            const from = this._base.get(file.uniqueId)?.path;
+            if (typeof from !== 'string' || !from || from === path) {
+                continue;
+            }
+            const uri = vscode.Uri.joinPath(folderUri, from);
+            if (
+                from.includes('\\') ||
+                relativePath(uri, folderUri) !== from ||
+                this._ignoring(uri) ||
+                this._ignoring(vscode.Uri.joinPath(folderUri, path))
+            ) {
+                continue;
+            }
+            if (await this._exists(from)) {
+                await this._remoteRename(from, path);
+                const source = projectManager.files.get(from);
+                if (source) {
+                    this._setRemote({
+                        action: 'created',
+                        path: from,
+                        type: source.type === 'folder' ? 'folder' : 'file',
+                        content: source.type === 'file' ? buffer.from(norm(source.doc.text)) : new Uint8Array()
+                    });
+                }
+            }
+        }
 
         await this._refreshAll();
 
