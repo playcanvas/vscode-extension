@@ -493,12 +493,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                // a completed rename can be retried after its mapping failed to save
+                // ignore local echoes, including paths that have since moved again
                 if (!(await fileExists(oldUri))) {
-                    if (await fileExists(newUri)) {
-                        return;
-                    }
-                    throw fail`rename source missing ${oldUri}`;
+                    return;
                 }
 
                 this._echo.set(`${oldUri}:delete`, '');

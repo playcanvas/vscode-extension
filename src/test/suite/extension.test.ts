@@ -4016,6 +4016,53 @@ suite('rename recovery', () => {
         });
     }
 
+    for (const path of ['echo-b.js', 'echo-c.js']) {
+        test(`rename replay stays quiet after a local move to ${path}`, async () => {
+            mocks.stub(vscode.commands, 'registerCommand').returns(new vscode.Disposable(() => undefined));
+            const on = mocks.spy(events, 'on');
+            disk = new Disk({ events });
+            await disk.link({ folderUri: work, projectManager: pm, types: typeFiles });
+            const renamed = on.getCalls().find((call) => call.args[0] === 'asset:file:rename')?.args[1];
+            assert.ok(renamed, 'realtime rename handler must be registered');
+
+            let from = source.name;
+            const moves = path === 'echo-b.js' ? ['echo-b.js'] : ['echo-b.js', 'echo-c.js'];
+            for (const to of moves) {
+                await new Promise<void>((resolve, reject) => {
+                    events.emit('sync:file:apply:rename', from, to, (err) => (err ? reject(err) : resolve()));
+                });
+                from = to;
+            }
+
+            const warn = mocks.spy(Log.prototype, 'warn');
+            for (let i = 0; i < 2; i++) {
+                await (renamed as (from: string, path: string) => Promise<void>)(source.name, 'echo-b.js');
+            }
+            assert.strictEqual(warn.calledWith('rename failed'), false, 'stale echoes must not warn');
+            assert.strictEqual(
+                buffer.toString(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(work, path))),
+                'original\n'
+            );
+        });
+    }
+
+    test('pull rename retains its mapping when both disk paths are missing', async () => {
+        mocks.stub(vscode.commands, 'registerCommand').returns(new vscode.Disposable(() => undefined));
+        disk = new Disk({ events, pullPush: true });
+        await disk.link({ folderUri: work, projectManager: pm, types: typeFiles });
+        const from = source.name;
+        await pm.rename(from, 'missing.js');
+        await new Promise<void>((resolve, reject) => {
+            events.emit('sync:file:apply:delete', from, (err) => (err ? reject(err) : resolve()));
+        });
+        await assert.rejects(engine.pull(), /rename .*missing/);
+        const persisted = new BaseStore({ storageUri: storage });
+        await persisted.load(project.id, 'main', hash(work.toString()));
+        assert.strictEqual(persisted.get(source.uniqueId)?.path, from);
+        assert.deepStrictEqual(persisted.pending, { from, path: 'missing.js' });
+        assert.strictEqual(engine.decorationStatus('missing.js'), 'renamed');
+    });
+
     test('disk rename reports a destination collision', async () => {
         mocks.stub(vscode.commands, 'registerCommand').returns(new vscode.Disposable(() => undefined));
         disk = new Disk({ events, pullPush: true });

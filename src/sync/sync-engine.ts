@@ -506,6 +506,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 reject(fail`disk apply rename handler missing`);
             }
         });
+        if (!(await fileExists(vscode.Uri.joinPath(this._folderUri!, path)))) {
+            throw fail`rename destination missing ${path}`;
+        }
         this._base.rename(from, path);
         this._base.pending = undefined;
         await this._base.flush();
