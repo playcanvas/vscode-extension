@@ -327,6 +327,8 @@ class MockShareDb extends ShareDb {
 
     resetAdversarial!: () => void;
 
+    moveUpdates = true;
+
     fsCascadeDeletes = false;
 
     fsProductionMoveOps = false;
@@ -439,6 +441,7 @@ class MockShareDb extends ShareDb {
             this.closedDocuments.clear();
             this.documentSubscribe?.resolve();
             this.documentSubscribe = undefined;
+            this.moveUpdates = true;
         };
         this.sendRaw = sandbox.spy(async (data: Parameters<WebSocket['send']>[0]) => {
             // check for fs operations
@@ -465,6 +468,9 @@ class MockShareDb extends ShareDb {
 
                 // handle move operation
                 if (json.op === 'move') {
+                    if (!this.moveUpdates) {
+                        return;
+                    }
                     for (const id of json.ids) {
                         const asset = assets.get(id);
                         if (asset) {

@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as os from 'os';
 
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
@@ -6,15 +7,20 @@ import { WebSocketServer } from 'ws';
 
 import * as authModule from '../../auth';
 import { NAME, PUBLISHER } from '../../config';
-import { PING_INTERVAL_MS, RESUME_GAP_MS } from '../../connections/constants';
+import { EVENT_TIMEOUT_MS, PING_INTERVAL_MS, RESUME_GAP_MS } from '../../connections/constants';
 import * as messengerModule from '../../connections/messenger';
 import * as relayModule from '../../connections/relay';
 import * as restModule from '../../connections/rest';
 import * as sharedbModule from '../../connections/sharedb';
+import { Disk } from '../../disk';
 import * as uriHandlerModule from '../../handlers/uri-handler';
 import { Log } from '../../log';
+import { ProjectManager } from '../../project-manager';
 import * as sentryModule from '../../sentry';
+import { BaseStore } from '../../sync/base-store';
+import { NativeSyncEngine } from '../../sync/sync-engine';
 import * as typesModule from '../../type-installer';
+import type { EventMap } from '../../typings/event-map';
 import type { Asset } from '../../typings/models';
 import type { ShareDbTextOp } from '../../typings/sharedb';
 import * as buffer from '../../utils/buffer';
@@ -3892,5 +3898,138 @@ suite('connections - suspend recovery', () => {
         await timers.tickAsync(PING_INTERVAL_MS);
         await assertResolves(reconnected.promise, 'resume reconnect');
         assert.strictEqual(connections, 2, 'resume guard should force exactly one reconnect');
+    });
+});
+
+suite('rename recovery', () => {
+    const root = vscode.Uri.joinPath(vscode.Uri.file(os.tmpdir()), 'pc-rename-recovery-test');
+    const storage = vscode.Uri.joinPath(root, 'storage');
+    const work = vscode.Uri.joinPath(root, 'work');
+    const mocks = sinon.createSandbox();
+    const events = new EventEmitter<EventMap>();
+    const messenger = new MockMessenger(mocks);
+    const sharedb = new MockShareDb(mocks, messenger);
+    const relay = new MockRelay(mocks);
+    const rest = new MockRest(mocks, messenger, sharedb);
+    const pm = new ProjectManager({ events, sharedb, messenger, relay, rest });
+    const snapshot = new Map(assets);
+    const content = new Map(documents);
+    let source: Asset;
+    let folder: Asset;
+    let engine: NativeSyncEngine;
+    let disk: Disk | undefined;
+
+    setup(async () => {
+        assets.clear();
+        documents.clear();
+        source = await rest.assetCreate(project.id, 'main', {
+            type: 'script',
+            name: 'recovery.js',
+            preload: true,
+            file: new Blob(['original\n'])
+        });
+        folder = await rest.assetCreate(project.id, 'main', {
+            type: 'folder',
+            name: 'recovery-folder',
+            preload: true
+        });
+        await pm.link({ projectId: project.id, branchId: 'main' });
+        await vscode.workspace.fs.createDirectory(work);
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(work, source.name), buffer.from('original\n'));
+        engine = new NativeSyncEngine({ events, storageUri: storage });
+        await engine.link({ folderUri: work, projectManager: pm, projectId: project.id, branchId: 'main' });
+    });
+
+    teardown(async () => {
+        mocks.restore();
+        rest.resetFailures();
+        sharedb.resetAdversarial();
+        await disk?.unlink();
+        disk = undefined;
+        await engine.unlink();
+        await pm.unlink();
+        assets.clear();
+        documents.clear();
+        for (const [id, asset] of snapshot) {
+            assets.set(id, asset);
+        }
+        for (const [id, text] of content) {
+            documents.set(id, text);
+        }
+        await vscode.workspace.fs.delete(root, { recursive: true });
+    });
+
+    for (const failure of ['request', 'rename timeout', 'move timeout']) {
+        test(`push retains the original mapping after ${failure}`, async () => {
+            const from = source.name;
+            const path = failure === 'move timeout' ? `${folder.name}/${from}` : 'recovered.js';
+            await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(work, folder.name));
+            await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, from), vscode.Uri.joinPath(work, path));
+            events.emit('sync:file:rename', from, path, 'file');
+            const off = mocks.spy(events, 'off');
+            if (failure === 'request') {
+                rest.failNext('assetRename');
+            } else if (failure === 'rename timeout') {
+                rest.renameUpdates = false;
+            } else {
+                sharedb.moveUpdates = false;
+            }
+
+            const started = new Deferred<void>();
+            const rename = pm.rename.bind(pm);
+            mocks.stub(pm, 'rename').callsFake((from, path) => {
+                const result = rename(from, path);
+                started.resolve();
+                return result;
+            });
+            const timers = mocks.useFakeTimers({
+                toFake: ['setTimeout', 'clearTimeout'],
+                shouldClearNativeTimers: true
+            });
+            const pushed = tryCatch(() => engine.push());
+            await started.promise;
+            await timers.tickAsync(EVENT_TIMEOUT_MS);
+            const [err] = await pushed;
+            timers.restore();
+            assert.ok(err, 'push must reject an unconfirmed rename');
+            assert.strictEqual(pm.files.get(from)?.uniqueId, source.uniqueId);
+            assert.strictEqual(engine.status(path), 'renamed');
+            assert.ok(off.calledWith('asset:update'), 'temporary confirmation listener must be removed');
+            const persisted = new BaseStore({ storageUri: storage });
+            await persisted.load(project.id, 'main', hash(work.toString()));
+            assert.strictEqual(persisted.get(source.uniqueId)?.path, from);
+            assert.strictEqual(
+                buffer.toString(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(work, path))),
+                'original\n'
+            );
+
+            await engine.unlink();
+            engine = new NativeSyncEngine({ events, storageUri: storage });
+            await engine.link({ folderUri: work, projectManager: pm, projectId: project.id, branchId: 'main' });
+            assert.strictEqual(engine.status(path), 'renamed', 'failed rename remains retryable after restart');
+            rest.resetFailures();
+            sharedb.resetAdversarial();
+            await engine.push();
+            assert.strictEqual(pm.files.get(path)?.uniqueId, source.uniqueId);
+            await persisted.load(project.id, 'main', hash(work.toString()));
+            assert.strictEqual(persisted.get(source.uniqueId)?.path, path);
+        });
+    }
+
+    test('disk rename reports a destination collision', async () => {
+        mocks.stub(vscode.commands, 'registerCommand').returns(new vscode.Disposable(() => undefined));
+        disk = new Disk({ events, pullPush: true });
+        await disk.link({ folderUri: work, projectManager: pm, types: typeFiles });
+        const destination = vscode.Uri.joinPath(work, 'occupied.js');
+        await vscode.workspace.fs.writeFile(destination, buffer.from('unrelated\n'));
+        const renamed = new Promise<void>((resolve, reject) => {
+            events.emit('sync:file:apply:rename', source.name, 'occupied.js', (err) => (err ? reject(err) : resolve()));
+        });
+        await assert.rejects(renamed);
+        assert.strictEqual(buffer.toString(await vscode.workspace.fs.readFile(destination)), 'unrelated\n');
+        assert.strictEqual(
+            buffer.toString(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(work, source.name))),
+            'original\n'
+        );
     });
 });

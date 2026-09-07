@@ -1190,6 +1190,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                     this._events.off('asset:update', onupdate);
                 }
                 this._log.warn(err.message);
+                throw this.error.set(() => err);
             }
 
             this._log.debug(`renamed ${oldPath} to ${newPath}`);
@@ -1236,6 +1237,7 @@ class ProjectManager extends Linker<{ projectId: number; branchId: string }> {
                 this._events.off('asset:update', onupdate);
             }
             this._log.warn(err.message);
+            throw this.error.set(() => err);
         }
 
         this._log.debug(`moved ${oldPath} to ${newPath}`);

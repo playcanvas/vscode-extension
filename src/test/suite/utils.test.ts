@@ -376,6 +376,23 @@ suite('sync/base-store', () => {
         await c.load(1, 'main', 'folder-a');
         assert.strictEqual(c.get(1)?.text, 'from-a');
     });
+
+    test('failed replacement preserves the previous base file', async () => {
+        const store = new BaseStore({ storageUri: dir });
+        await store.load(1, 'main');
+        store.set(1, 'original');
+        await store.flush();
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(dir, 'base', '1-main-default.json.tmp'));
+        store.set(1, 'changed');
+        await assert.rejects(store.flush());
+        const persisted = new BaseStore({ storageUri: dir });
+        await persisted.load(1, 'main');
+        assert.strictEqual(persisted.get(1)?.text, 'original');
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(dir, 'base', '1-main-default.json.tmp'));
+        await store.flush();
+        await persisted.load(1, 'main');
+        assert.strictEqual(persisted.get(1)?.text, 'changed');
+    });
 });
 
 suite('sync/sync-engine', () => {
@@ -644,6 +661,187 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(second.status('b.js'), 'clean');
         await second.unlink();
     });
+
+    test('#337 persists a pulled rename before a later content failure', async () => {
+        const file = { type: 'stub', uniqueId: 1, dirty: false };
+        const files = new Map([['a.js', file]]);
+        let saved = 'original';
+        const pm = {
+            files,
+            savedHash: () => saved,
+            savedContent: async () => {
+                throw new Error('content unavailable');
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', 'original\n');
+        const first = engine();
+        await first.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await first.unlink();
+        files.delete('a.js');
+        files.set('b.js', file);
+        saved = 'changed';
+
+        const second = engine();
+        await second.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await assert.rejects(second.pull(), /content unavailable/);
+        assert.strictEqual(await exists('a.js'), false);
+        assert.strictEqual(await readFile('b.js'), 'original\n');
+        const persisted = new BaseStore({ storageUri: storage });
+        await persisted.load(1, 'main', hash(work.toString()));
+        assert.strictEqual(persisted.get(1)?.path, 'b.js');
+    });
+
+    test('#337 rejects a rename without a disk handler', async () => {
+        const file = { type: 'file', uniqueId: 1, doc: { text: 'original\n' }, dirty: false };
+        const files = new Map([['a.js', file]]);
+        const pm = { files } as unknown as ProjectManager;
+        await writeFile('a.js', file.doc.text);
+        const first = engine();
+        await first.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await first.unlink();
+        files.delete('a.js');
+        files.set('b.js', file);
+
+        const second = new NativeSyncEngine({ events: new EventEmitter<EventMap>(), storageUri: storage });
+        await second.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await assert.rejects(second.pull(), /disk apply rename handler missing/);
+        const persisted = new BaseStore({ storageUri: storage });
+        await persisted.load(1, 'main', hash(work.toString()));
+        assert.strictEqual(persisted.get(1)?.path, 'a.js');
+        assert.strictEqual(await readFile('a.js'), file.doc.text);
+    });
+
+    for (const step of ['before', 'after', 'save']) {
+        test(`#337 recovers an interrupted pull before another cloud rename, step: ${step}`, async () => {
+            const file = { type: 'file', uniqueId: 1, doc: { text: 'original\n' }, dirty: false };
+            const files = new Map([['a.js', file]]);
+            const pm = { files } as unknown as ProjectManager;
+            await writeFile('a.js', file.doc.text);
+            const first = engine();
+            await first.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+            await first.unlink();
+            await writeFile('a.js', 'local edits\n');
+            files.delete('a.js');
+            files.set('b.js', file);
+
+            const events = new EventEmitter<EventMap>();
+            const temp = vscode.Uri.joinPath(storage, 'base', `1-main-${hash(work.toString())}.json.tmp`);
+            const second = new NativeSyncEngine({ events, storageUri: storage });
+            await second.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+            events.on('sync:file:apply:rename', (from, path, done) => {
+                void tryCatch(async () => {
+                    const persisted = new BaseStore({ storageUri: storage });
+                    await persisted.load(1, 'main', hash(work.toString()));
+                    assert.strictEqual(persisted.get(1)?.path, 'a.js', 'mapping must not advance before the move');
+                    if (step !== 'before') {
+                        await vscode.workspace.fs.rename(
+                            vscode.Uri.joinPath(work, from),
+                            vscode.Uri.joinPath(work, path)
+                        );
+                    }
+                    if (step === 'save') {
+                        await vscode.workspace.fs.createDirectory(temp);
+                        return;
+                    }
+                    throw new Error('interrupted');
+                }).then(([err]) => done(err ?? undefined));
+            });
+            await assert.rejects(second.pull(), step === 'save' ? /directory/i : /interrupted/);
+            if (step === 'save') {
+                await vscode.workspace.fs.delete(temp);
+            }
+
+            // restart without unlinking, which would otherwise save the in-memory state
+            files.delete('b.js');
+            files.set('c.js', file);
+            const third = engine();
+            await third.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+            assert.strictEqual(third.decorationStatus('c.js'), 'renamed');
+            await third.pull();
+            assert.strictEqual(await readFile('c.js'), 'local edits\n');
+            assert.strictEqual(third.status('c.js'), 'modified');
+            assert.strictEqual(third.baseText('c.js'), 'original\n');
+        });
+    }
+
+    test('#337 recovers an interrupted push before another cloud rename', async () => {
+        const file = { type: 'file', uniqueId: 1, doc: { text: 'original\n' }, dirty: false };
+        const files = new Map([['a.js', file]]);
+        const pm = {
+            files,
+            rename: async (from: string, path: string) => {
+                files.delete(from);
+                files.set(path, file);
+                throw new Error('confirmation lost');
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', file.doc.text);
+        const events = new EventEmitter<EventMap>();
+        const first = engine(events);
+        await first.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'a.js'), vscode.Uri.joinPath(work, 'b.js'));
+        await writeFile('b.js', 'local edits\n');
+        events.emit('sync:file:rename', 'a.js', 'b.js', 'file');
+        await assert.rejects(first.push(), /confirmation lost/);
+
+        files.delete('b.js');
+        files.set('c.js', file);
+        const second = engine();
+        await second.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        assert.strictEqual(second.decorationStatus('c.js'), 'renamed');
+        await second.pull();
+        assert.strictEqual(await readFile('c.js'), 'local edits\n');
+        assert.strictEqual(second.status('c.js'), 'modified');
+    });
+
+    test('#337 does not start a rename if its pending record cannot be saved', async () => {
+        const file = { type: 'file', uniqueId: 1, doc: { text: 'original\n' }, dirty: false };
+        const files = new Map([['a.js', file]]);
+        const pm = { files } as unknown as ProjectManager;
+        await writeFile('a.js', file.doc.text);
+        const first = engine();
+        await first.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await first.unlink();
+        files.delete('a.js');
+        files.set('b.js', file);
+        const second = engine();
+        await second.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        const temp = vscode.Uri.joinPath(storage, 'base', `1-main-${hash(work.toString())}.json.tmp`);
+        await vscode.workspace.fs.createDirectory(temp);
+        await assert.rejects(second.pull());
+        assert.strictEqual(await readFile('a.js'), 'original\n');
+        assert.strictEqual(await exists('b.js'), false);
+        await vscode.workspace.fs.delete(temp);
+        await second.pull();
+        assert.strictEqual(await readFile('b.js'), 'original\n');
+    });
+
+    for (const path of ['../escaped.js', '.git/config', 'occupied.js']) {
+        test(`#337 rejects unsafe interrupted rename recovery to ${path}`, async () => {
+            await writeFile('a.js', 'original\n');
+            await writeFile('occupied.js', 'unrelated\n');
+            const store = new BaseStore({ storageUri: storage });
+            await store.load(1, 'main', hash(work.toString()));
+            store.set(1, 'original\n');
+            store.get(1)!.path = 'a.js';
+            store.pending = { from: 'a.js', path };
+            await store.flush();
+            const e = engine();
+            const params = {
+                folderUri: work,
+                projectManager: pmWith({ text: 'original\n' }),
+                projectId: 1,
+                branchId: 'main'
+            };
+            await assert.rejects(e.link(params), /interrupted rename/);
+            assert.strictEqual(await readFile('a.js'), 'original\n');
+            assert.strictEqual(await readFile('occupied.js'), 'unrelated\n');
+            store.pending = undefined;
+            await store.flush();
+            await e.link(params);
+            assert.strictEqual(e.status('a.js'), 'clean');
+        });
+    }
 
     test('#337 follows successive offline renames without claiming a reused old path', async () => {
         const pm = pmWith({ text: 'x\n' });
@@ -1963,6 +2161,10 @@ suite('sync/sync-engine', () => {
         assert.deepStrictEqual(renamed, [['a.js', 'b.js']]);
         assert.deepStrictEqual(saved, []);
         assert.strictEqual(e.status('b.js'), 'modified');
+
+        const persisted = new BaseStore({ storageUri: storage });
+        await persisted.load(1, 'main', hash(work.toString()));
+        assert.strictEqual(persisted.get(1)?.path, 'b.js', 'rename survives a crash after the content failure');
 
         await e.push();
 

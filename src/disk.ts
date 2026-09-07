@@ -485,32 +485,40 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
     }
 
-    private _rename(oldUri: vscode.Uri, newUri: vscode.Uri) {
-        return this._writeMutex.atomic([`${oldUri}`, `${newUri}`], async () => {
-            if (this._ignoring(oldUri)) {
-                return;
-            }
+    private async _rename(oldUri: vscode.Uri, newUri: vscode.Uri) {
+        let error: Error | null = null;
+        await this._writeMutex.atomic([`${oldUri}`, `${newUri}`], async () => {
+            [error] = await tryCatch(async () => {
+                if (this._ignoring(oldUri)) {
+                    return;
+                }
 
-            // check local echo by seeing if old file exists
-            const oldExists = await fileExists(oldUri);
-            if (!oldExists) {
-                return;
-            }
+                // a completed rename can be retried after its mapping failed to save
+                if (!(await fileExists(oldUri))) {
+                    if (await fileExists(newUri)) {
+                        return;
+                    }
+                    throw fail`rename source missing ${oldUri}`;
+                }
 
-            // rename on disk
-            this._echo.set(`${oldUri}:delete`, '');
-            this._echo.set(`${newUri}:create`, '');
-            await vscode.workspace.fs.rename(oldUri, newUri, {
-                overwrite: false
+                this._echo.set(`${oldUri}:delete`, '');
+                this._echo.set(`${newUri}:create`, '');
+                await vscode.workspace.fs.rename(oldUri, newUri, {
+                    overwrite: false
+                });
+
+                // next _update or _create write on newUri.path will repopulate
+                this._diskHash.delete(oldUri.path);
+                this._diskStat.delete(oldUri.path);
+                this._remoteAhead.delete(oldUri.path);
+
+                this._log.debug(`rename.remote ${oldUri.path} -> ${newUri.path}`);
             });
-
-            // next _update or _create write on newUri.path will repopulate
-            this._diskHash.delete(oldUri.path);
-            this._diskStat.delete(oldUri.path);
-            this._remoteAhead.delete(oldUri.path);
-
-            this._log.debug(`rename.remote ${oldUri.path} -> ${newUri.path}`);
         });
+        if (error) {
+            this._log.warn('rename failed', error);
+            throw error;
+        }
     }
 
     private _save(uri: vscode.Uri) {
@@ -818,7 +826,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const newUri = vscode.Uri.joinPath(folderUri, newPath);
             this._checkIgnoreUpdated(oldUri);
             this._checkIgnoreUpdated(newUri);
-            await this._rename(oldUri, newUri);
+            await tryCatch(this._rename(oldUri, newUri));
         });
         const syncFileApplyCreate = this._events.on('sync:file:apply:create', (path, type, content, done) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
