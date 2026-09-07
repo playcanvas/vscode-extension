@@ -8,12 +8,16 @@ type ConflictEntry = { base: string; local: string; remote: string };
 export type BaseEntry = {
     text: string;
     hash: string;
+    path?: string;
     savedHash?: string;
     conflict?: ConflictEntry;
 };
 type BaseFile = {
     version?: 1;
     entries?: Record<string, BaseEntry>;
+
+    // local identifies a push awaiting server confirmation
+    pending?: { from: string; path: string; local?: number };
 };
 
 // persists the merge base (last-pulled text per file, keyed by uniqueId) per
@@ -29,6 +33,10 @@ export class BaseStore {
 
     private _folderId = 'default';
 
+    private _writing = Promise.resolve();
+
+    pending?: BaseFile['pending'];
+
     constructor({ storageUri }: { storageUri: vscode.Uri }) {
         this._storageUri = storageUri;
     }
@@ -42,6 +50,7 @@ export class BaseStore {
         this._branchId = branchId;
         this._folderId = folderId;
         this._entries.clear();
+        this.pending = undefined;
 
         const [err, data] = await tryCatch(async () => vscode.workspace.fs.readFile(this._uri(projectId, branchId)));
         if (err) {
@@ -56,6 +65,7 @@ export class BaseStore {
         }
 
         const file = parsed as BaseFile;
+        this.pending = file.pending;
         const entries = file.entries ? file.entries : (parsed as Record<string, BaseEntry>);
         for (const [id, entry] of Object.entries(entries)) {
             this._entries.set(Number(id), entry);
@@ -64,6 +74,14 @@ export class BaseStore {
 
     get(uniqueId: number) {
         return this._entries.get(uniqueId);
+    }
+
+    rename(from: string, path: string) {
+        for (const entry of this._entries.values()) {
+            if (entry.path === from || entry.path?.startsWith(`${from}/`)) {
+                entry.path = path + entry.path.slice(from.length);
+            }
+        }
     }
 
     set(uniqueId: number, text: string, savedHash?: string) {
@@ -103,10 +121,14 @@ export class BaseStore {
         for (const [id, entry] of this._entries) {
             obj[id] = entry;
         }
-        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(this._storageUri, 'base'));
-        await vscode.workspace.fs.writeFile(
-            this._uri(this._projectId, this._branchId),
-            buffer.from(JSON.stringify({ version: 1, entries: obj }))
-        );
+        const uri = this._uri(this._projectId, this._branchId);
+        const temp = uri.with({ path: `${uri.path}.tmp` });
+        const content = buffer.from(JSON.stringify({ version: 1, entries: obj, pending: this.pending }));
+        this._writing = tryCatch(this._writing).then(async () => {
+            await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(this._storageUri, 'base'));
+            await vscode.workspace.fs.writeFile(temp, content);
+            await vscode.workspace.fs.rename(temp, uri, { overwrite: true });
+        });
+        await this._writing;
     }
 }

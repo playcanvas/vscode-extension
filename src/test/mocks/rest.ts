@@ -52,6 +52,8 @@ class MockRest extends Rest {
 
     assetEndpointsUseItemIds = false;
 
+    renameUpdates = true;
+
     // FIFO of errors to throw on the next N calls of a given method. mirrors a final
     // post-retry failure from src/connections/rest.ts (MAX_RETRIES=3) — exercises the
     // ProjectManager error/guard path without simulating the retry loop itself.
@@ -84,6 +86,7 @@ class MockRest extends Rest {
         this.branchSwitch = undefined;
         this.distinctAssetIds = false;
         this.assetEndpointsUseItemIds = false;
+        this.renameUpdates = true;
     }
 
     private _maybeFail(method: string) {
@@ -237,7 +240,7 @@ class MockRest extends Rest {
 
             // fire sharedb op on document
             const doc = sharedb.subscriptions.get(`assets:${asset.uniqueId}`);
-            if (doc) {
+            if (doc && this.renameUpdates) {
                 doc.submitOp(
                     [
                         {
