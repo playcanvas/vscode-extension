@@ -29,7 +29,7 @@ import { Deferred } from '../../utils/deferred';
 import { EventEmitter } from '../../utils/event-emitter';
 import { Mutex } from '../../utils/mutex';
 import { norm } from '../../utils/text';
-import { hash, tryCatch, tryCatchSync, withTimeout } from '../../utils/utils';
+import { hash, tryCatch, tryCatchSync, wait, withTimeout } from '../../utils/utils';
 import { MockAuth } from '../mocks/auth';
 import { MockMessenger } from '../mocks/messenger';
 import {
@@ -4077,6 +4077,29 @@ suite('rename recovery', () => {
         assert.strictEqual(
             buffer.toString(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(work, source.name))),
             'original\n'
+        );
+    });
+
+    test('reset to remote replaces local files with the server snapshot', async () => {
+        mocks.stub(vscode.commands, 'registerCommand').returns(new vscode.Disposable(() => undefined));
+        disk = new Disk({ events, pullPush: true });
+        await disk.link({ folderUri: work, projectManager: pm, types: typeFiles });
+
+        const fileUri = vscode.Uri.joinPath(work, source.name);
+        await vscode.workspace.fs.writeFile(fileUri, buffer.from('local edit\n'));
+        const extra = vscode.Uri.joinPath(work, 'only-local.js');
+        await vscode.workspace.fs.writeFile(extra, buffer.from('extra\n'));
+        // let the pullpush watcher record the local add before the reset clears it
+        await wait(100);
+
+        await engine.resetToRemote();
+
+        assert.strictEqual(buffer.toString(await vscode.workspace.fs.readFile(fileUri)), 'original\n');
+        await assert.rejects(Promise.resolve(vscode.workspace.fs.stat(extra)));
+        assert.strictEqual(engine.status(source.name), 'clean');
+        assert.strictEqual(
+            (await vscode.workspace.fs.stat(vscode.Uri.joinPath(work, folder.name))).type,
+            vscode.FileType.Directory
         );
     });
 });

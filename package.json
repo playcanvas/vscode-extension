@@ -67,6 +67,11 @@
                     ],
                     "default": "realtime",
                     "description": "How the native extension syncs with the server. 'pullpush' uses explicit Git-style pull/push with the realtime document as the remote."
+                },
+                "playcanvas.resetOnBranchSwitch": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "In pull/push mode, after a branch switch, discard all local changes and make every file match the remote branch exactly."
                 }
             }
         },
@@ -126,6 +131,11 @@
                 "command": "playcanvas.discardAll",
                 "title": "PlayCanvas: Discard All Changes",
                 "icon": "$(discard)"
+            },
+            {
+                "command": "playcanvas.resetToRemote",
+                "title": "PlayCanvas: Reset Local to Remote",
+                "enablement": "playcanvas.pullpush"
             },
             {
                 "command": "playcanvas.resolveMerge",

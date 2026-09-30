@@ -229,7 +229,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._log.debug(`wrote type files to .pc/ (${types.version}${types.fallback ? ', fallback' : ''})`);
     }
 
-    private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
+    // force: pullpush hard reset — overwrite divergent bytes and revert open editors
+    private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array, force = false) {
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
@@ -243,7 +244,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     return;
                 }
 
-                if (this._isOpen(uri)) {
+                if (!force && this._isOpen(uri)) {
                     this._log.debug(`create.remote.open ${uri}`);
                     return;
                 }
@@ -255,12 +256,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const contentText = norm(buffer.toString(content));
                 if (existingText === contentText) {
                     this._diskHash.set(uri.path, hash(contentText));
+                    if (force) {
+                        await this._revertOpen(uri);
+                    }
                     return;
                 }
 
                 // pullpush: never clobber divergent local content — the sync
                 // engine classifies it; remote lands only via explicit pull
-                if (this._pullPush) {
+                if (!force && this._pullPush) {
                     return;
                 }
 
@@ -296,6 +300,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     // clear any pending debounced writes and write immediately
                     this._debouncer.cancel(`${uri}`);
                     const h = hash(content);
+                    if (force) {
+                        const key = `${uri}`;
+                        this._syncing.add(key);
+                        setTimeout(() => this._syncing.delete(key), SYNC_DELAY);
+                    }
                     this._echo.set(`${uri}:change`, h);
                     await vscode.workspace.fs.writeFile(uri, content);
                     this._diskHash.set(uri.path, h);
@@ -311,8 +320,48 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 }
             }
 
+            if (force && type === 'file') {
+                await this._revertOpen(uri);
+            }
+
             this._log.debug(`${exists ? 'change' : 'create'}.remote ${type} ${uri}`);
         });
+    }
+
+    // reload an open editor from the bytes just written so a dirty buffer can't
+    // survive a hard reset. document is already open — don't take the write mutex.
+    private async _revertOpen(uri: vscode.Uri) {
+        const doc = vscode.workspace.textDocuments.find((d) => !d.isClosed && d.uri.toString() === uri.toString());
+        if (!doc) {
+            return;
+        }
+        const [, bytes] = await tryCatch(Promise.resolve(vscode.workspace.fs.readFile(uri)));
+        const diskText = bytes ? norm(buffer.toString(bytes)) : '';
+        if (!doc.isDirty && norm(doc.getText()) === diskText) {
+            return;
+        }
+
+        const key = `${uri}`;
+        this._locks.add(key);
+        this._undos.get(uri.path)?.clear();
+        const active = vscode.window.activeTextEditor;
+        const same = active?.document.uri.toString() === uri.toString();
+        const [err] = await tryCatch(async () => {
+            if (!same) {
+                await vscode.window.showTextDocument(doc, { preserveFocus: false });
+            }
+            await vscode.commands.executeCommand('workbench.action.files.revert');
+        });
+        if (err || norm(doc.getText()) !== diskText) {
+            const raw = doc.getText();
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(uri, new vscode.Range(doc.positionAt(0), doc.positionAt(raw.length)), diskText);
+            await vscode.workspace.applyEdit(edit);
+        }
+        if (active && !same && !active.document.isClosed) {
+            await vscode.window.showTextDocument(active.document, { preserveFocus: false });
+        }
+        this._locks.delete(key);
     }
 
     // open check — textDocuments is the source of truth. keeps the watcher from
@@ -833,6 +882,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 await this._reconcile(uri, path, type);
             }).then(([err]) => done(err ?? undefined));
         });
+        const syncFileApplyOverwrite = this._events.on('sync:file:apply:overwrite', (path, type, content, done) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            void tryCatch(async () => {
+                this._checkIgnoreUpdated(uri);
+                await this._create(uri, type, content, true);
+            }).then(([err]) => done(err ?? undefined));
+        });
         const syncFileApplyUpdate = this._events.on('sync:file:apply:update', (path, content, done) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             void tryCatch(async () => {
@@ -889,6 +945,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._events.off('asset:file:rename', assetFileRename);
             this._events.off('asset:file:delete', assetFileDelete);
             this._events.off('sync:file:apply:create', syncFileApplyCreate);
+            this._events.off('sync:file:apply:overwrite', syncFileApplyOverwrite);
             this._events.off('sync:file:apply:update', syncFileApplyUpdate);
             this._events.off('sync:file:apply:delete', syncFileApplyDelete);
             this._events.off('sync:file:apply:rename', syncFileApplyRename);

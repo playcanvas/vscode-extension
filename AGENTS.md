@@ -129,6 +129,7 @@ Local:  VS Code → Disk → ProjectManager → ShareDB
 - `playcanvas.showPathCollisions` — Show path collisions
 - `playcanvas.undo` — Collaborative undo (reverts local edits only)
 - `playcanvas.redo` — Collaborative redo
+- `playcanvas.resetToRemote` — Replace every local file with the remote version (pull/push)
 
 ## Build & Test
 
