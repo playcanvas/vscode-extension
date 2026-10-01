@@ -1756,6 +1756,70 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('gone.js'), 'conflicted');
     });
 
+    test('reset failure drops a local delete of a file it already restored', async () => {
+        await writeFile('a.js', 'a local\n');
+        await writeFile('b.js', 'b local\n');
+        const events = new EventEmitter<EventMap>();
+        const files = new Map<string, unknown>([
+            ['a.js', { type: 'stub', uniqueId: 1, dirty: false }],
+            ['b.js', { type: 'stub', uniqueId: 2, dirty: false }]
+        ]);
+        const pm = {
+            files,
+            savedHash: (path: string) => hash(path === 'a.js' ? 'a remote\n' : 'b remote\n'),
+            savedContent: async (path: string) => {
+                if (path === 'b.js') {
+                    throw new Error('fetch failed');
+                }
+                return 'a remote\n';
+            }
+        } as unknown as ProjectManager;
+        events.on('sync:file:apply:overwrite', (path, _type, content, done) => {
+            void tryCatch(async () => writeFile(path, norm(buffer.toString(content)))).then(([err]) =>
+                done(err ?? undefined)
+            );
+        });
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'reset-fail-delete' });
+        events.emit('sync:file:delete', 'a.js', 'file');
+        assert.strictEqual(e.status('a.js'), 'deleted');
+
+        const [err] = await tryCatch(() => e.resetToRemote());
+        assert.ok(err, 'reset reports the download failure');
+        assert.strictEqual(await readFile('a.js'), 'a remote\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('reset failure does not record a local delete when the write removes the file', async () => {
+        await writeFile('a.js', 'old\n');
+        const events = new EventEmitter<EventMap>();
+        const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        let saved = 'old\n';
+        const pm = {
+            files,
+            savedHash: () => hash(saved),
+            savedContent: async () => saved
+        } as unknown as ProjectManager;
+        events.on('sync:file:apply:overwrite', (path, _type, _content, done) => {
+            void tryCatch(async () => {
+                await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, path), {
+                    recursive: false,
+                    useTrash: false
+                });
+                throw new Error('write failed');
+            }).then(([err]) => done(err ?? undefined));
+        });
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'reset-fail-swap' });
+        assert.strictEqual(e.status('a.js'), 'clean');
+        saved = 'remote\n';
+
+        const [err] = await tryCatch(() => e.resetToRemote());
+        assert.ok(err, 'reset reports the write failure');
+        assert.strictEqual(await exists('a.js'), false);
+        assert.strictEqual(e.status('a.js'), 'behind');
+    });
+
     test('reset deletes local-only files with the remote ignore rules', async () => {
         await writeFile('.pcignore', 'old\n');
         await writeFile('a.js', 'local\n');

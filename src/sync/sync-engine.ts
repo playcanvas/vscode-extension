@@ -74,6 +74,11 @@ class NativeSyncEngine extends Linker<LinkParams> {
     // events in this window are dropped so they can't become a later push
     private _resetting = false;
 
+    // failure refresh only: a missing file was removed by this attempt
+    // (file/folder swap). don't record that as a local delete — push would
+    // remove the asset for everyone
+    private _resetFailed = false;
+
     private _ignoring = (_uri: vscode.Uri) => false;
 
     error = signal<Error | undefined>(undefined);
@@ -677,7 +682,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
             if (this._localOpTouches(path)) {
                 return;
             }
-            if (this._base.get(file.uniqueId)) {
+            // failed reset may have removed the file itself. a local delete
+            // here is not a user edit — pull restores it, push must not
+            if (this._base.get(file.uniqueId) && !this._resetFailed) {
                 this._setLocal({ action: 'deleted', path, type: 'file' });
             } else {
                 this._setRemote({ action: 'created', path, type: 'file', content: new Uint8Array() });
@@ -1077,6 +1084,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
         this._resetting = true;
         this._epoch++;
         this._events.emit('sync:watch:hold', true);
+        // paths already brought in line with remote. on failure their local
+        // deletes have to go — the bytes are back, and push would remove the asset
+        const written: string[] = [];
         try {
             const ignoreFile = pm.files.get(Disk.IGNORE_FILE);
             let ignoreText = '';
@@ -1100,6 +1110,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 if (entry) {
                     entry.path = path;
                 }
+                written.push(path);
             };
             if (ignoreFile && ignoreFile.type !== 'folder') {
                 await this._applyOverwrite(Disk.IGNORE_FILE, 'file', buffer.from(ignoreText));
@@ -1112,6 +1123,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             for (const [path, file] of entries) {
                 if (file.type === 'folder') {
                     await this._applyOverwrite(path, 'folder', new Uint8Array());
+                    written.push(path);
                 }
             }
             const files = entries.filter(([, file]) => file.type !== 'folder');
@@ -1127,6 +1139,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
                             if (working !== undefined && hash(working) === base.hash) {
                                 this._base.deleteConflict(file.uniqueId);
                                 base.path = path;
+                                written.push(path);
                                 return;
                             }
                         }
@@ -1170,10 +1183,13 @@ class NativeSyncEngine extends Linker<LinkParams> {
             await this._refreshAll();
             await this._base.flush();
         } catch (err) {
+            this._dropLocal(...written);
+            this._resetFailed = true;
             this._epoch++;
             await tryCatch(() => this._refreshAll());
             throw err;
         } finally {
+            this._resetFailed = false;
             this._events.emit('sync:watch:hold', false);
             this._resetting = false;
         }

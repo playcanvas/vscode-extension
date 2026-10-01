@@ -24,7 +24,7 @@ export type EventMap = {
     'sync:file:apply:overwrite': [string, 'file' | 'folder', Uint8Array, (err?: Error) => void];
     'sync:file:apply:update': [string, Uint8Array, (err?: Error) => void];
     'sync:file:apply:delete': [string, (err?: Error) => void];
-    'sync:file:apply:rename': [string, string, (err?: Error) => void];    
+    'sync:file:apply:rename': [string, string, (err?: Error) => void];
     'sync:watch:hold': [boolean]; // true while a hard reset is writing; disk drops watcher events from that window
 
     'asset:doc:open': [string];
