@@ -21,7 +21,7 @@ import { Deferred } from '../../utils/deferred';
 import { EventEmitter } from '../../utils/event-emitter';
 import { effect } from '../../utils/signal';
 import { delta, norm } from '../../utils/text';
-import { sanitizeName, projectToName, hash, tryCatch, withTimeout } from '../../utils/utils';
+import { sanitizeName, projectToName, hash, tryCatch, withTimeout, wait } from '../../utils/utils';
 
 const STATUS_TIMEOUT = 2500;
 
@@ -445,6 +445,17 @@ suite('sync/sync-engine', () => {
             void tryCatch(async () =>
                 vscode.workspace.fs.rename(vscode.Uri.joinPath(work, from), vscode.Uri.joinPath(work, path))
             ).then(([err]) => done(err ?? undefined));
+        });
+        events.on('sync:file:apply:overwrite', (path, type, content, done) => {
+            void tryCatch(async () => {
+                const uri = vscode.Uri.joinPath(work, ...path.split('/'));
+                if (type === 'folder') {
+                    await vscode.workspace.fs.createDirectory(uri);
+                    return;
+                }
+                await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, '..'));
+                await vscode.workspace.fs.writeFile(uri, content);
+            }).then(([err]) => done(err ?? undefined));
         });
         return new NativeSyncEngine({ events, storageUri: storage });
     };
@@ -1658,6 +1669,124 @@ suite('sync/sync-engine', () => {
         savedHash = hash('x\nremote\n');
         await e.refresh();
         assert.strictEqual(e.status('a.js'), 'behind');
+    });
+
+    test('stub - shows behind when disk does not match the saved hash', async () => {
+        await writeFile('a.js', 'old branch\n');
+        const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            savedHash: () => hash('new branch\n'),
+            savedContent: async () => 'new branch\n'
+        } as unknown as ProjectManager;
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.status('a.js'), 'behind');
+        await e.pull();
+        assert.strictEqual(await readFile('a.js'), 'new branch\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('reset drops a local delete that arrives while files are being replaced', async () => {
+        await writeFile('a.js', 'local\n');
+        const events = new EventEmitter<EventMap>();
+        const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            savedHash: () => hash('remote\n'),
+            savedContent: async () => 'remote\n'
+        } as unknown as ProjectManager;
+        events.on('sync:file:apply:overwrite', (path, _type, content, done) => {
+            events.emit('sync:file:delete', path, 'file');
+            void tryCatch(async () => writeFile(path, norm(buffer.toString(content)))).then(([err]) =>
+                done(err ?? undefined)
+            );
+        });
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await e.resetToRemote();
+        assert.strictEqual(await readFile('a.js'), 'remote\n');
+        assert.strictEqual(e.status('a.js'), 'clean');
+    });
+
+    test('reset keeps a remote delete when a download fails, and waits for every file', async () => {
+        await writeFile('a.js', 'a local\n');
+        await writeFile('b.js', 'b local\n');
+        await writeFile('gone.js', 'gone\n');
+        const events = new EventEmitter<EventMap>();
+        let entered = 0;
+        const enteredBoth = new Deferred<void>();
+        const files = new Map<string, unknown>([
+            ['a.js', { type: 'stub', uniqueId: 1, dirty: false }],
+            ['b.js', { type: 'stub', uniqueId: 2, dirty: false }]
+        ]);
+        const pm = {
+            files,
+            savedHash: (path: string) => hash(path === 'b.js' ? 'b remote\n' : 'a remote\n'),
+            savedContent: async (path: string) => {
+                entered++;
+                if (entered === 2) {
+                    enteredBoth.resolve();
+                }
+                await enteredBoth.promise;
+                await wait(30);
+                if (path === 'a.js') {
+                    throw new Error('fetch failed');
+                }
+                return 'b remote\n';
+            }
+        } as unknown as ProjectManager;
+        events.on('sync:file:apply:overwrite', (path, _type, content, done) => {
+            void tryCatch(async () => writeFile(path, norm(buffer.toString(content)))).then(([err]) =>
+                done(err ?? undefined)
+            );
+        });
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'reset-fail' });
+        events.emit('asset:file:delete', 'gone.js');
+        assert.strictEqual(e.status('gone.js'), 'conflicted');
+
+        const result = tryCatch(() => e.resetToRemote());
+        await enteredBoth.promise;
+        const settled = await Promise.race([result.then(() => 'settled'), wait(10).then(() => 'pending')]);
+        assert.strictEqual(settled, 'pending', 'reset must wait until every worker finishes');
+        const [err] = await result;
+        assert.ok(err, 'reset reports the download failure');
+        assert.strictEqual(await readFile('b.js'), 'b remote\n');
+        assert.strictEqual(e.status('gone.js'), 'conflicted');
+    });
+
+    test('reset deletes local-only files with the remote ignore rules', async () => {
+        await writeFile('.pcignore', 'old\n');
+        await writeFile('a.js', 'local\n');
+        await writeFile('keep.js', 'keep\n');
+        const secret = vscode.Uri.joinPath(work, 'secret');
+        await vscode.workspace.fs.createDirectory(secret);
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(secret, 'build.js'), buffer.from('build\n'));
+        const files = new Map<string, unknown>([
+            ['.pcignore', { type: 'stub', uniqueId: 1, dirty: false }],
+            ['a.js', { type: 'stub', uniqueId: 2, dirty: false }]
+        ]);
+        const pm = {
+            files,
+            savedHash: (path: string) => hash(path === '.pcignore' ? 'secret\n' : 'a\n'),
+            savedContent: async (path: string) => (path === '.pcignore' ? 'secret\n' : 'a\n')
+        } as unknown as ProjectManager;
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'reset-ignore' });
+        assert.strictEqual(e.status('keep.js'), 'added');
+        assert.strictEqual(e.status('secret/build.js'), 'added');
+
+        await e.resetToRemote();
+
+        assert.strictEqual(await readFile('.pcignore'), 'secret\n');
+        assert.strictEqual(await readFile('a.js'), 'a\n');
+        assert.strictEqual(await exists('keep.js'), false);
+        const [secretErr] = await tryCatch(async () =>
+            vscode.workspace.fs.stat(vscode.Uri.joinPath(secret, 'build.js'))
+        );
+        assert.ifError(secretErr);
+        assert.strictEqual(e.statuses().has('secret/build.js'), false);
     });
 
     test('pull - fetches saved content for a closed file (no subscribe)', async () => {

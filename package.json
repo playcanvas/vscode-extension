@@ -273,7 +273,7 @@
         "@vscode/test-web": "0.0.80",
         "dotenv": "17.4.2",
         "eslint": "9.39.4",
-        "playcanvas": "2.18.1",
+        "playcanvas": "2.22.6",
         "prettier": "3.8.3",
         "rollup": "4.60.2",
         "rollup-plugin-polyfill-node": "0.13.0",

@@ -4102,4 +4102,25 @@ suite('rename recovery', () => {
             vscode.FileType.Directory
         );
     });
+
+    test('reset to remote swaps a file and a folder that occupy each others paths', async () => {
+        mocks.stub(vscode.commands, 'registerCommand').returns(new vscode.Disposable(() => undefined));
+        disk = new Disk({ events, pullPush: true });
+        await disk.link({ folderUri: work, projectManager: pm, types: typeFiles });
+
+        const fileUri = vscode.Uri.joinPath(work, source.name);
+        await vscode.workspace.fs.delete(fileUri, { recursive: false, useTrash: false });
+        await vscode.workspace.fs.createDirectory(fileUri);
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(fileUri, 'child.js'), buffer.from('child\n'));
+
+        const folderPath = vscode.Uri.joinPath(work, folder.name);
+        await vscode.workspace.fs.delete(folderPath, { recursive: true, useTrash: false });
+        await vscode.workspace.fs.writeFile(folderPath, buffer.from('not a folder\n'));
+
+        await engine.resetToRemote();
+
+        assert.strictEqual((await vscode.workspace.fs.stat(fileUri)).type, vscode.FileType.File);
+        assert.strictEqual(buffer.toString(await vscode.workspace.fs.readFile(fileUri)), 'original\n');
+        assert.strictEqual((await vscode.workspace.fs.stat(folderPath)).type, vscode.FileType.Directory);
+    });
 });

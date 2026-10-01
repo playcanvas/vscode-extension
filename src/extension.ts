@@ -633,9 +633,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
                 branchStatusBarItem.text = `$(git-branch) ${name}`;
                 branchStatusBarItem.show();
 
-                // pullpush opt-in: drop local edits and mirror the new branch exactly
+                // pullpush opt-in: drop local edits and mirror the new branch exactly.
+                // report separately so a failed reset is not tagged as a messenger error
                 if (pullPush && vscode.workspace.getConfiguration(NAME).get<boolean>('resetOnBranchSwitch')) {
-                    await nativeSync.resetToRemote();
+                    const [resetErr] = await tryCatch(() => nativeSync.resetToRemote());
+                    if (resetErr) {
+                        failure.set(() => ({ err: resetErr, source: 'native-sync' }));
+                    }
                 }
             } finally {
                 branchSwitchDone();
