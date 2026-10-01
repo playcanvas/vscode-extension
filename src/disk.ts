@@ -17,7 +17,7 @@ import { Linker } from './utils/linker';
 import { Mutex } from './utils/mutex';
 import { signal } from './utils/signal';
 import { delta, diff, norm, stat, sharedb2vscode, vscode2sharedb } from './utils/text';
-import { pool, parsePath, relativePath, uriStartsWith, fileExists, tryCatch, hash } from './utils/utils';
+import { pool, parsePath, relativePath, uriStartsWith, fileExists, tryCatch, hash, openTabs } from './utils/utils';
 
 const FETCH_CONCURRENCY = 8;
 const WRITE_CONCURRENCY = 16;
@@ -141,6 +141,12 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     private _pullPush = false;
 
+    // bumped while a pull/push hard reset is writing, so watcher events queued
+    // before or during the reset cannot become local ops afterwards
+    private _watchGen = 0;
+
+    private _watchHeld = false;
+
     constructor({ events, pullPush = false }: { events: EventEmitter<EventMap>; pullPush?: boolean }) {
         super();
 
@@ -148,7 +154,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._pullPush = pullPush;
     }
 
-    private _checkIgnoreUpdated(uri: vscode.Uri, deleted = false) {
+    private _checkIgnoreUpdated(uri: vscode.Uri, deleted = false, written?: Uint8Array | string) {
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
@@ -158,8 +164,20 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return;
         }
 
+        // closed .pcignore is a stub, so file.doc.text is missing. an empty
+        // fallback wipes the rules for the rest of the session — use the
+        // bytes being written, and otherwise leave the current rules alone
         const file = pm.files.get(Disk.IGNORE_FILE);
-        const text = deleted ? '' : file?.type === 'file' ? file.doc.text : '';
+        let text: string;
+        if (deleted) {
+            text = '';
+        } else if (written !== undefined) {
+            text = typeof written === 'string' ? norm(written) : norm(buffer.toString(written));
+        } else if (file?.type === 'file') {
+            text = file.doc.text;
+        } else {
+            return;
+        }
         const h = hash(text);
         if (h === this._ignoreHash) {
             return;
@@ -167,6 +185,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         // re-parse immediately so future ops respect new rules
         this._parseIgnoreText(text, folderUri, h);
+
+        // hard reset is already rewriting the tree with these rules
+        if (this._watchHeld) {
+            return;
+        }
 
         // prompt reload for disk sync (safe sequential writes + progress UI via link())
         void vscode.window
@@ -229,21 +252,32 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         this._log.debug(`wrote type files to .pc/ (${types.version}${types.fallback ? ', fallback' : ''})`);
     }
 
-    private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array) {
+    // force: pullpush hard reset — overwrite divergent bytes and revert open editors
+    private _create(uri: vscode.Uri, type: 'file' | 'folder', content: Uint8Array, force = false) {
         return this._writeMutex.atomic([`${uri}`], async () => {
             if (this._ignoring(uri)) {
                 return;
             }
 
             // check local echo
-            const exists = await fileExists(uri);
+            let exists = await fileExists(uri);
+            // hard reset: a file on one side and a folder on the other has to be
+            // replaced, or the later write throws EISDIR / ENOTDIR and stops halfway
+            if (exists && force) {
+                const st = await vscode.workspace.fs.stat(uri);
+                const isDir = (st.type & vscode.FileType.Directory) !== 0;
+                if (isDir !== (type === 'folder')) {
+                    await this._removeTree(uri);
+                    exists = false;
+                }
+            }
             if (exists) {
                 // for folders, if it exists, we're good
                 if (type === 'folder') {
                     return;
                 }
 
-                if (this._isOpen(uri)) {
+                if (!force && this._isOpen(uri)) {
                     this._log.debug(`create.remote.open ${uri}`);
                     return;
                 }
@@ -255,12 +289,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 const contentText = norm(buffer.toString(content));
                 if (existingText === contentText) {
                     this._diskHash.set(uri.path, hash(contentText));
+                    if (force) {
+                        await this._revertOpen(uri);
+                    }
                     return;
                 }
 
                 // pullpush: never clobber divergent local content — the sync
                 // engine classifies it; remote lands only via explicit pull
-                if (this._pullPush) {
+                if (!force && this._pullPush) {
                     return;
                 }
 
@@ -296,12 +333,24 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                     // clear any pending debounced writes and write immediately
                     this._debouncer.cancel(`${uri}`);
                     const h = hash(content);
+                    const key = `${uri}`;
+                    // hold the watcher across the write; start the release timer
+                    // after writeFile so a slow write can't outlive the window
+                    if (force) {
+                        this._syncing.add(key);
+                    }
                     this._echo.set(`${uri}:change`, h);
-                    await vscode.workspace.fs.writeFile(uri, content);
-                    this._diskHash.set(uri.path, h);
-                    const [, st] = await tryCatch(Promise.resolve(vscode.workspace.fs.stat(uri)));
-                    if (st) {
-                        this._diskStat.set(uri.path, { mtime: st.mtime, size: st.size });
+                    try {
+                        await vscode.workspace.fs.writeFile(uri, content);
+                        this._diskHash.set(uri.path, h);
+                        const [, st] = await tryCatch(Promise.resolve(vscode.workspace.fs.stat(uri)));
+                        if (st) {
+                            this._diskStat.set(uri.path, { mtime: st.mtime, size: st.size });
+                        }
+                    } finally {
+                        if (force) {
+                            setTimeout(() => this._syncing.delete(key), SYNC_DELAY);
+                        }
                     }
                     break;
                 }
@@ -311,8 +360,67 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 }
             }
 
+            if (force && type === 'file') {
+                await this._revertOpen(uri);
+            }
+
             this._log.debug(`${exists ? 'change' : 'create'}.remote ${type} ${uri}`);
         });
+    }
+
+    // deepest-first, non-recursive, so a type swap can't cascade a parent delete
+    private async _removeTree(uri: vscode.Uri) {
+        const [err, stat] = await tryCatch(Promise.resolve(vscode.workspace.fs.stat(uri)));
+        if (err || !stat) {
+            return;
+        }
+        if ((stat.type & vscode.FileType.Directory) !== 0) {
+            const [, entries] = await tryCatch(Promise.resolve(vscode.workspace.fs.readDirectory(uri)));
+            for (const [name] of entries ?? []) {
+                await this._removeTree(vscode.Uri.joinPath(uri, name));
+            }
+        }
+        this._echo.set(`${uri}:delete`, '');
+        await vscode.workspace.fs.delete(uri, { recursive: false, useTrash: false });
+        this._diskHash.delete(uri.path);
+        this._diskStat.delete(uri.path);
+        this._remoteAhead.delete(uri.path);
+    }
+
+    // reload a dirty open tab from the bytes just written. closed editors stay
+    // closed — textDocuments still lists them — and clean tabs reload themselves.
+    private async _revertOpen(uri: vscode.Uri) {
+        if (!openTabs(uri).length) {
+            return;
+        }
+        const doc = vscode.workspace.textDocuments.find((d) => !d.isClosed && d.uri.toString() === uri.toString());
+        if (!doc?.isDirty) {
+            return;
+        }
+        const [, bytes] = await tryCatch(Promise.resolve(vscode.workspace.fs.readFile(uri)));
+        const diskText = bytes ? norm(buffer.toString(bytes)) : '';
+
+        const key = `${uri}`;
+        this._locks.add(key);
+        this._undos.get(uri.path)?.clear();
+        const active = vscode.window.activeTextEditor;
+        const same = active?.document.uri.toString() === uri.toString();
+        const [err] = await tryCatch(async () => {
+            if (!same) {
+                await vscode.window.showTextDocument(doc, { preserveFocus: false });
+            }
+            await vscode.commands.executeCommand('workbench.action.files.revert');
+        });
+        if (err || norm(doc.getText()) !== diskText) {
+            const raw = doc.getText();
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(uri, new vscode.Range(doc.positionAt(0), doc.positionAt(raw.length)), diskText);
+            await vscode.workspace.applyEdit(edit);
+        }
+        if (active && !same && !active.document.isClosed) {
+            await vscode.window.showTextDocument(active.document, { preserveFocus: false });
+        }
+        this._locks.delete(key);
     }
 
     // open check — textDocuments is the source of truth. keeps the watcher from
@@ -786,7 +894,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
             const uri = vscode.Uri.joinPath(folderUri, path);
-            this._checkIgnoreUpdated(uri);
+            this._checkIgnoreUpdated(uri, false, content);
             await this._create(uri, type, content);
             await this._reconcile(uri, path, type);
         });
@@ -798,7 +906,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             const uri = vscode.Uri.joinPath(folderUri, path);
             const key = `${uri}`;
             this._opLocks.set(key, (this._opLocks.get(key) ?? 0) + 1);
-            this._checkIgnoreUpdated(uri);
+            this._checkIgnoreUpdated(uri, false, content);
             await tryCatch(this._update(uri, op, content, prev));
             const remaining = (this._opLocks.get(key) ?? 1) - 1;
             if (remaining > 0) {
@@ -828,16 +936,23 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const syncFileApplyCreate = this._events.on('sync:file:apply:create', (path, type, content, done) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             void tryCatch(async () => {
-                this._checkIgnoreUpdated(uri);
+                this._checkIgnoreUpdated(uri, false, content);
                 await this._create(uri, type, content);
                 await this._reconcile(uri, path, type);
+            }).then(([err]) => done(err ?? undefined));
+        });
+        const syncFileApplyOverwrite = this._events.on('sync:file:apply:overwrite', (path, type, content, done) => {
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            void tryCatch(async () => {
+                this._checkIgnoreUpdated(uri, false, content);
+                await this._create(uri, type, content, true);
             }).then(([err]) => done(err ?? undefined));
         });
         const syncFileApplyUpdate = this._events.on('sync:file:apply:update', (path, content, done) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             void tryCatch(async () => {
                 await this._writeMutex.atomic([`${uri}`], async () => {
-                    this._checkIgnoreUpdated(uri);
+                    this._checkIgnoreUpdated(uri, false, content);
                     this._debouncer.cancel(`${uri}`);
                     const h = hash(content);
                     this._echo.set(`${uri}:change`, h);
@@ -889,6 +1004,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._events.off('asset:file:rename', assetFileRename);
             this._events.off('asset:file:delete', assetFileDelete);
             this._events.off('sync:file:apply:create', syncFileApplyCreate);
+            this._events.off('sync:file:apply:overwrite', syncFileApplyOverwrite);
             this._events.off('sync:file:apply:update', syncFileApplyUpdate);
             this._events.off('sync:file:apply:delete', syncFileApplyDelete);
             this._events.off('sync:file:apply:rename', syncFileApplyRename);
@@ -1348,11 +1464,19 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                   uri: vscode.Uri;
                   type: Promise<'file' | 'folder' | undefined>;
               };
-        const queue: DeferOp[] = [];
+        type DeferItem = DeferOp & { gen: number };
+        const queue: DeferItem[] = [];
         let timeout: NodeJS.Timeout | null = null;
+        const onHold = (held: boolean) => {
+            this._watchHeld = held;
+            this._watchGen++;
+            queue.length = 0;
+        };
+        const watchHold = this._events.on('sync:watch:hold', onHold);
+        const current = (gen: number) => gen === this._watchGen && !this._watchHeld;
 
         // can batch create+delete into rename
-        const potentialRename = (op1: DeferOp, op2: DeferOp) => {
+        const potentialRename = (op1: DeferItem, op2: DeferItem) => {
             if (op1.action === 'delete' && op2.action === 'create') {
                 return [op2, op1];
             }
@@ -1364,7 +1488,10 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
         // defer operation to queue
         const defer = (op: DeferOp) => {
-            queue.push(op);
+            if (this._watchHeld) {
+                return;
+            }
+            queue.push({ ...op, gen: this._watchGen });
 
             // if already scheduled, do nothing
             if (timeout) {
@@ -1379,6 +1506,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                     // process batch
                     for (let i = 0; i < batch.length; i++) {
+                        if (!current(batch[i].gen)) {
+                            continue;
+                        }
                         if (i + 1 < batch.length) {
                             const rename = potentialRename(batch[i], batch[i + 1]);
                             if (rename) {
@@ -1404,7 +1534,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                                         this._log.debug(`rename.local ${op2.uri} -> ${op1.uri}`);
                                         if (this._pullPush) {
-                                            this._events.emit('sync:file:rename', path2, path1, type2);
+                                            if (current(op2.gen)) {
+                                                this._events.emit('sync:file:rename', path2, path1, type2);
+                                            }
                                             return;
                                         }
                                         return projectManager.rename(path2, path1);
@@ -1449,7 +1581,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         }
                                         this._log.debug(`change.local (atomic) ${op.uri}`);
                                         if (this._pullPush) {
-                                            this._events.emit('sync:file:update', path);
+                                            if (current(op.gen)) {
+                                                this._events.emit('sync:file:update', path);
+                                            }
                                             return;
                                         }
                                         await projectManager.write(path, content);
@@ -1465,7 +1599,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                                     if (this._pullPush) {
                                         this._log.debug(`create.local ${type} ${op.uri}`);
-                                        this._events.emit('sync:file:create', path, type);
+                                        if (current(op.gen)) {
+                                            this._events.emit('sync:file:create', path, type);
+                                        }
                                         return;
                                     }
 
@@ -1529,7 +1665,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                                     this._log.debug(`change.local ${op.uri}`);
                                     if (this._pullPush) {
-                                        this._events.emit('sync:file:update', path);
+                                        if (current(op.gen)) {
+                                            this._events.emit('sync:file:update', path);
+                                        }
                                         return;
                                     }
                                     await projectManager.write(path, content);
@@ -1555,7 +1693,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
                                     this._log.debug(`delete.local ${type} ${op.uri}`);
                                     if (this._pullPush) {
-                                        this._events.emit('sync:file:delete', path, type);
+                                        if (current(op.gen)) {
+                                            this._events.emit('sync:file:delete', path, type);
+                                        }
                                         return;
                                     }
                                     return projectManager.delete(path, type);
@@ -1649,7 +1789,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
             // pullpush mode: closed-file edits stay local; never submit upstream
             if (this._pullPush) {
-                this._events.emit('sync:file:update', path);
+                if (!this._watchHeld) {
+                    this._events.emit('sync:file:update', path);
+                }
                 return;
             }
 
@@ -1701,6 +1843,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             });
         });
         return () => {
+            this._events.off('sync:watch:hold', watchHold);
             if (timeout) {
                 clearTimeout(timeout);
             }

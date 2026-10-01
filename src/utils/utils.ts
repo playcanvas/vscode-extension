@@ -78,6 +78,21 @@ export const relativePath = (uri: vscode.Uri, folder: vscode.Uri) => {
     return uri.path.substring(folder.path.length + 1);
 };
 
+// textDocuments keeps closed editors around; only a real tab is open
+export const openTabs = (uri: vscode.Uri) => {
+    const key = uri.toString();
+    const tabs: vscode.Tab[] = [];
+    for (const group of vscode.window.tabGroups.all) {
+        for (const tab of group.tabs) {
+            const input = tab.input;
+            if (input instanceof vscode.TabInputText && input.uri.toString() === key) {
+                tabs.push(tab);
+            }
+        }
+    }
+    return tabs;
+};
+
 export const uriStartsWith = (uri: vscode.Uri, folder: vscode.Uri) => {
     return uri.scheme === folder.scheme && uri.path.toLowerCase().startsWith(folder.path.toLowerCase());
 };

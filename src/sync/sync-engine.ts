@@ -10,7 +10,7 @@ import { Linker } from '../utils/linker';
 import { Mutex } from '../utils/mutex';
 import { signal } from '../utils/signal';
 import { norm } from '../utils/text';
-import { fileExists, hash, parsePath, relativePath, tryCatch, withTimeout } from '../utils/utils';
+import { fileExists, hash, openTabs, parsePath, pool, relativePath, tryCatch, withTimeout } from '../utils/utils';
 
 import { BaseStore } from './base-store';
 import { hasConflictMarkers } from './markers';
@@ -19,6 +19,9 @@ import { classify } from './status';
 import type { SyncState } from './status';
 
 const SAVE_TIMEOUT_MS = 30_000;
+const RESET_CONCURRENCY = 8;
+// asset file.hash is an md5 digest, same as hash()
+const CONTENT_HASH = /^[a-f0-9]{32}$/;
 
 type LinkParams = {
     folderUri: vscode.Uri;
@@ -63,6 +66,18 @@ class NativeSyncEngine extends Linker<LinkParams> {
 
     // serializes push/pull so concurrent runs never race on seq/base
     private _mutex = new Mutex<[Error, null] | [null, void]>();
+
+    // bumped around a hard reset so in-flight status refreshes can't land stale
+    private _epoch = 0;
+
+    // set for the whole reset, including the failure refresh. local watcher
+    // events in this window are dropped so they can't become a later push
+    private _resetting = false;
+
+    // failure refresh only: a missing file was removed by this attempt
+    // (file/folder swap). don't record that as a local delete — push would
+    // remove the asset for everyone
+    private _resetFailed = false;
 
     private _ignoring = (_uri: vscode.Uri) => false;
 
@@ -221,10 +236,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private _localCreate(path: string, type: 'file' | 'folder') {
+        if (this._resetting) {
+            return;
+        }
         this._setLocal({ action: 'added', path, type });
     }
 
     private _localDelete(path: string, type: 'file' | 'folder') {
+        if (this._resetting) {
+            return;
+        }
         const op = this._local.get(path);
         if (op?.action === 'added') {
             this._local.delete(path);
@@ -241,6 +262,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private _localRename(from: string, path: string, type: 'file' | 'folder') {
+        if (this._resetting) {
+            return;
+        }
         const op = this._local.get(from);
         if (op?.action === 'added') {
             this._local.delete(from);
@@ -427,7 +451,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         return '';
     }
 
-    private async _refreshLocalOnly(folderUri: vscode.Uri, base = '') {
+    private async _refreshLocalOnly(folderUri: vscode.Uri, base = '', epoch = this._epoch) {
         const pm = this._projectManager;
         if (!pm) {
             return;
@@ -437,6 +461,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
             Array.from(this._remote.values()).flatMap((op) => (op.action === 'renamed' ? [op.from] : []))
         );
         const [, entries] = await tryCatch(async () => vscode.workspace.fs.readDirectory(dir));
+        if (epoch !== this._epoch) {
+            return;
+        }
         for (const [name, type] of entries ?? []) {
             const path = base ? `${base}/${name}` : name;
             if (renamed.has(path)) {
@@ -451,6 +478,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 continue;
             }
             const text = kind === 'file' ? await this._readDisk(folderUri, path) : undefined;
+            if (epoch !== this._epoch) {
+                return;
+            }
             const tracked = pm.files.has(path);
             if (!tracked && !this._remote.has(path) && !this._local.has(path)) {
                 this._setLocal({
@@ -461,7 +491,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 });
             }
             if (kind === 'folder') {
-                await this._refreshLocalOnly(folderUri, path);
+                await this._refreshLocalOnly(folderUri, path, epoch);
+                if (epoch !== this._epoch) {
+                    return;
+                }
             }
         }
     }
@@ -471,6 +504,15 @@ class NativeSyncEngine extends Linker<LinkParams> {
             const done = (err?: Error) => (err ? reject(err) : resolve());
             if (!this._events.emit('sync:file:apply:create', path, type, content, done)) {
                 resolve();
+            }
+        });
+    }
+
+    private _applyOverwrite(path: string, type: 'file' | 'folder', content: Uint8Array) {
+        return new Promise<void>((resolve, reject) => {
+            const done = (err?: Error) => (err ? reject(err) : resolve());
+            if (!this._events.emit('sync:file:apply:overwrite', path, type, content, done)) {
+                reject(fail`disk overwrite handler missing`);
             }
         });
     }
@@ -605,6 +647,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private async _refresh(path: string) {
+        const epoch = this._epoch;
         const folderUri = this._folderUri;
         const pm = this._projectManager;
         if (!folderUri || !pm) {
@@ -632,11 +675,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
 
         const working = await this._readDisk(folderUri, path);
+        if (epoch !== this._epoch) {
+            return;
+        }
         if (working === undefined) {
             if (this._localOpTouches(path)) {
                 return;
             }
-            if (this._base.get(file.uniqueId)) {
+            // failed reset may have removed the file itself. a local delete
+            // here is not a user edit — pull restores it, push must not
+            if (this._base.get(file.uniqueId) && !this._resetFailed) {
                 this._setLocal({ action: 'deleted', path, type: 'file' });
             } else {
                 this._setRemote({ action: 'created', path, type: 'file', content: new Uint8Array() });
@@ -648,8 +696,16 @@ class NativeSyncEngine extends Linker<LinkParams> {
             const savedHash = pm.savedHash?.(path);
             let base = this._base.get(file.uniqueId);
             if (!base) {
-                // first sight: adopt current disk as the in-sync baseline (fetch-free);
-                // a later local edit makes ahead true, so pull can't blind-clobber
+                // adopt disk only when it already matches the saved snapshot.
+                // a mismatch (another branch's bytes, or never-baselined
+                // divergence) stays unknown so status is behind and pull can
+                // fast-forward — pairing the remote hash with these bytes
+                // would mark the file clean. savedHash is the asset file
+                // digest; anything else is not a content check
+                if (savedHash !== undefined && CONTENT_HASH.test(savedHash) && hash(working) !== savedHash) {
+                    this._status.set(path, 'behind');
+                    return;
+                }
                 this._base.set(file.uniqueId, working, savedHash);
                 base = this._base.get(file.uniqueId);
             }
@@ -696,6 +752,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private async _refreshAll() {
+        const epoch = this._epoch;
         const pm = this._projectManager;
         const folderUri = this._folderUri;
         if (!pm || !folderUri) {
@@ -711,14 +768,23 @@ class NativeSyncEngine extends Linker<LinkParams> {
         for (const [path, file] of pm.files) {
             if (file.type !== 'folder') {
                 await this._refresh(path);
+                if (epoch !== this._epoch) {
+                    return;
+                }
             }
         }
-        await this._refreshLocalOnly(folderUri);
+        await this._refreshLocalOnly(folderUri, '', epoch);
+        if (epoch !== this._epoch) {
+            return;
+        }
         this.changed.set((v) => v + 1);
     }
 
     // recompute status — a single file (cheap, for live edits) or all
     async refresh(path?: string) {
+        if (this._resetting) {
+            return;
+        }
         if (path === undefined) {
             await this._refreshAll();
             return;
@@ -997,6 +1063,185 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
         await this._applyUpdate(path, base);
+    }
+
+    // discard every local change and make the working tree an exact copy of remote.
+    // destructive. ignored paths and .pc/ stay put.
+    async resetToRemote() {
+        return this._locked(() => this._resetToRemote());
+    }
+
+    private async _resetToRemote() {
+        const folderUri = this._folderUri;
+        const pm = this._projectManager;
+        if (!folderUri || !pm) {
+            throw fail`project is not linked`;
+        }
+
+        // hold watcher events and in-flight refreshes for the whole attempt.
+        // local/remote maps stay until the writes succeed — a failed fetch must
+        // not drop a pending remote delete
+        this._resetting = true;
+        this._epoch++;
+        this._events.emit('sync:watch:hold', true);
+        // paths already brought in line with remote. on failure their local
+        // deletes have to go — the bytes are back, and push would remove the asset
+        const written: string[] = [];
+        try {
+            const ignoreFile = pm.files.get(Disk.IGNORE_FILE);
+            let ignoreText = '';
+            if (ignoreFile?.type === 'file') {
+                ignoreText = norm(ignoreFile.doc.text);
+            } else if (ignoreFile?.type === 'stub') {
+                const saved = await pm.savedContent(Disk.IGNORE_FILE);
+                if (saved === undefined) {
+                    throw fail`missing remote content ${Disk.IGNORE_FILE}`;
+                }
+                ignoreText = saved;
+            }
+            // rebuild before the extra-file scan, from the remote rules rather
+            // than the matcher captured at link time
+            this._ignoring = Disk.ignoreMatcher(ignoreText, folderUri);
+            const ignored = (path: string) => this._ignoring(vscode.Uri.joinPath(folderUri, path));
+            const remember = (uniqueId: number, path: string, text: string) => {
+                this._base.set(uniqueId, text, pm.savedHash(path));
+                this._base.deleteConflict(uniqueId);
+                const entry = this._base.get(uniqueId);
+                if (entry) {
+                    entry.path = path;
+                }
+                written.push(path);
+            };
+            if (ignoreFile && ignoreFile.type !== 'folder') {
+                await this._applyOverwrite(Disk.IGNORE_FILE, 'file', buffer.from(ignoreText));
+                remember(ignoreFile.uniqueId, Disk.IGNORE_FILE, ignoreText);
+            }
+
+            const entries = Array.from(pm.files.entries())
+                .filter(([path]) => path && path !== Disk.IGNORE_FILE && !ignored(path))
+                .sort((a, b) => a[0].split('/').length - b[0].split('/').length);
+            for (const [path, file] of entries) {
+                if (file.type === 'folder') {
+                    await this._applyOverwrite(path, 'folder', new Uint8Array());
+                    written.push(path);
+                }
+            }
+            const files = entries.filter(([, file]) => file.type !== 'folder');
+            const errors: Error[] = [];
+            await pool(files, RESET_CONCURRENCY, async ([path, file]) => {
+                const [err] = await tryCatch(async () => {
+                    // already on the saved snapshot — skip the download
+                    if (file.type === 'stub') {
+                        const savedHash = pm.savedHash(path);
+                        const base = this._base.get(file.uniqueId);
+                        if (base && savedHash !== undefined && savedHash === base.savedHash) {
+                            const working = await this._readDisk(folderUri, path);
+                            if (working !== undefined && hash(working) === base.hash) {
+                                this._base.deleteConflict(file.uniqueId);
+                                base.path = path;
+                                written.push(path);
+                                return;
+                            }
+                        }
+                    }
+                    const text = file.type === 'file' ? norm(file.doc.text) : await pm.savedContent(path);
+                    if (text === undefined) {
+                        throw fail`missing remote content ${path}`;
+                    }
+                    await this._applyOverwrite(path, 'file', buffer.from(text));
+                    remember(file.uniqueId, path, text);
+                });
+                if (err) {
+                    errors.push(err);
+                }
+            });
+            if (errors[0]) {
+                throw errors[0];
+            }
+
+            const extras = (await this._diskPaths(folderUri))
+                .filter((entry) => !pm.files.has(entry.path))
+                .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
+            for (const { path, kind } of extras) {
+                if (kind === 'folder') {
+                    const [, kids] = await tryCatch(async () =>
+                        vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(folderUri, path))
+                    );
+                    if ((kids ?? []).length > 0) {
+                        continue;
+                    }
+                } else {
+                    await this._closeEditor(path);
+                }
+                await this._applyDelete(path);
+            }
+
+            this._local.clear();
+            this._remote.clear();
+            this._status.clear();
+            this._epoch++;
+            await this._refreshAll();
+            await this._base.flush();
+        } catch (err) {
+            this._dropLocal(...written);
+            this._resetFailed = true;
+            this._epoch++;
+            await tryCatch(() => this._refreshAll());
+            throw err;
+        } finally {
+            this._resetFailed = false;
+            this._events.emit('sync:watch:hold', false);
+            this._resetting = false;
+        }
+    }
+
+    private async _diskPaths(folderUri: vscode.Uri, base = ''): Promise<{ path: string; kind: 'file' | 'folder' }[]> {
+        const dir = base ? vscode.Uri.joinPath(folderUri, base) : folderUri;
+        const [, entries] = await tryCatch(async () => vscode.workspace.fs.readDirectory(dir));
+        const paths: { path: string; kind: 'file' | 'folder' }[] = [];
+        for (const [name, type] of entries ?? []) {
+            const path = base ? `${base}/${name}` : name;
+            const uri = vscode.Uri.joinPath(folderUri, path);
+            if (this._ignoring(uri) || path === Disk.TYPE_DIR || path.startsWith(`${Disk.TYPE_DIR}/`)) {
+                continue;
+            }
+            const kind = type === vscode.FileType.Directory ? 'folder' : type === vscode.FileType.File ? 'file' : '';
+            if (!kind) {
+                continue;
+            }
+            paths.push({ path, kind });
+            if (kind === 'folder') {
+                paths.push(...(await this._diskPaths(folderUri, path)));
+            }
+        }
+        return paths;
+    }
+
+    private async _closeEditor(path: string) {
+        const folderUri = this._folderUri;
+        if (!folderUri) {
+            return;
+        }
+        const uri = vscode.Uri.joinPath(folderUri, path);
+        const tabs = openTabs(uri);
+        if (!tabs.length) {
+            return;
+        }
+        const doc = vscode.workspace.textDocuments.find((d) => !d.isClosed && d.uri.toString() === uri.toString());
+        if (doc?.isDirty) {
+            const active = vscode.window.activeTextEditor;
+            const same = active?.document.uri.toString() === uri.toString();
+            await tryCatch(async () => {
+                if (!same) {
+                    await vscode.window.showTextDocument(doc, { preserveFocus: false });
+                }
+                await vscode.commands.executeCommand('workbench.action.files.revert');
+            });
+            if (active && !same && !active.document.isClosed) {
+                await vscode.window.showTextDocument(active.document, { preserveFocus: false });
+            }
+        }
+        await vscode.window.tabGroups.close(tabs);
     }
 
     async link({ folderUri, projectManager, projectId, branchId }: LinkParams) {

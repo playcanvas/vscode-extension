@@ -75,6 +75,14 @@ export const activate = async (context: vscode.ExtensionContext) => {
             }
 
             const confirmation = 'Reload Now';
+            // this checkbox is read live on the next branch switch
+            if (
+                e.affectsConfiguration(`${NAME}.resetOnBranchSwitch`) &&
+                !e.affectsConfiguration(`${NAME}.rootDir`) &&
+                !e.affectsConfiguration(`${NAME}.syncMode`)
+            ) {
+                return;
+            }
             const selection = await vscode.window.showInformationMessage(
                 'PlayCanvas configuration changed. Please reload the window to apply changes.',
                 confirmation
@@ -346,6 +354,22 @@ export const activate = async (context: vscode.ExtensionContext) => {
                     void vscode.window.showInformationMessage('PlayCanvas: discarded all local changes');
                 }
             }),
+            vscode.commands.registerCommand(`${NAME}.resetToRemote`, async () => {
+                const choice = await vscode.window.showWarningMessage(
+                    'Replace every local file with the remote version? Local changes will be discarded.',
+                    { modal: true },
+                    'Reset'
+                );
+                if (choice !== 'Reset') {
+                    return;
+                }
+                const [err] = await tryCatch(() => nativeSync.resetToRemote());
+                if (err) {
+                    void vscode.window.showWarningMessage(`PlayCanvas Reset: ${err.message}`);
+                } else {
+                    void vscode.window.showInformationMessage('PlayCanvas: local files match the remote branch');
+                }
+            }),
             vscode.commands.registerCommand(
                 `${NAME}.resolveMerge`,
                 async (arg?: vscode.Uri | vscode.SourceControlResourceState) => {
@@ -444,7 +468,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             });
             await disk.link({ ...diskState, types });
             if (pullPush && nativeSyncState) {
-                await nativeSync.link(nativeSyncState);
+                await nativeSync.link({ ...nativeSyncState, branchId: projectState.branchId });
             }
             if (pullPush && scmState) {
                 await scm.link(scmState);
@@ -592,22 +616,34 @@ export const activate = async (context: vscode.ExtensionContext) => {
             metrics.increment('branch.switch');
             const branchSwitchDone = await simpleNotification(`Switching to branch ${name}...`);
 
-            // reload project
-            const [err1, reloaded] = await tryCatch(reload(projectManager, branch_id));
-            branchSwitchDone();
-            if (err1) {
-                throw err1;
-            }
-            if (!reloaded) {
-                return;
-            }
+            try {
+                // reload project
+                const [err1, reloaded] = await tryCatch(reload(projectManager, branch_id));
+                if (err1) {
+                    throw err1;
+                }
+                if (!reloaded) {
+                    return;
+                }
 
-            // update cache
-            cache.set(project_id, { branchId: branch_id, projectManager });
+                // update cache
+                cache.set(project_id, { branchId: branch_id, projectManager });
 
-            // update branch status bar item
-            branchStatusBarItem.text = `$(git-branch) ${name}`;
-            branchStatusBarItem.show();
+                // update branch status bar item
+                branchStatusBarItem.text = `$(git-branch) ${name}`;
+                branchStatusBarItem.show();
+
+                // pullpush opt-in: drop local edits and mirror the new branch exactly.
+                // report separately so a failed reset is not tagged as a messenger error
+                if (pullPush && vscode.workspace.getConfiguration(NAME).get<boolean>('resetOnBranchSwitch')) {
+                    const [resetErr] = await tryCatch(() => nativeSync.resetToRemote());
+                    if (resetErr) {
+                        failure.set(() => ({ err: resetErr, source: 'native-sync' }));
+                    }
+                }
+            } finally {
+                branchSwitchDone();
+            }
         });
         if (err) {
             failure.set(() => ({ err, source: 'messenger' }));
