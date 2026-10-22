@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as vscode from 'vscode';
 
 import type { Auth } from './auth';
-import { NAME, VERSION, ENV } from './config';
+import { ALREADY_CHECKED_OUT, NAME, VERSION, ENV } from './config';
 import type { Rest } from './connections/rest';
 import { UriHandler } from './handlers/uri-handler';
 import { Log } from './log';
@@ -167,7 +167,9 @@ export const registerProjectCommands = ({
     metrics: Metrics;
     state: State;
     cache: Cache;
-    reload: ReturnType<typeof signal<{ projectManager: ProjectManager } | undefined>>;
+    reload: ReturnType<
+        typeof signal<{ projectManager: ProjectManager; branch?: { id: string; name: string } } | undefined>
+    >;
     failure: ReturnType<typeof signal<{ err: Error; source?: string } | undefined>>;
 }) => {
     context.subscriptions.push(
@@ -248,7 +250,15 @@ export const registerProjectCommands = ({
                     return;
                 }
 
-                await rest.branchCheckout(branch.id);
+                const [err1] = await tryCatch(rest.branchCheckout(branch.id));
+                if (err1 && !ALREADY_CHECKED_OUT.test(err1.message)) {
+                    throw err1;
+                }
+
+                // the server is already on this branch but our copy is stale
+                if (err1) {
+                    reload.set(() => ({ projectManager, branch: { id: branch.id, name: branch.name } }));
+                }
             });
             if (err) {
                 failure.set(() => ({ err, source: 'commands' }));

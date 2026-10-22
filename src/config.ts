@@ -21,6 +21,8 @@ export const RELAY_URL = process.env.RELAY_URL || 'wss://relay.playcanvas.com/re
 export const LATENCY = parseInt(process.env.LATENCY || '0', 10) || 0;
 export const JITTER = parseInt(process.env.JITTER || '0', 10) || 0;
 
+export const ALREADY_CHECKED_OUT = /Branch is already checked out/;
+
 export const SENTRY_DSN = 'https://b1e400a0067c05fe7651dbc6cfe253d1@sentry.sc-prod.net/308';
 
 if (DEBUG) {

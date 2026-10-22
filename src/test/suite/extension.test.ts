@@ -681,6 +681,35 @@ suite('extension', () => {
         assert.deepStrictEqual(call.args, [other.id], 'branchCheckout args should match');
     });
 
+    test(`command ${NAME}.switchBranch follows a server that already moved branch`, async () => {
+        await markAllSaved();
+
+        // the uri handler relinks last, so its link marks a finished reload
+        const linked = sinon.spy(uriHandler, 'link');
+        const onBranch = async (id: string) => {
+            const count = linked.callCount;
+            const start = Date.now();
+            while (linked.callCount === count) {
+                assert.ok(Date.now() - start < RETRY_TIMEOUT, `reload onto ${id} timed out`);
+                await new Promise((r) => setTimeout(r, 25));
+            }
+            await linked.lastCall.returnValue;
+            assert.strictEqual(rest.projectAssets.lastCall?.args[1], id, `assets should load from ${id}`);
+            await waitForIdle(`reload onto ${id}`);
+        };
+        const stale = () => new Error('HTTP 400 Bad Request: {"error":"Branch is already checked out"}');
+
+        rest.failNext('branchCheckout', stale());
+        await assertResolves(vscode.commands.executeCommand(`${NAME}.switchBranch`), `${NAME}.switchBranch`);
+        await onBranch('other');
+
+        // back to main the same way so later tests keep the main branch
+        rest.failNext('branchCheckout', stale());
+        await assertResolves(vscode.commands.executeCommand(`${NAME}.switchBranch`), `${NAME}.switchBranch`);
+        await onBranch('main');
+        linked.restore();
+    });
+
     test(`command ${NAME}.showPathCollisions`, async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;

@@ -339,6 +339,21 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
         this._status.delete(from);
+
+        // never pulled, so nothing on disk to move: carry the pending creates along
+        const pending = this._remote.get(from);
+        if (pending?.action === 'created' && !pending.conflicted && !(await this._exists(from))) {
+            for (const op of Array.from(this._remote.values())) {
+                if (op.action !== 'created' || (op.path !== from && !op.path.startsWith(`${from}/`))) {
+                    continue;
+                }
+                const next = path + op.path.slice(from.length);
+                this._remote.delete(op.path);
+                this._status.delete(op.path);
+                this._setRemote({ ...op, path: next }, this._localTouches(next));
+            }
+            return;
+        }
         const op = { action: 'renamed' as const, from, path };
         const conflicted = this._localOpTouches(from) || this._localTouches(path);
         this._setRemote(op, conflicted);
@@ -1196,6 +1211,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
                     this._base.pending = undefined;
                 }
             } else if (pending.local === undefined && from && !path) {
+                this._base.pending = undefined;
+            } else if (pending.local === undefined && !path) {
+                // remote rename with neither path on disk: follow the server's path
+                this._base.rename(pending.from, pending.path);
                 this._base.pending = undefined;
             } else {
                 throw fail`cannot recover interrupted rename ${pending.from} to ${pending.path}`;

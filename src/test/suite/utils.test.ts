@@ -1345,6 +1345,47 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('b.js'), 'clean');
     });
 
+    test('pull - remote create then rename of an unpulled folder lands at the new path', async () => {
+        const events = new EventEmitter<EventMap>();
+        const files = new Map<string, unknown>();
+        const pm = { files } as unknown as ProjectManager;
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+
+        files.set('folder', { type: 'folder', uniqueId: 10 });
+        events.emit('asset:file:create', 'folder', 'folder', new Uint8Array());
+        files.delete('folder');
+        files.set('characters', { type: 'folder', uniqueId: 10 });
+        events.emit('asset:file:rename', 'folder', 'characters');
+        await e.refresh();
+        assert.strictEqual(e.status('folder'), 'clean');
+        assert.strictEqual(e.status('characters'), 'behind');
+
+        events.on('sync:file:apply:rename', (_from, _to, done) => done(new Error('rename should not run')));
+        events.on('sync:file:apply:create', async (path, _type, _content, done) => {
+            await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(work, path));
+            done();
+        });
+        await e.pull();
+        assert.strictEqual(await exists('folder'), false);
+        assert.strictEqual(await exists('characters'), true);
+        assert.strictEqual(e.status('characters'), 'clean');
+    });
+
+    test('link clears an interrupted remote rename when neither path is on disk', async () => {
+        const store = new BaseStore({ storageUri: storage });
+        await store.load(1, 'main', hash(work.toString()));
+        store.pending = { from: 'folder', path: 'characters' };
+        await store.flush();
+        const events = new EventEmitter<EventMap>();
+        const pm = { files: new Map() } as unknown as ProjectManager;
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        const persisted = new BaseStore({ storageUri: storage });
+        await persisted.load(1, 'main', hash(work.toString()));
+        assert.strictEqual(persisted.pending, undefined);
+    });
+
     test('pull - applies remote rename over local edit as modified', async () => {
         await writeFile('a.js', 'x\n');
         const events = new EventEmitter<EventMap>();
