@@ -4079,4 +4079,61 @@ suite('rename recovery', () => {
             'original\n'
         );
     });
+
+    test('push of a closed file records its new saved hash', async () => {
+        const path = source.name;
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(work, path), buffer.from('edited\n'));
+        await engine.refresh(path);
+        assert.strictEqual(engine.status(path), 'modified');
+
+        // guardSandbox's emit recorder is gone after the extension suite, so listen directly
+        const released = new Deferred<void>();
+        const onRelease = events.on('asset:file:unsubscribed', (p) => {
+            if (p === path) {
+                released.resolve();
+            }
+        });
+        await engine.push();
+        const [err] = await tryCatch(withTimeout(released.promise, DEFAULT_TIMEOUT, 'push release'));
+        events.off('asset:file:unsubscribed', onRelease);
+        assert.ifError(err);
+        await engine.refresh(path);
+        assert.strictEqual(documents.get(source.uniqueId), 'edited\n');
+        assert.strictEqual(engine.status(path), 'clean', 'a pushed file must not read as behind');
+    });
+
+    test('closed-file disk edit survives the subscribe its upload triggers', async () => {
+        mocks.stub(vscode.commands, 'registerCommand').returns(new vscode.Disposable(() => undefined));
+        disk = new Disk({ events });
+        await disk.link({ folderUri: work, projectManager: pm, types: typeFiles });
+        const uri = vscode.Uri.joinPath(work, source.name);
+        const subscribed = new Deferred<void>();
+        const onSubscribed = events.on('asset:file:subscribed', (p) => {
+            if (p === source.name) {
+                subscribed.resolve();
+            }
+        });
+        // linux reports watcher events late after link; wait until one arrives
+        const live = new Deferred<void>();
+        const probe = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(work, '.pc/probe'));
+        probe.onDidCreate(() => live.resolve());
+        probe.onDidChange(() => live.resolve());
+        const touch = setInterval(() => {
+            void vscode.workspace.fs.writeFile(vscode.Uri.joinPath(work, '.pc/probe'), buffer.from(`${Date.now()}`));
+        }, 100);
+        const [liveErr] = await tryCatch(withTimeout(live.promise, WATCHER_TIMEOUT * 5, 'watcher live'));
+        clearInterval(touch);
+        probe.dispose();
+        assert.ifError(liveErr);
+
+        await vscode.workspace.fs.writeFile(uri, buffer.from('edited\n'));
+        const [err] = await tryCatch(withTimeout(subscribed.promise, WATCHER_TIMEOUT * 3, 'write subscribe'));
+        events.off('asset:file:subscribed', onSubscribed);
+        assert.ifError(err);
+
+        // outlast the reconcile's 50ms debounced disk write
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        assert.strictEqual(documents.get(source.uniqueId), 'edited\n', 'edit reaches the server');
+        assert.strictEqual(buffer.toString(await vscode.workspace.fs.readFile(uri)), 'edited\n', 'disk keeps the edit');
+    });
 });

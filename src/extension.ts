@@ -444,7 +444,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             });
             await disk.link({ ...diskState, types });
             if (pullPush && nativeSyncState) {
-                await nativeSync.link(nativeSyncState);
+                await nativeSync.link({ ...nativeSyncState, branchId: projectState.branchId });
             }
             if (pullPush && scmState) {
                 await scm.link(scmState);
