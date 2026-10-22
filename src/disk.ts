@@ -602,17 +602,21 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 this._locks.delete(`${uri}`);
             });
         } else {
-            // sync server snapshot to disk for closed files — server is authoritative
-            const buf = buffer.from(norm(content));
+            // sync server state to disk for closed files — server is authoritative.
+            // read the live doc: a stub promoted by pm.write already applied that write
+            const live = () => {
+                const file = this._projectManager?.files.get(path);
+                return norm(file?.type === 'file' ? file.doc.text : content);
+            };
             const key = `${uri}`;
 
             // skip if disk already matches server
             if (await fileExists(uri)) {
                 const existing = await vscode.workspace.fs.readFile(uri);
                 const existingText = norm(buffer.toString(existing));
-                const bufText = norm(buffer.toString(buf));
-                if (existingText === bufText) {
-                    this._diskHash.set(uri.path, hash(bufText));
+                const text = live();
+                if (existingText === text) {
+                    this._diskHash.set(uri.path, hash(text));
                     if (dirty) {
                         this._events.emit('asset:file:dirty', path, true);
                     }
@@ -623,6 +627,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._syncing.add(key);
             void this._debouncer
                 .debounce(key, async () => {
+                    const buf = buffer.from(live());
                     const h = hash(buf);
                     this._echo.set(`${uri}:change`, h);
                     await vscode.workspace.fs.writeFile(uri, buf);
@@ -836,18 +841,26 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const syncFileApplyUpdate = this._events.on('sync:file:apply:update', (path, content, done) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
             void tryCatch(async () => {
+                // the mutex swallows errors — carry a failed write out so the
+                // sync engine doesn't advance its base over unchanged disk
+                let error: Error | null = null;
                 await this._writeMutex.atomic([`${uri}`], async () => {
-                    this._checkIgnoreUpdated(uri);
-                    this._debouncer.cancel(`${uri}`);
-                    const h = hash(content);
-                    this._echo.set(`${uri}:change`, h);
-                    await vscode.workspace.fs.writeFile(uri, content);
-                    this._diskHash.set(uri.path, h);
-                    const [, st] = await tryCatch(Promise.resolve(vscode.workspace.fs.stat(uri)));
-                    if (st) {
-                        this._diskStat.set(uri.path, { mtime: st.mtime, size: st.size });
-                    }
+                    [error] = await tryCatch(async () => {
+                        this._checkIgnoreUpdated(uri);
+                        this._debouncer.cancel(`${uri}`);
+                        const h = hash(content);
+                        this._echo.set(`${uri}:change`, h);
+                        await vscode.workspace.fs.writeFile(uri, content);
+                        this._diskHash.set(uri.path, h);
+                        const [, st] = await tryCatch(Promise.resolve(vscode.workspace.fs.stat(uri)));
+                        if (st) {
+                            this._diskStat.set(uri.path, { mtime: st.mtime, size: st.size });
+                        }
+                    });
                 });
+                if (error) {
+                    throw error;
+                }
             }).then(([err]) => done(err ?? undefined));
         });
         const syncFileApplyDelete = this._events.on('sync:file:apply:delete', (path, done) => {
@@ -1399,6 +1412,13 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                         const type2 = await op2.type;
                                         if (!type2) {
                                             this._log.warn(`skipping rename of ${op2.uri} as type not found`);
+                                            return;
+                                        }
+
+                                        // pullpush: a file and a folder in one batch are not a rename
+                                        if (this._pullPush && type1 !== type2) {
+                                            this._events.emit('sync:file:delete', path2, type2);
+                                            this._events.emit('sync:file:create', path1, type1);
                                             return;
                                         }
 

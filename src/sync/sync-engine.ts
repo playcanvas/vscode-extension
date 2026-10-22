@@ -169,11 +169,21 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return false;
         }
         for (const [p, file] of pm.files) {
-            if (!this._touches(p, path) || file.type !== 'file') {
+            if (!this._touches(p, path) || file.type === 'folder') {
                 continue;
             }
             const base = this._base.get(file.uniqueId);
-            if (base && norm(file.doc.text) !== base.text) {
+            if (!base) {
+                continue;
+            }
+
+            // open docs move by live text, closed files by saved hash (as in _refresh)
+            const saved = pm.savedHash?.(p);
+            const moved =
+                file.type === 'file'
+                    ? norm(file.doc.text) !== base.text
+                    : saved !== undefined && base.savedHash !== undefined && saved !== base.savedHash;
+            if (moved) {
                 return true;
             }
         }
@@ -225,6 +235,21 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private _localDelete(path: string, type: 'file' | 'folder') {
+        // a folder delete covers its children — drop their pending ops so they
+        // don't block or duplicate the single folder delete
+        for (const op of this._local.values()) {
+            if (op.action === 'deleted' && op.type === 'folder' && path.startsWith(`${op.path}/`)) {
+                return;
+            }
+        }
+        if (type === 'folder') {
+            for (const [p, op] of Array.from(this._local)) {
+                if (p.startsWith(`${path}/`) && (op.action !== 'renamed' || op.from.startsWith(`${path}/`))) {
+                    this._local.delete(p);
+                    this._status.delete(p);
+                }
+            }
+        }
         const op = this._local.get(path);
         if (op?.action === 'added') {
             this._local.delete(path);
@@ -241,6 +266,18 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private _localRename(from: string, path: string, type: 'file' | 'folder') {
+        // a folder rename carries its children — rebase their pending ops onto
+        // the new path instead of letting them diverge from the moved folder
+        if (type === 'folder') {
+            for (const [p, op] of Array.from(this._local)) {
+                if (!p.startsWith(`${from}/`)) {
+                    continue;
+                }
+                this._local.delete(p);
+                this._status.delete(p);
+                this._setLocal({ ...op, path: path + p.slice(from.length) });
+            }
+        }
         const op = this._local.get(from);
         if (op?.action === 'added') {
             this._local.delete(from);
@@ -302,6 +339,21 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
         this._status.delete(from);
+
+        // never pulled, so nothing on disk to move: carry the pending creates along
+        const pending = this._remote.get(from);
+        if (pending?.action === 'created' && !pending.conflicted && !(await this._exists(from))) {
+            for (const op of Array.from(this._remote.values())) {
+                if (op.action !== 'created' || (op.path !== from && !op.path.startsWith(`${from}/`))) {
+                    continue;
+                }
+                const next = path + op.path.slice(from.length);
+                this._remote.delete(op.path);
+                this._status.delete(op.path);
+                this._setRemote({ ...op, path: next }, this._localTouches(next));
+            }
+            return;
+        }
         const op = { action: 'renamed' as const, from, path };
         const conflicted = this._localOpTouches(from) || this._localTouches(path);
         this._setRemote(op, conflicted);
@@ -314,9 +366,11 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private async _content(op: RemoteOp & { action: 'created' }) {
-        if (op.type !== 'file' || op.content.length > 0) {
+        if (op.type !== 'file') {
             return op.content;
         }
+
+        // the content captured at create goes stale as collaborators keep editing
         const text = await this.remoteText(op.path);
         return text === undefined ? op.content : buffer.from(text);
     }
@@ -417,14 +471,12 @@ class NativeSyncEngine extends Linker<LinkParams> {
     }
 
     private async _ignoreText(folderUri: vscode.Uri) {
+        // disk holds unpushed local edits; fall back to the doc if unreadable
         const file = this._projectManager?.files.get(Disk.IGNORE_FILE);
-        if (file?.type === 'file') {
-            return file.doc.text;
+        if (!file) {
+            return '';
         }
-        if (file?.type === 'stub') {
-            return (await this._readDisk(folderUri, Disk.IGNORE_FILE)) ?? '';
-        }
-        return '';
+        return (await this._readDisk(folderUri, Disk.IGNORE_FILE)) ?? (file.type === 'file' ? file.doc.text : '');
     }
 
     private async _refreshLocalOnly(folderUri: vscode.Uri, base = '') {
@@ -451,7 +503,13 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 continue;
             }
             const text = kind === 'file' ? await this._readDisk(folderUri, path) : undefined;
-            const tracked = pm.files.has(path);
+
+            // a child of a locally renamed folder is tracked under its old path
+            const folder = Array.from(this._local.values()).find(
+                (op) => op.action === 'renamed' && op.type === 'folder' && path.startsWith(`${op.path}/`)
+            );
+            const origin = folder?.action === 'renamed' ? folder.from + path.slice(folder.path.length) : path;
+            const tracked = pm.files.has(origin);
             if (!tracked && !this._remote.has(path) && !this._local.has(path)) {
                 this._setLocal({
                     action: 'added',
@@ -587,7 +645,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             throw fail`remote has changes — pull before pushing`;
         }
         if (norm(file.doc.text) === working) {
-            this._base.set(file.uniqueId, working);
+            this._base.set(file.uniqueId, working, pm.savedHash?.(path));
             await releaseFresh();
             return;
         }
@@ -601,7 +659,9 @@ class NativeSyncEngine extends Linker<LinkParams> {
             await releaseFresh();
             throw err;
         }
-        this._base.set(file.uniqueId, working);
+
+        // the save ack already moved the saved hash — record it with the text
+        this._base.set(file.uniqueId, working, pm.savedHash?.(path));
     }
 
     private async _refresh(path: string) {
@@ -616,7 +676,17 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._status.set(path, remoteOp.conflicted ? 'conflicted' : 'behind');
             return;
         }
-        const local = this._local.get(path);
+        let local = this._local.get(path);
+
+        // back on disk (restore, undo, or a read that failed once) — no longer a delete
+        if (
+            local?.action === 'deleted' &&
+            local.type === 'file' &&
+            (await this._readDisk(folderUri, path)) !== undefined
+        ) {
+            this._local.delete(path);
+            local = undefined;
+        }
         if (local) {
             if (local.action === 'deleted' && this._remoteChanged(path)) {
                 this._status.set(path, 'conflicted');
@@ -648,9 +718,19 @@ class NativeSyncEngine extends Linker<LinkParams> {
             const savedHash = pm.savedHash?.(path);
             let base = this._base.get(file.uniqueId);
             if (!base) {
-                // first sight: adopt current disk as the in-sync baseline (fetch-free);
-                // a later local edit makes ahead true, so pull can't blind-clobber
-                this._base.set(file.uniqueId, working, savedHash);
+                // first sight: disk is the in-sync baseline only when it matches the
+                // saved hash; otherwise base on the saved content so the divergence
+                // shows as a local change instead of passing for synced
+                let text = working;
+                if (savedHash !== undefined && hash(working) !== savedHash) {
+                    const [err, saved] = await tryCatch(async () => pm.savedContent?.(path));
+                    if (err) {
+                        this._log.warn(`first-sight fetch failed for ${path}: ${err.message}`);
+                    } else if (saved !== undefined) {
+                        text = saved;
+                    }
+                }
+                this._base.set(file.uniqueId, text, savedHash);
                 base = this._base.get(file.uniqueId);
             }
             if (!base) {
@@ -701,6 +781,19 @@ class NativeSyncEngine extends Linker<LinkParams> {
         if (!pm || !folderUri) {
             return;
         }
+
+        // .pcignore can change after link
+        this._ignoring = Disk.ignoreMatcher(await this._ignoreText(folderUri), folderUri);
+
+        // forget adds whose file is gone (the watcher drops untracked deletes) or now ignored
+        for (const op of Array.from(this._local.values())) {
+            if (
+                op.action === 'added' &&
+                (this._ignoring(vscode.Uri.joinPath(folderUri, op.path)) || !(await this._exists(op.path)))
+            ) {
+                this._local.delete(op.path);
+            }
+        }
         this._status.clear();
         for (const op of this._local.values()) {
             this._status.set(op.path, op.action);
@@ -743,6 +836,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         await tryCatch(async () => pm.unsubscribe(path));
     }
 
+    // pull/push work on disk — save open edits first so they are neither skipped nor clobbered
     async pull() {
         return this._locked(() => this._pull());
     }
@@ -820,8 +914,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 continue;
             }
 
-            // remote unchanged since base -> nothing to pull
+            // remote unchanged since base -> nothing to pull; still record the
+            // current saved hash so a stale one can't keep the file behind
             if (remote === base.text) {
+                this._base.set(f.uniqueId, remote, savedHash);
                 continue;
             }
 
@@ -860,31 +956,100 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
         }
 
-        const ops = Array.from(this._local.values());
-        const added = ops
-            .filter((op): op is LocalOp & { action: 'added' } => op.action === 'added')
-            .sort((a, b) => a.path.split('/').length - b.path.split('/').length);
-        const renamed = ops.filter((op): op is LocalOp & { action: 'renamed' } => op.action === 'renamed');
-        const deleted = ops
-            .filter((op): op is LocalOp & { action: 'deleted' } => op.action === 'deleted')
-            .sort((a, b) => b.path.split('/').length - a.path.split('/').length);
+        const depth = (path: string) => path.split('/').length;
+        const create = async (op: LocalOp & { action: 'added' }) => {
+            if (pm.files.has(op.path)) {
+                this._local.delete(op.path);
+                return;
+            }
+            const text = op.type === 'file' ? await this._readDisk(folderUri, op.path) : undefined;
 
-        for (const op of renamed) {
+            // gone (or unreadable) since the refresh — never upload an empty stand-in
+            if (op.type === 'file' && text === undefined) {
+                this._local.delete(op.path);
+                return;
+            }
+            const content = text === undefined ? undefined : buffer.from(text);
+            const key = `create:${op.type}:${op.path}`;
+            this._echoes.add(key);
+            const [err] = await tryCatch(() => pm.create(op.path, op.type, content));
+            this._echoes.delete(key);
+            if (err) {
+                throw err;
+            }
+            this._local.delete(op.path);
+        };
+
+        // pm.rename moves into an existing folder — create pending new ancestors first
+        const ensureParent = async (path: string) => {
+            const [parent] = parsePath(path);
+            if (!parent || pm.files.has(parent)) {
+                return;
+            }
+            await ensureParent(parent);
+            const op = this._local.get(parent);
+            if (op?.action === 'added' && op.type === 'folder') {
+                await create(op);
+            }
+        };
+
+        // a single pm.rename either renames in place or moves (keeping the name),
+        // so a rename+move takes two steps through a free intermediate path
+        const steps = (from: string, path: string) => {
+            const [fromParent, fromName] = parsePath(from);
+            const [parent, name] = parsePath(path);
+            if (fromParent === parent || fromName === name) {
+                return [[from, path]];
+            }
+            const moved = parent ? `${parent}/${fromName}` : fromName;
+            if (!pm.files.has(moved)) {
+                return [
+                    [from, moved],
+                    [moved, path]
+                ];
+            }
+            const renamed = fromParent ? `${fromParent}/${name}` : name;
+            if (!pm.files.has(renamed)) {
+                return [
+                    [from, renamed],
+                    [renamed, path]
+                ];
+            }
+            throw fail`cannot rename ${from} to ${path} — both intermediate paths are taken`;
+        };
+
+        // shallowest first so a folder rename lands before renames into it
+        const renamed = Array.from(this._local.values())
+            .filter((op): op is LocalOp & { action: 'renamed' } => op.action === 'renamed')
+            .sort((a, b) => depth(a.path) - depth(b.path));
+        const done: [string, string][] = [];
+        for (const pending of renamed) {
+            let from = pending.from;
+            for (const [a, b] of done) {
+                if (from.startsWith(`${a}/`)) {
+                    from = b + from.slice(a.length);
+                }
+            }
+            const op = { ...pending, from };
             if (this._remoteChanged(op.from)) {
                 throw fail`remote has changes — pull before pushing`;
             }
-            const key = `rename:${op.from}:${op.path}`;
             const file = pm.files.get(op.from);
             if (!file) {
                 throw fail`file not found ${op.from}`;
             }
+            await ensureParent(op.path);
             this._base.pending = { from: op.from, path: op.path, local: file.uniqueId };
             await this._base.flush();
-            this._echoes.add(key);
-            const [err] = await tryCatch(() => pm.rename(op.from, op.path));
-            this._echoes.delete(key);
-            if (err) {
-                throw err;
+            done.push([op.from, op.path]);
+            for (const [from, path] of steps(op.from, op.path)) {
+                const key = `rename:${from}:${path}`;
+                this._echoes.add(key);
+                const [err] = await tryCatch(() => pm.rename(from, path));
+                this._echoes.delete(key);
+                if (err) {
+                    throw err;
+                }
             }
             this._base.rename(op.from, op.path);
             this._base.pending = undefined;
@@ -896,17 +1061,22 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 await this._pushContent(op.path);
             }
         }
+
+        // a renamed folder's children only get statuses at their new paths now
+        if (renamed.length) {
+            await this._refreshAll();
+        }
+        const ops = Array.from(this._local.values());
+        const added = ops
+            .filter((op): op is LocalOp & { action: 'added' } => op.action === 'added')
+            .sort((a, b) => depth(a.path) - depth(b.path));
+        const deleted = ops
+            .filter((op): op is LocalOp & { action: 'deleted' } => op.action === 'deleted')
+            .sort((a, b) => depth(b.path) - depth(a.path));
         for (const op of added) {
-            const content =
-                op.type === 'file' ? buffer.from((await this._readDisk(folderUri, op.path)) ?? '') : undefined;
-            const key = `create:${op.type}:${op.path}`;
-            this._echoes.add(key);
-            const [err] = await tryCatch(() => pm.create(op.path, op.type, content));
-            this._echoes.delete(key);
-            if (err) {
-                throw err;
+            if (this._local.get(op.path) === op) {
+                await create(op);
             }
-            this._local.delete(op.path);
         }
         for (const op of deleted) {
             if (this._remoteChanged(op.path)) {
@@ -1042,6 +1212,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
                 }
             } else if (pending.local === undefined && from && !path) {
                 this._base.pending = undefined;
+            } else if (pending.local === undefined && !path) {
+                // remote rename with neither path on disk: follow the server's path
+                this._base.rename(pending.from, pending.path);
+                this._base.pending = undefined;
             } else {
                 throw fail`cannot recover interrupted rename ${pending.from} to ${pending.path}`;
             }
@@ -1092,6 +1266,10 @@ class NativeSyncEngine extends Linker<LinkParams> {
             this._events.off('asset:file:hash', onHash);
             this._events.off('asset:file:save', onSave);
         });
+
+        // entries for assets this branch no longer has (deleted, or a uniqueId from
+        // another branch) would replay stale paths and texts
+        this._base.prune(new Set(Array.from(projectManager.files.values(), (file) => file.uniqueId)));
 
         const renamed = new Map<string, string>();
         for (const [path, file] of projectManager.files) {

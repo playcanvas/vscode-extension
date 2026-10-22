@@ -1345,6 +1345,47 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(e.status('b.js'), 'clean');
     });
 
+    test('pull - remote create then rename of an unpulled folder lands at the new path', async () => {
+        const events = new EventEmitter<EventMap>();
+        const files = new Map<string, unknown>();
+        const pm = { files } as unknown as ProjectManager;
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+
+        files.set('folder', { type: 'folder', uniqueId: 10 });
+        events.emit('asset:file:create', 'folder', 'folder', new Uint8Array());
+        files.delete('folder');
+        files.set('characters', { type: 'folder', uniqueId: 10 });
+        events.emit('asset:file:rename', 'folder', 'characters');
+        await e.refresh();
+        assert.strictEqual(e.status('folder'), 'clean');
+        assert.strictEqual(e.status('characters'), 'behind');
+
+        events.on('sync:file:apply:rename', (_from, _to, done) => done(new Error('rename should not run')));
+        events.on('sync:file:apply:create', async (path, _type, _content, done) => {
+            await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(work, path));
+            done();
+        });
+        await e.pull();
+        assert.strictEqual(await exists('folder'), false);
+        assert.strictEqual(await exists('characters'), true);
+        assert.strictEqual(e.status('characters'), 'clean');
+    });
+
+    test('link clears an interrupted remote rename when neither path is on disk', async () => {
+        const store = new BaseStore({ storageUri: storage });
+        await store.load(1, 'main', hash(work.toString()));
+        store.pending = { from: 'folder', path: 'characters' };
+        await store.flush();
+        const events = new EventEmitter<EventMap>();
+        const pm = { files: new Map() } as unknown as ProjectManager;
+        const e = new NativeSyncEngine({ events, storageUri: storage });
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        const persisted = new BaseStore({ storageUri: storage });
+        await persisted.load(1, 'main', hash(work.toString()));
+        assert.strictEqual(persisted.pending, undefined);
+    });
+
     test('pull - applies remote rename over local edit as modified', async () => {
         await writeFile('a.js', 'x\n');
         const events = new EventEmitter<EventMap>();
@@ -2425,5 +2466,311 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(m.base, 'a\nb\nc\n');
         assert.strictEqual(m.local, 'a\nLOCAL\nc\n');
         assert.strictEqual(m.remote, 'a\nREMOTE\nc\n');
+    });
+
+    test('pull refreshes a stale saved hash when the server text matches the base', async () => {
+        const seed = new BaseStore({ storageUri: storage });
+        await seed.load(1, 'main', hash(work.toString()));
+        seed.set(1, 'pushed\n', hash('before\n'));
+        await seed.flush();
+        await writeFile('a.js', 'pushed\nlocal\n');
+        const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            savedHash: () => hash('pushed\n'),
+            savedContent: async () => 'pushed\n'
+        } as unknown as ProjectManager;
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.status('a.js'), 'both');
+        await e.pull();
+        assert.strictEqual(await readFile('a.js'), 'pushed\nlocal\n');
+        assert.strictEqual(e.status('a.js'), 'modified', 'pull must clear a stale saved hash');
+        await e.unlink();
+    });
+
+    test('push skips a local add whose file was removed outside the watcher', async () => {
+        const created: string[] = [];
+        const pm = {
+            files: new Map<string, unknown>(),
+            create: async (p: string) => {
+                created.push(p);
+            }
+        } as unknown as ProjectManager;
+        await writeFile('gone.js', 'x\n');
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.status('gone.js'), 'added');
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'gone.js'), { useTrash: false });
+        await e.push();
+        assert.deepStrictEqual(created, [], 'no asset for a file that is gone');
+        assert.strictEqual(e.status('gone.js'), 'clean');
+        await e.unlink();
+    });
+
+    test('first sight bases a divergent closed file on its saved content', async () => {
+        await writeFile('a.js', 'local\n');
+        const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            savedHash: () => hash('server\n'),
+            savedContent: async () => 'server\n'
+        } as unknown as ProjectManager;
+        const e = engine();
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        assert.strictEqual(e.status('a.js'), 'modified', 'disk that differs from the server is not synced');
+        assert.strictEqual(e.baseText('a.js'), 'server\n');
+        await e.unlink();
+    });
+
+    test('a restored local delete is not pushed as a delete', async () => {
+        const events = new EventEmitter<EventMap>();
+        const deleted: string[] = [];
+        const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            savedHash: () => hash('x\n'),
+            savedContent: async () => 'x\n',
+            delete: async (p: string) => {
+                deleted.push(p);
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', 'x\n');
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'a.js'), { useTrash: false });
+        events.emit('sync:file:delete', 'a.js', 'file');
+        assert.strictEqual(e.status('a.js'), 'deleted');
+        await writeFile('a.js', 'x\n');
+        events.emit('sync:file:update', 'a.js');
+        await e.refresh('a.js');
+        assert.strictEqual(e.status('a.js'), 'clean', 'file is back on disk');
+        await e.push();
+        assert.deepStrictEqual(deleted, [], 'restored file must not be deleted on the server');
+        await e.unlink();
+    });
+
+    test('local delete of a closed file the server saved since base is conflicted', async () => {
+        const events = new EventEmitter<EventMap>();
+        let saved = hash('x\n');
+        const deleted: string[] = [];
+        const files = new Map([['a.js', { type: 'stub', uniqueId: 1, dirty: false }]]);
+        const pm = {
+            files,
+            savedHash: () => saved,
+            savedContent: async () => 'x\nremote\n',
+            delete: async (p: string) => {
+                deleted.push(p);
+            }
+        } as unknown as ProjectManager;
+        await writeFile('a.js', 'x\n');
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        saved = hash('x\nremote\n');
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'a.js'), { useTrash: false });
+        events.emit('sync:file:delete', 'a.js', 'file');
+        await e.refresh('a.js');
+        assert.strictEqual(e.status('a.js'), 'conflicted');
+        const [err] = await tryCatch(() => e.push());
+        assert.ok(err, 'push waits for the conflict to be resolved');
+        assert.deepStrictEqual(deleted, [], 'collaborator save must not be deleted blindly');
+        await e.unlink();
+    });
+
+    // pm that applies folder renames/moves/creates/deletes to its file map like the server
+    const treePm = (files: Map<string, unknown>) => {
+        const calls: string[] = [];
+        const pm = {
+            files,
+            savedHash: () => undefined,
+            rename: async (from: string, to: string) => {
+                const [fromParent, fromName] = from.includes('/')
+                    ? [from.slice(0, from.lastIndexOf('/')), from.slice(from.lastIndexOf('/') + 1)]
+                    : ['', from];
+                const [parent, name] = to.includes('/')
+                    ? [to.slice(0, to.lastIndexOf('/')), to.slice(to.lastIndexOf('/') + 1)]
+                    : ['', to];
+                assert.ok(fromParent === parent || fromName === name, `one step only: ${from} -> ${to}`);
+                assert.ok(!parent || files.has(parent), `destination folder not found ${parent}`);
+                calls.push(`rename ${from} ${to}`);
+                for (const [p, f] of Array.from(files)) {
+                    if (p === from || p.startsWith(`${from}/`)) {
+                        files.delete(p);
+                        files.set(to + p.slice(from.length), f);
+                    }
+                }
+            },
+            create: async (path: string, type: string) => {
+                calls.push(`create ${path}`);
+                files.set(
+                    path,
+                    type === 'folder'
+                        ? { type: 'folder', uniqueId: 100 + calls.length }
+                        : { type: 'file', uniqueId: 100 + calls.length, doc: { text: '' }, dirty: false }
+                );
+            },
+            delete: async (path: string) => {
+                calls.push(`delete ${path}`);
+                for (const p of Array.from(files.keys())) {
+                    if (p === path || p.startsWith(`${path}/`)) {
+                        files.delete(p);
+                    }
+                }
+            }
+        } as unknown as ProjectManager;
+        return { pm, calls };
+    };
+
+    test('push of a renamed folder renames it once, without re-uploading its children', async () => {
+        const events = new EventEmitter<EventMap>();
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(work, 'src'));
+        await writeFile('src/a.js', 'a\n');
+        await writeFile('src/b.js', 'b\n');
+        const { pm, calls } = treePm(
+            new Map<string, unknown>([
+                ['src', { type: 'folder', uniqueId: 1 }],
+                ['src/a.js', { type: 'file', uniqueId: 2, doc: { text: 'a\n' }, dirty: false }],
+                ['src/b.js', { type: 'file', uniqueId: 3, doc: { text: 'b\n' }, dirty: false }]
+            ])
+        );
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'src'), vscode.Uri.joinPath(work, 'lib'));
+        events.emit('sync:file:rename', 'src', 'lib', 'folder');
+        await e.refresh();
+
+        assert.strictEqual(e.status('lib/a.js'), 'clean', 'a moved child is not a new file');
+        await e.push();
+        assert.deepStrictEqual(calls, ['rename src lib']);
+        assert.strictEqual(e.status('lib/a.js'), 'clean');
+        await e.unlink();
+    });
+
+    test('push creates a new folder before moving a file into it', async () => {
+        const events = new EventEmitter<EventMap>();
+        await writeFile('a.js', 'a\n');
+        const { pm, calls } = treePm(
+            new Map<string, unknown>([['a.js', { type: 'file', uniqueId: 1, doc: { text: 'a\n' }, dirty: false }]])
+        );
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(work, 'lib'));
+        events.emit('sync:file:create', 'lib', 'folder');
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'a.js'), vscode.Uri.joinPath(work, 'lib/a.js'));
+        events.emit('sync:file:rename', 'a.js', 'lib/a.js', 'file');
+
+        await e.push();
+        assert.deepStrictEqual(calls, ['create lib', 'rename a.js lib/a.js']);
+        await e.unlink();
+    });
+
+    test('push splits a rename and move into two server steps', async () => {
+        const events = new EventEmitter<EventMap>();
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(work, 'lib'));
+        await writeFile('a.js', 'a\n');
+        const { pm, calls } = treePm(
+            new Map<string, unknown>([
+                ['lib', { type: 'folder', uniqueId: 1 }],
+                ['a.js', { type: 'file', uniqueId: 2, doc: { text: 'a\n' }, dirty: false }]
+            ])
+        );
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.rename(vscode.Uri.joinPath(work, 'a.js'), vscode.Uri.joinPath(work, 'lib/b.js'));
+        events.emit('sync:file:rename', 'a.js', 'lib/b.js', 'file');
+
+        await e.push();
+        assert.deepStrictEqual(calls, ['rename a.js lib/a.js', 'rename lib/a.js lib/b.js']);
+        assert.ok((pm.files as Map<string, unknown>).has('lib/b.js'));
+        await e.unlink();
+    });
+
+    test('a folder delete is one pushable op, not conflicted child deletes', async () => {
+        const events = new EventEmitter<EventMap>();
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(work, 'src'));
+        await writeFile('src/a.js', 'a\n');
+        const { pm, calls } = treePm(
+            new Map<string, unknown>([
+                ['src', { type: 'folder', uniqueId: 1 }],
+                ['src/a.js', { type: 'file', uniqueId: 2, doc: { text: 'a\n' }, dirty: false }]
+            ])
+        );
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await vscode.workspace.fs.delete(vscode.Uri.joinPath(work, 'src'), { recursive: true, useTrash: false });
+        events.emit('sync:file:delete', 'src/a.js', 'file');
+        events.emit('sync:file:delete', 'src', 'folder');
+        await e.refresh();
+
+        assert.notStrictEqual(e.status('src/a.js'), 'conflicted');
+        await e.push();
+        assert.deepStrictEqual(calls, ['delete src']);
+        await e.unlink();
+    });
+
+    test('push respects .pcignore rules added after link', async () => {
+        const events = new EventEmitter<EventMap>();
+        const ignore = { type: 'file', uniqueId: 1, doc: { text: '' }, dirty: false };
+        const { pm, calls } = treePm(new Map<string, unknown>([['.pcignore', ignore]]));
+        await writeFile('.pcignore', '');
+        const e = engine(events);
+        await e.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await writeFile('secret.js', 'x\n');
+        events.emit('sync:file:create', 'secret.js', 'file');
+        await writeFile('.pcignore', 'secret.js\n');
+
+        // the local .pcignore edit is on disk only; the doc is still empty
+        await e.refresh();
+        assert.strictEqual(ignore.doc.text, '');
+        assert.strictEqual(e.statuses().has('secret.js'), false);
+        assert.strictEqual(e.status('.pcignore'), 'modified', 'only the ignore file is pending');
+        assert.deepStrictEqual(calls, []);
+        await e.unlink();
+    });
+
+    test('accept incoming create writes the current remote text', async () => {
+        const events = new EventEmitter<EventMap>();
+        const file = { type: 'file', uniqueId: 10, doc: { text: 'v1\n' }, dirty: false };
+        const files = new Map<string, unknown>();
+        const e = engine(events);
+        await e.link({
+            folderUri: work,
+            projectManager: { files } as unknown as ProjectManager,
+            projectId: 1,
+            branchId: 'main'
+        });
+        await writeFile('new.js', 'local\n');
+        events.emit('sync:file:create', 'new.js', 'file');
+        files.set('new.js', file);
+        events.emit('asset:file:create', 'new.js', 'file', buffer.from('v1\n'));
+        file.doc.text = 'v2\n';
+
+        await e.acceptIncoming(vscode.Uri.joinPath(work, 'new.js'));
+        assert.strictEqual(await readFile('new.js'), 'v2\n', 'collaborator edits since the create are kept');
+        assert.strictEqual(e.status('new.js'), 'clean');
+        await e.unlink();
+    });
+
+    test('link drops record entries for assets the branch no longer has', async () => {
+        await writeFile('a.js', 'x\n');
+        const files = new Map<string, unknown>([
+            ['a.js', { type: 'file', uniqueId: 1, doc: { text: 'x\n' }, dirty: false }]
+        ]);
+        const pm = { files } as unknown as ProjectManager;
+        const first = engine();
+        await first.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await first.unlink();
+
+        // main deleted the asset and the user removed the file; a new asset reuses the path
+        files.set('a.js', { type: 'file', uniqueId: 2, doc: { text: 'y\n' }, dirty: false });
+        await writeFile('a.js', 'y\n');
+        const second = engine();
+        await second.link({ folderUri: work, projectManager: pm, projectId: 1, branchId: 'main' });
+        await second.unlink();
+
+        const store = new BaseStore({ storageUri: storage });
+        await store.load(1, 'main', hash(work.toString()));
+        assert.strictEqual(store.get(1), undefined, 'the deleted asset is gone from the record');
+        assert.strictEqual(store.get(2)?.text, 'y\n');
     });
 });

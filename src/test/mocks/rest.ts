@@ -20,7 +20,7 @@ class MockRest extends Rest {
 
     userProjects: sinon.SinonSpy<[number, string?], Promise<Project[]>>;
 
-    projectAssets: sinon.SinonSpy<[number], Promise<Asset[]>>;
+    projectAssets: sinon.SinonSpy<[number, string, string?], Promise<Asset[]>>;
 
     branchCheckout: sinon.SinonSpy<[string], Promise<Branch>>;
 
@@ -126,7 +126,7 @@ class MockRest extends Rest {
             this._maybeFail('userProjects');
             return [project];
         });
-        this.projectAssets = sandbox.spy(async (_projectId: number) => {
+        this.projectAssets = sandbox.spy(async (_projectId: number, _branchId: string, _view?: string) => {
             this._maybeFail('projectAssets');
             return Array.from(assets.values());
         });

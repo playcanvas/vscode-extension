@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { Auth } from './auth';
 import { registerIdleCommands, registerProjectCommands } from './commands';
 import {
+    ALREADY_CHECKED_OUT,
     DEBUG,
     ENV,
     HOME_URL,
@@ -410,9 +411,12 @@ export const activate = async (context: vscode.ExtensionContext) => {
         }
     });
 
+    // branch the server switched to that a refused reload has not applied yet
+    const pendingBranch = new Map<number, { id: string; name: string }>();
+
     // reload function
     let reloading = false;
-    const reload = async (projectManager: ProjectManager, branchId?: string) => {
+    const reload = async (projectManager: ProjectManager) => {
         if (reloading) {
             void vscode.window.showWarningMessage('Dropping reload request to avoid overlapping reloads');
             return false;
@@ -432,8 +436,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
             const diskState = await disk.unlink();
             const projectState = await projectManager.unlink();
 
-            // update branch id if provided (branch switch flow)
-            projectState.branchId = branchId ?? projectState.branchId;
+            // apply the latest server branch switch, if any
+            const next = pendingBranch.get(projectState.projectId);
+            projectState.branchId = next?.id ?? projectState.branchId;
 
             // relink everything
             await projectManager.link(projectState);
@@ -444,7 +449,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             });
             await disk.link({ ...diskState, types });
             if (pullPush && nativeSyncState) {
-                await nativeSync.link(nativeSyncState);
+                await nativeSync.link({ ...nativeSyncState, branchId: projectState.branchId });
             }
             if (pullPush && scmState) {
                 await scm.link(scmState);
@@ -452,6 +457,16 @@ export const activate = async (context: vscode.ExtensionContext) => {
             await decorationProvider.link(dirtyState);
             await collabProvider.link(collabState);
             await uriHandler.link(uriState);
+
+            cache.set(projectState.projectId, { branchId: projectState.branchId, projectManager });
+            setSentryProject(projectState.projectId, projectState.branchId);
+            if (next) {
+                branchStatusBarItem.text = `$(git-branch) ${next.name}`;
+                branchStatusBarItem.show();
+                if (pendingBranch.get(projectState.projectId) === next) {
+                    pendingBranch.delete(projectState.projectId);
+                }
+            }
         });
         reloading = false;
         if (err) {
@@ -592,22 +607,13 @@ export const activate = async (context: vscode.ExtensionContext) => {
             metrics.increment('branch.switch');
             const branchSwitchDone = await simpleNotification(`Switching to branch ${name}...`);
 
-            // reload project
-            const [err1, reloaded] = await tryCatch(reload(projectManager, branch_id));
+            // kept until a reload applies it, so a refused reload cannot strand the old branch
+            pendingBranch.set(project_id, { id: branch_id, name });
+            const [err1] = await tryCatch(reload(projectManager));
             branchSwitchDone();
             if (err1) {
                 throw err1;
             }
-            if (!reloaded) {
-                return;
-            }
-
-            // update cache
-            cache.set(project_id, { branchId: branch_id, projectManager });
-
-            // update branch status bar item
-            branchStatusBarItem.text = `$(git-branch) ${name}`;
-            branchStatusBarItem.show();
         });
         if (err) {
             failure.set(() => ({ err, source: 'messenger' }));
@@ -622,7 +628,7 @@ export const activate = async (context: vscode.ExtensionContext) => {
             if (!projectManager) {
                 return;
             }
-            if (branchId !== branch_id) {
+            if ((pendingBranch.get(project_id)?.id ?? branchId) !== branch_id) {
                 return;
             }
 
@@ -635,7 +641,17 @@ export const activate = async (context: vscode.ExtensionContext) => {
 
             // checkout main branch
             // NOTE: branch switch flow continues in messenger event above
-            await rest.branchCheckout(main.id);
+            const [err1] = await tryCatch(rest.branchCheckout(main.id));
+            if (!err1) {
+                return;
+            }
+            if (!ALREADY_CHECKED_OUT.test(err1.message)) {
+                throw err1;
+            }
+
+            // server is already on main without a switch event reaching us
+            pendingBranch.set(project_id, { id: main.id, name: main.name });
+            await reload(projectManager);
         });
         if (err) {
             failure.set(() => ({ err, source: 'messenger' }));
@@ -692,7 +708,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
     );
 
     // project commands
-    const commandReload = signal<{ projectManager: ProjectManager } | undefined>(undefined);
+    const commandReload = signal<{ projectManager: ProjectManager; branch?: { id: string; name: string } } | undefined>(
+        undefined
+    );
     registerProjectCommands({
         context,
         rootUri,
@@ -709,6 +727,9 @@ export const activate = async (context: vscode.ExtensionContext) => {
             effect(() => {
                 const req = commandReload.get();
                 if (req) {
+                    if (req.branch && state.projectId) {
+                        pendingBranch.set(state.projectId, req.branch);
+                    }
                     void simpleNotification('Reloading project...').then(async (reloadDone) => {
                         const [err] = await tryCatch(reload(req.projectManager));
                         reloadDone();

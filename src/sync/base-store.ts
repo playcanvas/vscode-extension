@@ -76,6 +76,16 @@ export class BaseStore {
         return this._entries.get(uniqueId);
     }
 
+    // drop entries for assets the server no longer has (deleted, or keyed by
+    // another branch's uniqueId), so stale paths and texts never replay
+    prune(live: Set<number>) {
+        for (const id of Array.from(this._entries.keys())) {
+            if (!live.has(id)) {
+                this._entries.delete(id);
+            }
+        }
+    }
+
     rename(from: string, path: string) {
         for (const entry of this._entries.values()) {
             if (entry.path === from || entry.path?.startsWith(`${from}/`)) {

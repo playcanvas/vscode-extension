@@ -681,6 +681,35 @@ suite('extension', () => {
         assert.deepStrictEqual(call.args, [other.id], 'branchCheckout args should match');
     });
 
+    test(`command ${NAME}.switchBranch follows a server that already moved branch`, async () => {
+        await markAllSaved();
+
+        // the uri handler relinks last, so its link marks a finished reload
+        const linked = sinon.spy(uriHandler, 'link');
+        const onBranch = async (id: string) => {
+            const count = linked.callCount;
+            const start = Date.now();
+            while (linked.callCount === count) {
+                assert.ok(Date.now() - start < RETRY_TIMEOUT, `reload onto ${id} timed out`);
+                await new Promise((r) => setTimeout(r, 25));
+            }
+            await linked.lastCall.returnValue;
+            assert.strictEqual(rest.projectAssets.lastCall?.args[1], id, `assets should load from ${id}`);
+            await waitForIdle(`reload onto ${id}`);
+        };
+        const stale = () => new Error('HTTP 400 Bad Request: {"error":"Branch is already checked out"}');
+
+        rest.failNext('branchCheckout', stale());
+        await assertResolves(vscode.commands.executeCommand(`${NAME}.switchBranch`), `${NAME}.switchBranch`);
+        await onBranch('other');
+
+        // back to main the same way so later tests keep the main branch
+        rest.failNext('branchCheckout', stale());
+        await assertResolves(vscode.commands.executeCommand(`${NAME}.switchBranch`), `${NAME}.switchBranch`);
+        await onBranch('main');
+        linked.restore();
+    });
+
     test(`command ${NAME}.showPathCollisions`, async () => {
         // get folder uri
         const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -4078,5 +4107,62 @@ suite('rename recovery', () => {
             buffer.toString(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(work, source.name))),
             'original\n'
         );
+    });
+
+    test('push of a closed file records its new saved hash', async () => {
+        const path = source.name;
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(work, path), buffer.from('edited\n'));
+        await engine.refresh(path);
+        assert.strictEqual(engine.status(path), 'modified');
+
+        // guardSandbox's emit recorder is gone after the extension suite, so listen directly
+        const released = new Deferred<void>();
+        const onRelease = events.on('asset:file:unsubscribed', (p) => {
+            if (p === path) {
+                released.resolve();
+            }
+        });
+        await engine.push();
+        const [err] = await tryCatch(withTimeout(released.promise, DEFAULT_TIMEOUT, 'push release'));
+        events.off('asset:file:unsubscribed', onRelease);
+        assert.ifError(err);
+        await engine.refresh(path);
+        assert.strictEqual(documents.get(source.uniqueId), 'edited\n');
+        assert.strictEqual(engine.status(path), 'clean', 'a pushed file must not read as behind');
+    });
+
+    test('closed-file disk edit survives the subscribe its upload triggers', async () => {
+        mocks.stub(vscode.commands, 'registerCommand').returns(new vscode.Disposable(() => undefined));
+        disk = new Disk({ events });
+        await disk.link({ folderUri: work, projectManager: pm, types: typeFiles });
+        const uri = vscode.Uri.joinPath(work, source.name);
+        const subscribed = new Deferred<void>();
+        const onSubscribed = events.on('asset:file:subscribed', (p) => {
+            if (p === source.name) {
+                subscribed.resolve();
+            }
+        });
+        // linux reports watcher events late after link; wait until one arrives
+        const live = new Deferred<void>();
+        const probe = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(work, '.pc/probe'));
+        probe.onDidCreate(() => live.resolve());
+        probe.onDidChange(() => live.resolve());
+        const touch = setInterval(() => {
+            void vscode.workspace.fs.writeFile(vscode.Uri.joinPath(work, '.pc/probe'), buffer.from(`${Date.now()}`));
+        }, 100);
+        const [liveErr] = await tryCatch(withTimeout(live.promise, WATCHER_TIMEOUT * 5, 'watcher live'));
+        clearInterval(touch);
+        probe.dispose();
+        assert.ifError(liveErr);
+
+        await vscode.workspace.fs.writeFile(uri, buffer.from('edited\n'));
+        const [err] = await tryCatch(withTimeout(subscribed.promise, WATCHER_TIMEOUT * 3, 'write subscribe'));
+        events.off('asset:file:subscribed', onSubscribed);
+        assert.ifError(err);
+
+        // outlast the reconcile's 50ms debounced disk write
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        assert.strictEqual(documents.get(source.uniqueId), 'edited\n', 'edit reaches the server');
+        assert.strictEqual(buffer.toString(await vscode.workspace.fs.readFile(uri)), 'edited\n', 'disk keeps the edit');
     });
 });
