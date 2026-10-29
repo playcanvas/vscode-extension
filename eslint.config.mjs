@@ -5,7 +5,7 @@ export default defineConfig(
     ...typescriptConfig,
 
     {
-        ignores: ['**/node_modules', '**/out', '.vscode-test*/**', '.vscode-storage/**']
+        ignores: ['**/out', '.vscode-test*/**', '.vscode-storage/**']
     },
 
     // this extension's package.json intentionally omits these fields
