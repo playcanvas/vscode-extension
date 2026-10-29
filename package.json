@@ -245,7 +245,7 @@
         "ws": "^8.18.3"
     },
     "devDependencies": {
-        "@playcanvas/eslint-config": "3.0.0-beta.6",
+        "@playcanvas/eslint-config": "3.0.0-beta.9",
         "@rollup/plugin-commonjs": "29.0.2",
         "@rollup/plugin-json": "6.1.0",
         "@rollup/plugin-node-resolve": "16.0.3",
