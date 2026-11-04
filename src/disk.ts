@@ -87,7 +87,8 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     /**
      * True when the uri is outside the folder or any segment names a protected dir, including
-     * case, trailing dot/space and invisible character variants.
+     * case-folded, compatibility-normalized, trailing dot/space, NTFS stream and invisible character variants.
+     * Upper-casing first applies folds such as U+017F (long s) to s, which macOS treats as equal.
      */
     static isProtected(uri: vscode.Uri, folderUri: vscode.Uri) {
         const path = uri.path.toLowerCase();
@@ -96,13 +97,15 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return path !== folder;
         }
         return relativePath(uri, folderUri)
-            .split('/')
+            .split(/[/\\]/)
             .some((seg) =>
                 Disk.PROTECTED_DIR.test(
                     seg
-                        .normalize('NFC')
+                        .normalize('NFKC')
                         .replace(/[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, '')
+                        .replace(/:.*$/, '')
                         .replace(/[. ]+$/, '')
+                        .toUpperCase()
                         .toLowerCase()
                 )
             );
