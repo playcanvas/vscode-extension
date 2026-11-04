@@ -322,7 +322,7 @@ suite('disk/protected', () => {
     };
 
     // realtime disk with only the remote event handlers wired up
-    const link = async (files: Map<string, unknown>) => {
+    const link = async (files: Map<string, unknown>, docs = false) => {
         const events = new EventEmitter<EventMap>();
         const d = new Disk({ events });
         const quiet = d as unknown as {
@@ -331,7 +331,9 @@ suite('disk/protected', () => {
             _watchUndoRedo: () => () => void;
             _writeTypeFiles: () => Promise<void>;
         };
-        quiet._watchDocument = () => () => undefined;
+        if (!docs) {
+            quiet._watchDocument = () => () => undefined;
+        }
         quiet._watchDisk = () => () => undefined;
         quiet._watchUndoRedo = () => () => undefined;
         quiet._writeTypeFiles = async () => undefined;
@@ -409,6 +411,53 @@ suite('disk/protected', () => {
         assert.strictEqual(await exists('.git/index'), false, 'rename should not move into .git');
         assert.strictEqual(await exists('a.js'), true, 'rename source should stay');
         assert.strictEqual(await exists('b.js'), true, 'normal create should sync');
+        await d.unlink();
+    });
+
+    test('open protected files are not treated as project documents', async () => {
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder, '.git'));
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder, '.git', 'config'), buffer.from('local\n'));
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder, 'a.js'), buffer.from('a\n'));
+        const applied: string[] = [];
+        const file = (path: string, uniqueId: number, text: string) => ({
+            type: 'file',
+            uniqueId,
+            dirty: true,
+            doc: {
+                text,
+                apply(op: ShareDbTextOp) {
+                    applied.push(path);
+                    this.text = ottext.apply(this.text, op) as string;
+                }
+            }
+        });
+        const files = new Map<string, unknown>([
+            ['.git', { type: 'folder', uniqueId: 1 }],
+            ['.git/config', file('.git/config', 2, 'remote\n')],
+            ['a.js', file('a.js', 3, 'server\n')]
+        ]);
+        const { d, settle } = await link(files, true);
+
+        const edit = async (path: string) => {
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder, path));
+            await settle(path);
+            const e = new vscode.WorkspaceEdit();
+            e.insert(doc.uri, doc.positionAt(0), 'x');
+            await vscode.workspace.applyEdit(e);
+            await settle(path);
+            return doc;
+        };
+        const config = await edit('.git/config');
+        const script = await edit('a.js');
+
+        assert.strictEqual(norm(config.getText()), 'xlocal\n', 'local .git/config buffer should not be replaced');
+        assert.strictEqual(norm(script.getText()), 'xserver\n', 'project file should load server text');
+        assert.deepStrictEqual(applied, ['a.js'], 'only the project file should submit edits');
+
+        for (const doc of [config, script]) {
+            await vscode.window.showTextDocument(doc);
+            await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+        }
         await d.unlink();
     });
 });

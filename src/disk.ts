@@ -1147,8 +1147,11 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
     }
 
     private _watchDocument(folderUri: vscode.Uri, projectManager: ProjectManager) {
+        // protected local files are never project documents, even if an asset shares the path
+        const synced = (uri: vscode.Uri) => uriStartsWith(uri, folderUri) && !Disk.isProtected(uri, folderUri);
+
         for (const open of vscode.workspace.textDocuments) {
-            if (!uriStartsWith(open.uri, folderUri)) {
+            if (!synced(open.uri)) {
                 continue;
             }
             const path = relativePath(open.uri, folderUri);
@@ -1160,7 +1163,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._dirty(open);
         }
         const onopen = vscode.workspace.onDidOpenTextDocument((document) => {
-            if (!uriStartsWith(document.uri, folderUri)) {
+            if (!synced(document.uri)) {
                 return;
             }
             const path = relativePath(document.uri, folderUri);
@@ -1189,7 +1192,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         const onchange = vscode.workspace.onDidChangeTextDocument((e) => {
             const { document, contentChanges, reason } = e;
             // check if in folder
-            if (!uriStartsWith(document.uri, folderUri)) {
+            if (!synced(document.uri)) {
                 return;
             }
 
@@ -1315,6 +1318,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 return;
             }
             const { document } = e;
+            if (!synced(document.uri)) {
+                return;
+            }
 
             // check if file is in memory
             const path = relativePath(document.uri, folderUri);
@@ -1349,7 +1355,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             if (this._pullPush) {
                 return;
             }
-            if (!uriStartsWith(document.uri, folderUri)) {
+            if (!synced(document.uri)) {
                 return;
             }
 
