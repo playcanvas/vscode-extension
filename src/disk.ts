@@ -79,14 +79,41 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
 
     static TYPE_DIR = '.pc';
 
-    // injected into the ignore ruleset so editor/vcs metadata dirs are never synced.
+    // editor/vcs metadata dirs are never synced, whatever .pcignore says.
     // .vscode holds workspace settings we write ourselves (files.autoSave, files.eol);
     // .cursor is Cursor's equivalent editor-local config dir.
-    static VCS_IGNORE = '.git\n.hg\n.svn\n.vscode\n.cursor\n';
+    // also matches 8.3 short names (git~1)
+    static PROTECTED_DIR = /^(\.(git|hg|svn|vscode|cursor)|(git|hg|svn|vscode|cursor)~\d+)$/;
+
+    /**
+     * True when the uri is outside the folder or any segment names a protected dir, including
+     * case, trailing dot/space and invisible character variants.
+     */
+    static isProtected(uri: vscode.Uri, folderUri: vscode.Uri) {
+        const path = uri.path.toLowerCase();
+        const folder = folderUri.path.toLowerCase();
+        if (!path.startsWith(`${folder}/`)) {
+            return path !== folder;
+        }
+        return relativePath(uri, folderUri)
+            .split('/')
+            .some((seg) =>
+                Disk.PROTECTED_DIR.test(
+                    seg
+                        .normalize('NFC')
+                        .replace(/[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, '')
+                        .replace(/[. ]+$/, '')
+                        .toLowerCase()
+                )
+            );
+    }
 
     static ignoreMatcher(text: string, folderUri: vscode.Uri) {
-        const ig = ignore().add(`${Disk.VCS_IGNORE}${text}`);
+        const ig = ignore().add(text);
         return (uri: vscode.Uri) => {
+            if (Disk.isProtected(uri, folderUri)) {
+                return true;
+            }
             const path = relativePath(uri, folderUri);
             return !!path && path !== Disk.IGNORE_FILE && ig.ignores(path);
         };
@@ -489,7 +516,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         let error: Error | null = null;
         await this._writeMutex.atomic([`${oldUri}`, `${newUri}`], async () => {
             [error] = await tryCatch(async () => {
-                if (this._ignoring(oldUri)) {
+                if (this._ignoring(oldUri) || (this._folderUri && Disk.isProtected(newUri, this._folderUri))) {
                     return;
                 }
 
@@ -846,6 +873,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                 let error: Error | null = null;
                 await this._writeMutex.atomic([`${uri}`], async () => {
                     [error] = await tryCatch(async () => {
+                        if (Disk.isProtected(uri, folderUri)) {
+                            throw fail`refusing to write protected path ${path}`;
+                        }
                         this._checkIgnoreUpdated(uri);
                         this._debouncer.cancel(`${uri}`);
                         const h = hash(content);
@@ -894,6 +924,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         });
         const assetFileSubscribed = this._events.on('asset:file:subscribed', async (path, content, dirty) => {
             const uri = vscode.Uri.joinPath(folderUri, path);
+            if (Disk.isProtected(uri, folderUri)) {
+                return;
+            }
             await this._subscribed(uri, path, content, dirty);
         });
         return () => {

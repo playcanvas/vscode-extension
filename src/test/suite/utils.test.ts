@@ -19,6 +19,7 @@ import type { ShareDbTextOp } from '../../typings/sharedb';
 import * as buffer from '../../utils/buffer';
 import { Deferred } from '../../utils/deferred';
 import { EventEmitter } from '../../utils/event-emitter';
+import type { Mutex } from '../../utils/mutex';
 import { effect } from '../../utils/signal';
 import { delta, norm } from '../../utils/text';
 import { sanitizeName, projectToName, hash, tryCatch, withTimeout } from '../../utils/utils';
@@ -302,6 +303,107 @@ suite('disk/pullpush', () => {
         assert.strictEqual(freshExists, true);
         assert.strictEqual(existingExists, false);
         assert.strictEqual(localOnlyExists, true);
+    });
+});
+
+suite('disk/protected', () => {
+    const root = vscode.Uri.joinPath(vscode.Uri.file(os.tmpdir()), 'pc-disk-protected-test');
+    const folder = vscode.Uri.joinPath(root, 'Project (1)');
+    const negate = '!.git\n!.git/**\n!.vscode\n!.vscode/**\n!.cursor/**\n!git~1/**\nignored.txt\n';
+    const types = { globals: buffer.from(''), module: buffer.from(''), version: 'test', fallback: false };
+
+    const clean = async () => {
+        await tryCatch(async () => vscode.workspace.fs.delete(root, { recursive: true, useTrash: false }));
+    };
+
+    const exists = async (path: string) => {
+        const [err] = await tryCatch(async () => vscode.workspace.fs.stat(vscode.Uri.joinPath(folder, path)));
+        return !err;
+    };
+
+    // realtime disk with only the remote event handlers wired up
+    const link = async (files: Map<string, unknown>) => {
+        const events = new EventEmitter<EventMap>();
+        const d = new Disk({ events });
+        const quiet = d as unknown as {
+            _watchDocument: () => () => void;
+            _watchDisk: () => () => void;
+            _watchUndoRedo: () => () => void;
+            _writeTypeFiles: () => Promise<void>;
+        };
+        quiet._watchDocument = () => () => undefined;
+        quiet._watchDisk = () => () => undefined;
+        quiet._watchUndoRedo = () => () => undefined;
+        quiet._writeTypeFiles = async () => undefined;
+        const pm = { files, fetchContent: async () => new Uint8Array() } as unknown as ProjectManager;
+        await d.link({ folderUri: folder, projectManager: pm, types });
+
+        // waits for the queued disk write on a path to finish
+        const settle = (...paths: string[]) =>
+            (d as unknown as { _writeMutex: Mutex<void> })._writeMutex.atomic(
+                paths.map((p) => `${vscode.Uri.joinPath(folder, p)}`),
+                async () => undefined
+            );
+        return { d, events, settle };
+    };
+
+    setup(clean);
+
+    suiteTeardown(clean);
+
+    test('project rules cannot re-include protected folders', () => {
+        const ignoring = Disk.ignoreMatcher(negate, folder);
+        const at = (path: string) => ignoring(vscode.Uri.joinPath(folder, path));
+        for (const path of [
+            '.git',
+            '.git/config',
+            '.GIT/config',
+            '.Git/hooks/pre-commit',
+            '.git./config',
+            '.git /config',
+            '.g\u200bit/config',
+            'git~1/config',
+            'sub/.git/config',
+            '.hg/hgrc',
+            '.svn/entries',
+            '.vscode/settings.json',
+            '.cursor/rules',
+            'ignored.txt',
+            '../outside.js'
+        ]) {
+            assert.strictEqual(at(path), true, `${path} should be ignored`);
+        }
+        for (const path of ['.pcignore', 'scripts/main.js', 'git/config', '.github/workflows/ci.yml', '.gitignore']) {
+            assert.strictEqual(at(path), false, `${path} should sync`);
+        }
+        assert.strictEqual(ignoring(folder), false, 'project root should sync');
+    });
+
+    test('remote creates and renames never write into protected folders', async () => {
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder, '.git'));
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder, '.git', 'HEAD'), buffer.from('ref\n'));
+        const file = (uniqueId: number, text: string) => ({ type: 'file', uniqueId, doc: { text }, dirty: false });
+        const files = new Map<string, unknown>([
+            ['.pcignore', file(1, negate)],
+            ['a.js', file(2, 'a\n')]
+        ]);
+        const { d, events, settle } = await link(files);
+        assert.strictEqual(await exists('.git/HEAD'), true, 'local .git should survive linking');
+
+        files.set('.git', { type: 'folder', uniqueId: 3 });
+        events.emit('asset:file:create', '.git', 'folder', new Uint8Array());
+        files.set('.git/config', file(4, 'remote\n'));
+        events.emit('asset:file:create', '.git/config', 'file', buffer.from('remote\n'));
+        files.set('b.js', file(5, 'b\n'));
+        events.emit('asset:file:create', 'b.js', 'file', buffer.from('b\n'));
+        events.emit('asset:file:rename', 'a.js', '.git/index');
+        await settle('.git', '.git/config', 'b.js', 'a.js', '.git/index');
+
+        assert.strictEqual(await exists('.git/config'), false, '.git/config should not be written');
+        assert.strictEqual(await exists('.git/index'), false, 'rename should not move into .git');
+        assert.strictEqual(await exists('a.js'), true, 'rename source should stay');
+        assert.strictEqual(await exists('b.js'), true, 'normal create should sync');
+        await d.unlink();
     });
 });
 
@@ -814,6 +916,34 @@ suite('sync/sync-engine', () => {
         await vscode.workspace.fs.delete(temp);
         await second.pull();
         assert.strictEqual(await readFile('b.js'), 'original\n');
+    });
+
+    test('pull and push leave protected folders alone', async () => {
+        await writeFile('.pcignore', '!.git\n!.git/**\n');
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(work, '.git'));
+        await writeFile('.git/config', 'local\n');
+        const doc = { text: 'local\n' };
+        const files = new Map([
+            ['.pcignore', { type: 'file', uniqueId: 1, doc: { text: '!.git\n!.git/**\n' }, dirty: false }],
+            ['.git', { type: 'folder', uniqueId: 2 }],
+            ['.git/config', { type: 'file', uniqueId: 3, doc, dirty: false }]
+        ]);
+        const e = engine();
+        await e.link({
+            folderUri: work,
+            projectManager: { files } as unknown as ProjectManager,
+            projectId: 1,
+            branchId: 'main'
+        });
+        doc.text = 'remote\n';
+        await e.refresh();
+        assert.strictEqual(e.status('.git/config'), 'clean');
+        await e.pull();
+        assert.strictEqual(await readFile('.git/config'), 'local\n');
+        await writeFile('.git/config', 'edited\n');
+        await e.refresh();
+        assert.strictEqual(e.status('.git/config'), 'clean', 'local .git edits should not be pushable');
+        await e.unlink();
     });
 
     for (const path of ['../escaped.js', '.git/config', 'occupied.js']) {

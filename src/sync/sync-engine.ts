@@ -696,7 +696,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
             return;
         }
         const file = pm.files.get(path);
-        if (!file || file.type === 'folder') {
+        if (!file || file.type === 'folder' || this._ignoring(vscode.Uri.joinPath(folderUri, path))) {
             this._status.delete(path);
             return;
         }
@@ -880,7 +880,7 @@ class NativeSyncEngine extends Linker<LinkParams> {
         }
 
         for (const [path, f] of pm.files) {
-            if (f.type === 'folder') {
+            if (f.type === 'folder' || this._ignoring(vscode.Uri.joinPath(folderUri, path))) {
                 continue;
             }
             const working = await this._readDisk(folderUri, path);
