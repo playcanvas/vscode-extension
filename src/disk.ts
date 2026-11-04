@@ -1186,7 +1186,9 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             this._saving.delete(document.uri.path);
             this._blocked.delete(`${document.uri}`);
             this._opLocks.delete(`${document.uri}`);
-            this._events.emit('asset:doc:close', path);
+            if (synced(document.uri)) {
+                this._events.emit('asset:doc:close', path);
+            }
         });
 
         const onchange = vscode.workspace.onDidChangeTextDocument((e) => {
