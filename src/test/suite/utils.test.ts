@@ -1542,6 +1542,9 @@ suite('sync/sync-engine', () => {
         files.delete('folder');
         files.set('characters', { type: 'folder', uniqueId: 10 });
         events.emit('asset:file:rename', 'folder', 'characters');
+
+        // the rename handler awaits a disk stat before moving the pending create
+        await waitForStatus(e, 'characters', 'behind');
         await e.refresh();
         assert.strictEqual(e.status('folder'), 'clean');
         assert.strictEqual(e.status('characters'), 'behind');
