@@ -762,22 +762,17 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
             return;
         }
 
-        const key = `${document.uri}`;
         const ch = raw.charAt(i);
         const edit = new vscode.WorkspaceEdit();
         edit.replace(document.uri, new vscode.Range(document.positionAt(i), document.positionAt(i + 1)), ch);
 
-        // set lock to prevent echo and discard from _update
-        this._locks.add(key);
-        void Promise.resolve(vscode.workspace.applyEdit(edit))
-            .then((applied) => {
-                if (!applied) {
-                    this._log.warn(`dirty reload applyEdit failed for ${document.uri}`);
-                }
-            })
-            .finally(() => {
-                this._locks.delete(key);
-            });
+        // no lock: the same-char replace leaves buffer equal to the OT doc so the change handler
+        // skips it, and a lock would drop real keystrokes landing before applyEdit resolves
+        void Promise.resolve(vscode.workspace.applyEdit(edit)).then((applied) => {
+            if (!applied) {
+                this._log.warn(`dirty reload applyEdit failed for ${document.uri}`);
+            }
+        });
     }
 
     private _revertBlockedEdit(document: vscode.TextDocument) {
