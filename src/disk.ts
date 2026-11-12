@@ -1545,7 +1545,31 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
                                     }
 
                                     this._log.debug(`create.local ${type} ${op.uri}`);
-                                    return projectManager.create(path, type, content);
+                                    await projectManager.create(path, type, content);
+
+                                    // inotify misses entries created inside a new folder before its watch is added
+                                    if (type === 'folder') {
+                                        const [error, uris] = await tryCatch(readDirRecursive(op.uri));
+                                        if (error) {
+                                            return;
+                                        }
+                                        for (const uri of uris) {
+                                            if (
+                                                this._echo.has(`${uri}:create`) ||
+                                                this._ignoring(uri) ||
+                                                projectManager.files.has(relativePath(uri, folderUri))
+                                            ) {
+                                                continue;
+                                            }
+                                            const childType = fileType(uri);
+                                            defer({
+                                                action: 'create',
+                                                uri,
+                                                type: childType,
+                                                content: fileContent(uri, childType)
+                                            });
+                                        }
+                                    }
                                 });
                                 break;
                             }
