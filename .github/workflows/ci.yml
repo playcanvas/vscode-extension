@@ -70,5 +70,25 @@ jobs:
             - name: Install Xvfb
               run: sudo apt-get install -y xvfb
 
+            # vscode-test falls back to a cached build when the update server is unreachable
+            - name: Restore VS Code
+              uses: actions/cache/restore@v6
+              with:
+                  path: .vscode-test/vscode-linux-x64-*
+                  key: vscode-test-${{ runner.os }}
+                  restore-keys: vscode-test-${{ runner.os }}-
+
             - name: Run Tests
               run: xvfb-run -a --server-args="-screen 0 1024x768x24" npm test
+
+            # keep only the newest build so the cache doesn't grow with every release
+            - name: Prune VS Code
+              if: ${{ !cancelled() }}
+              run: ls -d .vscode-test/vscode-linux-x64-* 2>/dev/null | sort -V | head -n -1 | xargs -r rm -rf
+
+            - name: Save VS Code
+              if: ${{ !cancelled() && hashFiles('.vscode-test/vscode-linux-x64-*/resources/app/package.json') != '' }}
+              uses: actions/cache/save@v6
+              with:
+                  path: .vscode-test/vscode-linux-x64-*
+                  key: vscode-test-${{ runner.os }}-${{ hashFiles('.vscode-test/vscode-linux-x64-*/resources/app/package.json') }}
