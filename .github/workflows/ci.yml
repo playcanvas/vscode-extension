@@ -72,6 +72,7 @@ jobs:
 
             # vscode-test falls back to a cached build when the update server is unreachable
             - name: Restore VS Code
+              id: vscode-cache
               uses: actions/cache/restore@v6
               with:
                   path: .vscode-test/vscode-linux-x64-*
@@ -87,7 +88,7 @@ jobs:
               run: ls -d .vscode-test/vscode-linux-x64-* 2>/dev/null | sort -V | head -n -1 | xargs -r rm -rf
 
             - name: Save VS Code
-              if: ${{ !cancelled() && hashFiles('.vscode-test/vscode-linux-x64-*/resources/app/package.json') != '' }}
+              if: ${{ !cancelled() && hashFiles('.vscode-test/vscode-linux-x64-*/resources/app/package.json') != '' && steps.vscode-cache.outputs.cache-matched-key != format('vscode-test-{0}-{1}', runner.os, hashFiles('.vscode-test/vscode-linux-x64-*/resources/app/package.json')) }}
               uses: actions/cache/save@v6
               with:
                   path: .vscode-test/vscode-linux-x64-*
