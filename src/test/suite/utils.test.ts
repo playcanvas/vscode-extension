@@ -2958,4 +2958,44 @@ suite('sync/sync-engine', () => {
         assert.strictEqual(store.get(1), undefined, 'the deleted asset is gone from the record');
         assert.strictEqual(store.get(2)?.text, 'y\n');
     });
+
+    test('link on another branch checks out files left clean by the previous branch', async () => {
+        await writeFile('a.js', 'feature\n');
+        await writeFile('b.js', 'only-feature\n');
+        await writeFile('c.js', 'feature-c\n');
+        const feature = new Map<string, unknown>([
+            ['a.js', { type: 'file', uniqueId: 1, doc: { text: 'feature\n' }, dirty: false }],
+            ['b.js', { type: 'file', uniqueId: 2, doc: { text: 'only-feature\n' }, dirty: false }],
+            ['c.js', { type: 'file', uniqueId: 3, doc: { text: 'feature-c\n' }, dirty: false }]
+        ]);
+        const first = engine();
+        await first.link({
+            folderUri: work,
+            projectManager: { files: feature } as unknown as ProjectManager,
+            projectId: 1,
+            branchId: 'feature'
+        });
+        await writeFile('c.js', 'edited\n');
+        await first.unlink();
+
+        // main has its own asset ids and lacks b.js
+        const main = new Map<string, unknown>([
+            ['a.js', { type: 'file', uniqueId: 11, doc: { text: 'main\n' }, dirty: false }],
+            ['c.js', { type: 'file', uniqueId: 13, doc: { text: 'main-c\n' }, dirty: false }]
+        ]);
+        const second = engine();
+        await second.link({
+            folderUri: work,
+            projectManager: { files: main } as unknown as ProjectManager,
+            projectId: 1,
+            branchId: 'main'
+        });
+
+        assert.strictEqual(await readFile('a.js'), 'main\n', 'clean file takes the new branch content');
+        assert.strictEqual(second.status('a.js'), 'clean');
+        assert.strictEqual(await exists('b.js'), false, 'clean file the new branch lacks is removed');
+        assert.strictEqual(second.status('b.js'), 'clean');
+        assert.strictEqual(await readFile('c.js'), 'edited\n', 'local edit carries over');
+        assert.strictEqual(second.status('c.js'), 'modified');
+    });
 });

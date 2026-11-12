@@ -1169,6 +1169,89 @@ class NativeSyncEngine extends Linker<LinkParams> {
         await this._applyUpdate(path, base);
     }
 
+    // a branch switch leaves the previous branch's files on disk. like git checkout, move
+    // files still clean on that branch over to this one and keep real local edits as changes
+    private async _checkout(from: string) {
+        const folderUri = this._folderUri;
+        const pm = this._projectManager;
+        if (!folderUri || !pm) {
+            return;
+        }
+        const prev = await this._base.hashes(from);
+
+        // paths a queued remote rename will move are left to pull
+        const queued = new Set(
+            Array.from(this._remote.values()).flatMap((op) =>
+                op.action === 'renamed' ? [op.from, op.path] : [op.path]
+            )
+        );
+        for (const [path, file] of pm.files) {
+            if (file.type === 'folder' || queued.has(path) || this._ignoring(vscode.Uri.joinPath(folderUri, path))) {
+                continue;
+            }
+
+            // missing but tracked there means a local delete, so leave it
+            const working = await this._readDisk(folderUri, path);
+            const known = prev.get(path);
+            if (working === undefined ? known : !known?.has(hash(working))) {
+                continue;
+            }
+            const [err] = await tryCatch(async () => {
+                const savedHash = pm.savedHash?.(path);
+                const text =
+                    file.type === 'file'
+                        ? norm(file.doc.text)
+                        : working !== undefined && hash(working) === savedHash
+                          ? working
+                          : await pm.savedContent?.(path);
+                if (text === undefined) {
+                    return;
+                }
+                if (working === undefined) {
+                    await this._applyCreate(path, 'file', buffer.from(text));
+                } else if (working !== text) {
+                    await this._applyUpdate(path, text);
+                }
+                this._base.set(file.uniqueId, text, savedHash);
+            });
+            if (err) {
+                this._log.warn(`checkout failed for ${path}: ${err.message}`);
+            }
+        }
+
+        // clean files this branch lacks go, then the folders they leave empty
+        const parents = new Set<string>();
+        for (const [path, known] of prev) {
+            if (pm.files.has(path) || queued.has(path) || this._ignoring(vscode.Uri.joinPath(folderUri, path))) {
+                continue;
+            }
+            const working = await this._readDisk(folderUri, path);
+            if (working === undefined || !known.has(hash(working))) {
+                continue;
+            }
+            const [err] = await tryCatch(() => this._applyDelete(path));
+            if (err) {
+                this._log.warn(`checkout failed to remove ${path}: ${err.message}`);
+                continue;
+            }
+            for (let dir = parsePath(path)[0]; dir; dir = parsePath(dir)[0]) {
+                parents.add(dir);
+            }
+        }
+        const dirs = Array.from(parents).sort((a, b) => b.split('/').length - a.split('/').length);
+        for (const dir of dirs) {
+            if (pm.files.has(dir)) {
+                continue;
+            }
+            const [, entries] = await tryCatch(async () =>
+                vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(folderUri, dir))
+            );
+            if (entries?.length === 0) {
+                await tryCatch(() => this._applyDelete(dir));
+            }
+        }
+    }
+
     async link({ folderUri, projectManager, projectId, branchId }: LinkParams) {
         if (this._folderUri !== undefined) {
             throw this.error.set(() => fail`already linked`);
@@ -1321,9 +1404,15 @@ class NativeSyncEngine extends Linker<LinkParams> {
             }
         }
 
+        const last = await this._base.lastBranch();
+        if (last && last !== branchId) {
+            await this._checkout(last);
+        }
+
         await this._refreshAll();
 
         await this._base.flush();
+        await this._base.setLastBranch();
 
         this._log.info(`linked ${folderUri.toString()} (${this._status.size} files tracked)`);
     }

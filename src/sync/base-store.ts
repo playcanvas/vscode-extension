@@ -45,6 +45,28 @@ export class BaseStore {
         return vscode.Uri.joinPath(this._storageUri, 'base', `${projectId}-${branchId}-${this._folderId}.json`);
     }
 
+    // the folder's last-linked branch, so a switch can tell which files it left clean
+    private _branchUri(projectId: number) {
+        return vscode.Uri.joinPath(this._storageUri, 'base', `${projectId}-${this._folderId}.branch`);
+    }
+
+    private async _read(projectId: number, branchId: string) {
+        const [err, data] = await tryCatch(async () => vscode.workspace.fs.readFile(this._uri(projectId, branchId)));
+        if (err) {
+            return undefined; // no base persisted yet
+        }
+
+        const [perr, parsed] = tryCatchSync(
+            () => JSON.parse(buffer.toString(data)) as BaseFile | Record<string, BaseEntry>
+        );
+        if (perr || !parsed) {
+            return undefined; // corrupt base file — treat as empty
+        }
+
+        const file = parsed as BaseFile;
+        return { pending: file.pending, entries: file.entries ? file.entries : (parsed as Record<string, BaseEntry>) };
+    }
+
     async load(projectId: number, branchId: string, folderId = 'default') {
         this._projectId = projectId;
         this._branchId = branchId;
@@ -52,24 +74,48 @@ export class BaseStore {
         this._entries.clear();
         this.pending = undefined;
 
-        const [err, data] = await tryCatch(async () => vscode.workspace.fs.readFile(this._uri(projectId, branchId)));
-        if (err) {
-            return; // no base persisted yet
+        const file = await this._read(projectId, branchId);
+        if (!file) {
+            return;
         }
-
-        const [perr, parsed] = tryCatchSync(
-            () => JSON.parse(buffer.toString(data)) as BaseFile | Record<string, BaseEntry>
-        );
-        if (perr || !parsed) {
-            return; // corrupt base file — treat as empty
-        }
-
-        const file = parsed as BaseFile;
         this.pending = file.pending;
-        const entries = file.entries ? file.entries : (parsed as Record<string, BaseEntry>);
-        for (const [id, entry] of Object.entries(entries)) {
+        for (const [id, entry] of Object.entries(file.entries)) {
             this._entries.set(Number(id), entry);
         }
+    }
+
+    async lastBranch() {
+        if (this._projectId === undefined) {
+            return undefined;
+        }
+        const [err, data] = await tryCatch(async () => vscode.workspace.fs.readFile(this._branchUri(this._projectId!)));
+        return err ? undefined : buffer.toString(data) || undefined;
+    }
+
+    async setLastBranch() {
+        if (this._projectId === undefined || this._branchId === undefined) {
+            return;
+        }
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(this._storageUri, 'base'));
+        await vscode.workspace.fs.writeFile(this._branchUri(this._projectId), buffer.from(this._branchId));
+    }
+
+    // last-synced hashes per path in another branch's record
+    async hashes(branchId: string) {
+        const out = new Map<string, Set<string>>();
+        if (this._projectId === undefined) {
+            return out;
+        }
+        const file = await this._read(this._projectId, branchId);
+        for (const entry of Object.values(file?.entries ?? {})) {
+            if (typeof entry?.path !== 'string' || typeof entry.hash !== 'string') {
+                continue;
+            }
+            const set = out.get(entry.path) ?? new Set<string>();
+            set.add(entry.hash);
+            out.set(entry.path, set);
+        }
+        return out;
     }
 
     get(uniqueId: number) {
