@@ -1640,6 +1640,7 @@ class Disk extends Linker<{ folderUri: vscode.Uri; projectManager: ProjectManage
         // file system watcher
         const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folderUri, '**'));
         watcher.onDidCreate((uri) => {
+            console.log(`[diag] watcher.create ${uri.path} echo=${this._echo.has(`${uri}:create`)}`);
             if (folderUri.scheme !== uri.scheme) {
                 return;
             }
