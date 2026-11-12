@@ -8,6 +8,7 @@ on:
 
 permissions:
     contents: write
+    id-token: write
 
 jobs:
     publish:
@@ -61,7 +62,7 @@ jobs:
             - name: Publish VS Code Extension
               run: |
                   vsce publish \
-                    -p ${{ secrets.VSCE_TOKEN }} \
+                    --oidc \
                     -i playcanvas*.vsix \
                     ${{ steps.version.outputs.pre_release == 'true' && '--pre-release' || '' }}
 
